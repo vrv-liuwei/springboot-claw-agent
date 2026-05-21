@@ -1,0 +1,14 @@
+{
+  "id" : "skills-install",
+  "name" : "Skills Install",
+  "version" : "0.1.0",
+  "description" : "安装、列出、启用、禁用 ClawAgent Skill。用于用户要求导入本地 Skill、从 JSON 安装 Skill、查看已安装 Skill 或管理 Skill 状态时。",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default", "install", "list" ],
+  "permissions" : [ "file-read", "file-write", "network" ],
+  "metadata" : {
+    "system" : true,
+    "source" : "clawagent"
+  }
+}

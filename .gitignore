@@ -1,0 +1,35 @@
+# Maven build output
+target/
+bin/
+**/bin/
+docs/
+scripts/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+
+# Logs and local runtime files
+logs/
+*.log
+*.out.log
+*.err.log
+
+# Local ClawAgent runtime data
+.clawagent/*.db
+.clawagent/*.db-*
+.clawagent/memory/
+.clawagent/npm-cache
+
+# Keep editable MCP and Skill definitions, but ignore transient legacy/runtime files
+.clawagent/mcp/servers.json
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+{
+  "id" : "skills-create",
+  "name" : "Skills Create",
+  "version" : "0.1.0",
+  "description" : "创建或更新 ClawAgent Skill。用于生成 Skill manifest、SKILL.md、references/scripts/assets 目录，并校验 Skill 是否适合被 Agent 使用。",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default", "create" ],
+  "permissions" : [ "file-read", "file-write" ],
+  "metadata" : {
+    "system" : true,
+    "source" : "clawagent"
+  }
+}

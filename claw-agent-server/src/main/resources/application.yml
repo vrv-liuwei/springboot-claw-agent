@@ -1,0 +1,75 @@
+server:
+  port: 17890
+
+logging:
+  file:
+    name: logs/clawagent.log
+  level:
+    root: INFO
+    com.github.clawagent: DEBUG
+    org.springframework: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] traceId=%X{traceId:-} sessionId=%X{sessionId:-} taskId=%X{taskId:-} userId=%X{userId:-} channelId=%X{channelId:-} %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] traceId=%X{traceId:-} sessionId=%X{sessionId:-} taskId=%X{taskId:-} userId=%X{userId:-} channelId=%X{channelId:-} %logger{36} - %msg%n"
+
+clawagent:
+  enabled: true
+  persistence:
+    type: sqlite
+    sqlite:
+      path: .clawagent/clawagent.db
+  memory:
+    markdown:
+      enabled: true
+      path: .clawagent/memory
+    vector:
+      enabled: false
+      provider: none
+      embedding:
+        provider: none
+        model: ""
+        base-url: ""
+        api-key-env: CLAWAGENT_EMBEDDING_API_KEY
+        dimensions: 0
+        timeout-seconds: 60
+  mcp:
+    enabled: true
+    auto-connect: true
+    path:
+      - .clawagent/mcp/mcp.json
+  skills:
+    enabled: true
+    path:
+      - .clawagent/skills
+  toolkit:
+    enabled: true
+    tools:
+      time:
+        enabled: true
+        env: {}
+      weather:
+        enabled: true
+        env: {}
+      web-fetch:
+        enabled: true
+        env: {}
+      filesystem:
+        enabled: true
+        env:
+          READONLY: "true"
+          ALLOWED_ROOTS: "D:/workspace/codex"
+          BLOCKED_PATTERNS: "**/.git/**,**/*.key,**/*.pem,**/.env"
+          MAX_READ_BYTES: "1048576"
+          MAX_SEARCH_RESULTS: "100"
+  model:
+    mode: llm
+    planner: single
+    default: deepseek-v4-flash
+  models:
+    deepseek-v4-flash:
+      provider: deepseek
+      base-url: https://api.deepseek.com
+      model: deepseek-v4-flash
+      api-key: ${DEEPSEEK_API_KEY}
+      temperature: 0.2
+      timeout-seconds: 60

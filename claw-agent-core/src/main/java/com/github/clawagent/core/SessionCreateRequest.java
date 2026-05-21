@@ -1,0 +1,14 @@
+package com.github.clawagent.core;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * 创建会话的请求对象。
+ * 嵌入式业务也可以直接复用该对象创建受控 session。
+ */
+public record SessionCreateRequest(String title, String channelId, String userId, Map<String, String> metadata) {
+    public SessionCreateRequest {
+        metadata = metadata == null ? new LinkedHashMap<>() : new LinkedHashMap<>(metadata);
+    }
+}

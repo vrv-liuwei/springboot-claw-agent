@@ -1,0 +1,14 @@
+// {
+//   "mcpServers" : {
+//     "filesystem" : {
+//       "type" : "stdio",
+//       "disabled" : true,
+//       "command" : "powershell",
+//       "args" : [ "-c", "npx", "-y", "@modelcontextprotocol/server-filesystem", "D:\\workspace\\codex\\" ],
+//       "env" : {
+//         "npm_config_cache" : "D:\\workspace\\codex\\vrv-harness-agent\\.clawagent\\npm-cache"
+//       },
+//       "timeout" : 60
+//     }
+//   }
+// }
