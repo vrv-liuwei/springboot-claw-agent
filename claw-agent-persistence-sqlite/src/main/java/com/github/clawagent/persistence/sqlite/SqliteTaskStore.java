@@ -9,13 +9,18 @@ import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.core.StepStatus;
 import com.github.clawagent.core.StepType;
 import com.github.clawagent.core.TaskStatus;
+import com.github.clawagent.core.TodoItem;
+import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.AgentEventStore;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
 import com.github.clawagent.spi.TaskStore;
+import com.github.clawagent.spi.TodoStore;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -27,12 +32,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 
 /**
  * SQLite 任务存储用于 ClawAgent 单机默认模式。
  * 这里直接用 JDBC，避免把 core/runtime 绑定到 Spring JDBC 或 JPA。
  */
-public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageStore, AgentEventStore {
+public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageStore, AgentEventStore, TodoStore, AgentDataCleaner {
     private final String jdbcUrl;
 
     public SqliteTaskStore(Path databasePath) {
@@ -63,6 +69,9 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                     "status text, started_at text, finished_at text)");
             statement.executeUpdate("create table if not exists agent_event (" +
                     "id text primary key, session_id text, task_id text, level text, type text, message text, details text, created_at text)");
+            statement.executeUpdate("create table if not exists agent_todo_item (" +
+                    "id text primary key, session_id text, task_id text, item_order integer, title text, description text, " +
+                    "status text, metadata text, created_at text, updated_at text)");
         } catch (SQLException e) {
             throw new IllegalStateException("初始化 SQLite 表结构失败", e);
         }
@@ -132,6 +141,21 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     }
 
     @Override
+    public void clearAllAgentData() {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            // 删除顺序从明细到会话，避免未来增加外键后出现约束问题。
+            statement.executeUpdate("delete from agent_todo_item");
+            statement.executeUpdate("delete from agent_event");
+            statement.executeUpdate("delete from agent_step");
+            statement.executeUpdate("delete from agent_message");
+            statement.executeUpdate("delete from agent_task");
+            statement.executeUpdate("delete from agent_session");
+        } catch (SQLException e) {
+            throw new IllegalStateException("清空 SQLite 会话数据失败", e);
+        }
+    }
+
+    @Override
     public void saveMessage(AgentMessage message) {
         try (Connection connection = connect();
              PreparedStatement ps = connection.prepareStatement("insert or replace into agent_message values (?, ?, ?, ?, ?, ?, ?)")) {
@@ -169,6 +193,31 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             }
         } catch (SQLException e) {
             throw new IllegalStateException("查询会话消息失败：" + sessionId, e);
+        }
+    }
+
+    @Override
+    public List<AgentMessage> findMessagesByTask(String taskId, int limit) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_message where task_id = ? order by created_at asc limit ?")) {
+            ps.setString(1, taskId);
+            ps.setInt(2, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<AgentMessage> messages = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    // 任务详情弹窗按 task_id 精确查询，避免展示同一会话下其它轮次消息。
+                    messages.add(new AgentMessage(
+                            rs.getString("id"),
+                            rs.getString("session_id"),
+                            rs.getString("task_id"),
+                            rs.getString("role"),
+                            rs.getString("content"),
+                            parseMap(rs.getString("metadata"))));
+                }
+                return messages;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询任务消息失败：" + taskId, e);
         }
     }
 
@@ -279,12 +328,12 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                             rs.getString("task_id"),
                             StepType.valueOf(rs.getString("type")),
                             rs.getString("name"),
-                            Map.of("raw", rs.getString("input")));
-                    if (StepStatus.valueOf(rs.getString("status")) == StepStatus.SUCCEEDED) {
-                        step.succeed(rs.getString("output"));
-                    } else {
-                        step.fail(rs.getString("error"));
-                    }
+                            parseMap(rs.getString("input")),
+                            parseInstant(rs.getString("started_at")),
+                            parseInstant(rs.getString("finished_at")),
+                            StepStatus.valueOf(rs.getString("status")),
+                            rs.getString("output"),
+                            rs.getString("error"));
                     steps.add(step);
                 }
                 return steps;
@@ -292,6 +341,83 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         } catch (SQLException e) {
             throw new IllegalStateException("查询步骤失败：" + taskId, e);
         }
+    }
+
+    @Override
+    public void saveTodoItems(List<TodoItem> items) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("insert or replace into agent_todo_item values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            for (TodoItem item : items) {
+                ps.setString(1, item.id());
+                ps.setString(2, item.sessionId());
+                ps.setString(3, item.taskId());
+                ps.setInt(4, item.itemOrder());
+                ps.setString(5, item.title());
+                ps.setString(6, item.description());
+                ps.setString(7, item.status());
+                ps.setString(8, serializeMap(item.metadata()));
+                ps.setString(9, item.createdAt().toString());
+                ps.setString(10, item.updatedAt().toString());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            throw new IllegalStateException("保存 Todo 失败", e);
+        }
+    }
+
+    @Override
+    public Optional<TodoItem> findTodoItem(String id) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_todo_item where id = ?")) {
+            ps.setString(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(readTodoItem(rs));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询 Todo 失败：" + id, e);
+        }
+    }
+
+    @Override
+    public List<TodoItem> listTodoItems(String sessionId, String taskId, int limit) {
+        StringBuilder sql = new StringBuilder("select * from agent_todo_item where 1=1");
+        java.util.ArrayList<String> args = new java.util.ArrayList<>();
+        if (sessionId != null && !sessionId.isBlank()) {
+            sql.append(" and session_id = ?");
+            args.add(sessionId);
+        }
+        if (taskId != null && !taskId.isBlank()) {
+            sql.append(" and task_id = ?");
+            args.add(taskId);
+        }
+        sql.append(" order by created_at asc, item_order asc limit ?");
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < args.size(); i++) {
+                ps.setString(i + 1, args.get(i));
+            }
+            ps.setInt(args.size() + 1, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<TodoItem> items = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    items.add(readTodoItem(rs));
+                }
+                return items;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询 Todo 列表失败", e);
+        }
+    }
+
+    @Override
+    public TodoItem updateTodoStatus(String id, String status) {
+        TodoItem old = findTodoItem(id).orElseThrow(() -> new IllegalArgumentException("Todo 不存在：" + id));
+        TodoItem updated = new TodoItem(old.id(), old.sessionId(), old.taskId(), old.itemOrder(), old.title(),
+                old.description(), status, old.metadata(), old.createdAt(), Instant.now());
+        saveTodoItems(List.of(updated));
+        return updated;
     }
 
     private Connection connect() throws SQLException {
@@ -325,7 +451,7 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         ps.setString(6, task.status().name());
         ps.setString(7, task.finalAnswer());
         ps.setString(8, task.createdAt().toString());
-        ps.setString(9, Instant.now().toString());
+        ps.setString(9, task.updatedAt().toString());
     }
 
     private void bindSession(PreparedStatement ps, AgentSession session) throws SQLException {
@@ -341,37 +467,56 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     }
 
     private AgentTask readTask(ResultSet rs) throws SQLException {
-        AgentRequest request = new AgentRequest(
+        return new AgentTask(
+                rs.getString("id"),
                 rs.getString("input"),
                 rs.getString("session_id"),
                 rs.getString("channel_id"),
                 rs.getString("user_id"),
-                new LinkedHashMap<>());
-        AgentTask task = new AgentTask(rs.getString("id"), request);
-        task.markStatus(TaskStatus.valueOf(rs.getString("status")));
-        if (rs.getString("final_answer") != null && task.status() == TaskStatus.COMPLETED) {
-            task.complete(rs.getString("final_answer"));
-        }
-        return task;
+                new LinkedHashMap<>(),
+                parseInstant(rs.getString("created_at")),
+                parseInstant(rs.getString("updated_at")),
+                TaskStatus.valueOf(rs.getString("status")),
+                rs.getString("final_answer"));
     }
 
     private AgentSession readSession(ResultSet rs) throws SQLException {
-        AgentSession session = new AgentSession(
+        return new AgentSession(
                 rs.getString("id"),
                 rs.getString("title"),
                 rs.getString("channel_id"),
                 rs.getString("user_id"),
-                parseMap(rs.getString("metadata")));
-        if (rs.getString("summary") != null) {
-            session.updateSummary(rs.getString("summary"));
-        }
-        return session;
+                parseMap(rs.getString("metadata")),
+                parseInstant(rs.getString("created_at")),
+                parseInstant(rs.getString("updated_at")),
+                parseInstant(rs.getString("last_active_at")),
+                rs.getString("summary"));
+    }
+
+    private TodoItem readTodoItem(ResultSet rs) throws SQLException {
+        return new TodoItem(
+                rs.getString("id"),
+                rs.getString("session_id"),
+                rs.getString("task_id"),
+                rs.getInt("item_order"),
+                rs.getString("title"),
+                rs.getString("description"),
+                rs.getString("status"),
+                parseMap(rs.getString("metadata")),
+                Instant.parse(rs.getString("created_at")),
+                Instant.parse(rs.getString("updated_at")));
     }
 
     private String serializeMap(Map<String, String> input) {
-        StringBuilder builder = new StringBuilder();
-        input.forEach((key, value) -> builder.append(key).append('=').append(value).append('\n'));
-        return builder.toString();
+        Properties properties = new Properties();
+        input.forEach((key, value) -> properties.setProperty(key, value == null ? "" : value));
+        try (StringWriter writer = new StringWriter()) {
+            // Properties 会自动转义换行和等号，避免工具输出里包含多行文本时读取后只剩第一行。
+            properties.store(writer, null);
+            return writer.toString();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("序列化 Map 失败", e);
+        }
     }
 
     private Map<String, String> parseMap(String value) {
@@ -379,12 +524,27 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         if (value == null || value.isBlank()) {
             return result;
         }
-        for (String line : value.split("\\R")) {
-            int separator = line.indexOf('=');
-            if (separator > 0) {
-                result.put(line.substring(0, separator), line.substring(separator + 1));
+        Properties properties = new Properties();
+        try (StringReader reader = new StringReader(value)) {
+            properties.load(reader);
+            properties.forEach((key, entryValue) -> result.put(String.valueOf(key), String.valueOf(entryValue)));
+            return result;
+        } catch (java.io.IOException e) {
+            // 兼容历史 key=value 明文格式，旧数据不能因为反序列化策略升级而无法读取。
+            for (String line : value.split("\\R")) {
+                int separator = line.indexOf('=');
+                if (separator > 0) {
+                    result.put(line.substring(0, separator), line.substring(separator + 1));
+                }
             }
         }
         return result;
+    }
+
+    private Instant parseInstant(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return Instant.parse(value);
     }
 }

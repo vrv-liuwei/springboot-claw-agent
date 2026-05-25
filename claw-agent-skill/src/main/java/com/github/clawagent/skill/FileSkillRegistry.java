@@ -50,8 +50,15 @@ public class FileSkillRegistry implements SkillRegistry {
 
     @Override
     public synchronized SkillRegistration install(SkillPackage skillPackage) {
-        if (skillPackage == null || skillPackage.manifest() == null) {
-            throw new IllegalArgumentException("Skill manifest 不能为空");
+        if (skillPackage == null) {
+            throw new IllegalArgumentException("Skill package 不能为空");
+        }
+        if (skillPackage.manifest() == null) {
+            if (skillPackage.content() == null || skillPackage.content().isBlank()) {
+                throw new IllegalArgumentException("Skill manifest 或 SKILL.md 内容不能为空");
+            }
+            // 兼容 Codex/Claude 风格 SKILL.md：没有 manifest.json 时自动转换成 ClawAgent manifest。
+            skillPackage = SkillPackageConverter.fromSkillMarkdown(skillPackage.content(), null, null, null, true, Map.of());
         }
         SkillManifest manifest = normalize(skillPackage.manifest(), skillPackage.manifest().enabled());
         Path skillDir = skillDir(primaryRoot(), manifest.id());

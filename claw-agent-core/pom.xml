@@ -10,4 +10,11 @@
     </parent>
     <artifactId>claw-agent-core</artifactId>
     <name>claw-agent-core</name>
+    <dependencies>
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>${hutool.version}</version>
+        </dependency>
+    </dependencies>
 </project>

@@ -2,6 +2,7 @@ package com.github.clawagent.runtime;
 
 import com.github.clawagent.core.AgentStep;
 import com.github.clawagent.core.AgentTask;
+import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.TaskStore;
 
 import java.util.ArrayList;
@@ -10,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-public class InMemoryTaskStore implements TaskStore {
+public class InMemoryTaskStore implements TaskStore, AgentDataCleaner {
     private final Map<String, AgentTask> tasks = new LinkedHashMap<>();
     private final Map<String, List<AgentStep>> steps = new LinkedHashMap<>();
 
@@ -46,5 +47,12 @@ public class InMemoryTaskStore implements TaskStore {
     @Override
     public synchronized List<AgentStep> findSteps(String taskId) {
         return new ArrayList<>(steps.getOrDefault(taskId, List.of()));
+    }
+
+    @Override
+    public synchronized void clearAllAgentData() {
+        // 任务和步骤是同一份执行历史，清空时必须一起删除。
+        tasks.clear();
+        steps.clear();
     }
 }

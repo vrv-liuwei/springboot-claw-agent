@@ -10,6 +10,7 @@ import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.core.SessionCreateRequest;
 
 import java.util.List;
+import java.util.Map;
 
 public interface AgentRuntime {
     AgentResult submit(AgentRequest request);
@@ -18,9 +19,15 @@ public interface AgentRuntime {
 
     AgentResult submitStream(AgentRequest request, com.github.clawagent.spi.AgentCallback callback, com.github.clawagent.spi.ChatStreamCallback streamCallback);
 
+    String createSessionId();
+
+    Map<String, Object> clearAllSessions();
+
     AgentTask getTask(String taskId);
 
     List<AgentStep> getSteps(String taskId);
+
+    List<AgentMessage> getTaskMessages(String taskId, int limit);
 
     AgentSession createSession(SessionCreateRequest request);
 

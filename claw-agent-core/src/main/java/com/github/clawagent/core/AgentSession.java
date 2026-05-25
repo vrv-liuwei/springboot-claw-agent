@@ -20,14 +20,21 @@ public class AgentSession {
     private String summary;
 
     public AgentSession(String id, String title, String channelId, String userId, Map<String, String> metadata) {
+        this(id, title, channelId, userId, metadata, Instant.now(), null, null, null);
+    }
+
+    public AgentSession(String id, String title, String channelId, String userId, Map<String, String> metadata,
+                        Instant createdAt, Instant updatedAt, Instant lastActiveAt, String summary) {
         this.id = id;
         this.title = title;
         this.channelId = channelId;
         this.userId = userId;
-        this.metadata = new LinkedHashMap<>(metadata);
-        this.createdAt = Instant.now();
-        this.updatedAt = this.createdAt;
-        this.lastActiveAt = this.createdAt;
+        this.metadata = metadata == null ? new LinkedHashMap<>() : new LinkedHashMap<>(metadata);
+        // 持久化恢复时必须使用数据库里的原始时间，不能在查询时重置为当前时间。
+        this.createdAt = createdAt == null ? Instant.now() : createdAt;
+        this.updatedAt = updatedAt == null ? this.createdAt : updatedAt;
+        this.lastActiveAt = lastActiveAt == null ? this.updatedAt : lastActiveAt;
+        this.summary = summary;
     }
 
     public String id() { return id; }

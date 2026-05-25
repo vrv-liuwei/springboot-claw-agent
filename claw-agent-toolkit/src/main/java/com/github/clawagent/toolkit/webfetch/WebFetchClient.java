@@ -2,10 +2,9 @@ package com.github.clawagent.toolkit.webfetch;
 
 import cn.hutool.core.net.url.UrlBuilder;
 import cn.hutool.core.util.CharsetUtil;
-import cn.hutool.http.Header;
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpStatus;
+import com.github.clawagent.core.http.AgentHttpClient;
+import com.github.clawagent.core.http.AgentHttpClient.AgentHttpResponse;
 
 import java.net.InetAddress;
 import java.net.URI;
@@ -16,38 +15,38 @@ import java.util.Map;
 
 /**
  * 内置网页抓取客户端。
- * 这里用 Hutool HttpRequest 做轻量 HTTP 请求，并集中处理超时、大小限制和 SSRF 防护。
+ * 通过 AgentHttpClient 做轻量 HTTP 请求，并集中处理超时、大小限制和 SSRF 防护。
  */
 public class WebFetchClient {
     private static final int DEFAULT_TIMEOUT_MS = (int) Duration.ofSeconds(30).toMillis();
     private static final int DEFAULT_MAX_BYTES = 10*1024 * 1024;
+    private final WebFetchToolkitProperties properties;
+
+    public WebFetchClient() {
+        this(new WebFetchToolkitProperties());
+    }
+
+    public WebFetchClient(WebFetchToolkitProperties properties) {
+        this.properties = properties == null ? new WebFetchToolkitProperties() : properties;
+    }
 
     public WebFetchResponse fetch(String url, Map<String, String> headers, int timeoutMs, int maxBytes) {
         URI uri = validatePublicHttpUrl(url);
         int effectiveTimeout = timeoutMs <= 0 ? DEFAULT_TIMEOUT_MS : timeoutMs;
         int effectiveMaxBytes = maxBytes <= 0 ? DEFAULT_MAX_BYTES : maxBytes;
 
-        // Hutool 的 HttpRequest 使用链式 API，适合这里做少量请求参数装配。
-        HttpRequest request = HttpRequest.get(uri.toString())
-                .timeout(effectiveTimeout)
-                .setFollowRedirects(true)
-                .header(Header.USER_AGENT, "ClawAgent/0.1 web-fetch");
-        headers.forEach(request::header);
-
-        try (HttpResponse response = request.execute()) {
-            int status = response.getStatus();
-            byte[] bodyBytes = response.bodyBytes();
-            if (bodyBytes.length > effectiveMaxBytes) {
-                throw new IllegalStateException("响应内容超过限制 maxBytes=" + effectiveMaxBytes + " actualBytes=" + bodyBytes.length);
-            }
-            String body = new String(bodyBytes, CharsetUtil.CHARSET_UTF_8);
-            Map<String, String> responseHeaders = new LinkedHashMap<>();
-            response.headers().forEach((key, values) -> responseHeaders.put(key, String.join(",", values)));
-            if (status < HttpStatus.HTTP_OK || status >= HttpStatus.HTTP_MULT_CHOICE) {
-                throw new IllegalStateException("HTTP 请求失败 status=" + status + " body=" + abbreviate(body, 500));
-            }
-            return new WebFetchResponse(uri.toString(), status, response.header(Header.CONTENT_TYPE), body, responseHeaders);
+        AgentHttpResponse response = AgentHttpClient.get(uri.toString(), headers, effectiveTimeout);
+        int status = response.statusCode();
+        byte[] bodyBytes = response.bodyBytes();
+        if (bodyBytes.length > effectiveMaxBytes) {
+            throw new IllegalStateException("响应内容超过限制 maxBytes=" + effectiveMaxBytes + " actualBytes=" + bodyBytes.length);
         }
+        String body = new String(bodyBytes, CharsetUtil.CHARSET_UTF_8);
+        Map<String, String> responseHeaders = new LinkedHashMap<>(response.headers());
+        if (status < HttpStatus.HTTP_OK || status >= HttpStatus.HTTP_MULT_CHOICE) {
+            throw new IllegalStateException("HTTP 请求失败 status=" + status + " body=" + abbreviate(body, 500));
+        }
+        return new WebFetchResponse(uri.toString(), status, response.contentType(), body, responseHeaders);
     }
 
     private URI validatePublicHttpUrl(String url) {
@@ -72,9 +71,13 @@ public class WebFetchClient {
             for (InetAddress address : InetAddress.getAllByName(host)) {
                 if (address.isAnyLocalAddress()
                         || address.isLoopbackAddress()
-                        || address.isLinkLocalAddress()
-                        || address.isSiteLocalAddress()) {
-                    throw new IllegalArgumentException("出于安全原因，web-fetch 默认禁止访问内网地址：" + host);
+                        || address.isLinkLocalAddress()) {
+                    throw new IllegalArgumentException("出于安全原因，web-fetch 默认禁止访问本机或链路本地地址：" + host);
+                }
+                if (address.isSiteLocalAddress() && !isPrivateHostAllowed(host)) {
+                    throw new IllegalArgumentException("出于安全原因，web-fetch 默认禁止访问内网地址：" + host
+                            + "。如需访问局域网 Git，请配置 clawagent.toolkit.tools.web-fetch.env.ALLOW_PRIVATE_ADDRESSES=true"
+                            + " 或 ALLOWED_HOSTS=" + host);
                 }
             }
         } catch (IllegalArgumentException e) {
@@ -82,6 +85,11 @@ public class WebFetchClient {
         } catch (Exception e) {
             throw new IllegalArgumentException("无法解析 URL host：" + host, e);
         }
+    }
+
+    private boolean isPrivateHostAllowed(String host) {
+        // 内网访问必须显式开启：可以全局允许私网地址，也可以只放行某些 Git host。
+        return properties.isAllowPrivateAddresses() || properties.isAllowedHost(host);
     }
 
     private String abbreviate(String value, int max) {

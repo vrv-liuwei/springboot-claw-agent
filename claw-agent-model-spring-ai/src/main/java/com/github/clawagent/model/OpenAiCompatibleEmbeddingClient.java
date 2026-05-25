@@ -2,6 +2,8 @@ package com.github.clawagent.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.clawagent.core.http.AgentHttpClient;
+import com.github.clawagent.core.http.AgentHttpClient.AgentHttpResponse;
 import com.github.clawagent.spi.EmbeddingClient;
 import com.github.clawagent.spi.EmbeddingOptions;
 import com.github.clawagent.spi.EmbeddingResult;
@@ -9,11 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,7 +24,6 @@ public class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleEmbeddingClient.class);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final HttpClient httpClient = HttpClient.newHttpClient();
     private final String baseUrl;
     private final String apiKey;
 
@@ -54,17 +50,16 @@ public class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
                 payload.put("dimensions", options.dimensions());
             }
             String requestJson = objectMapper.writeValueAsString(payload);
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/embeddings"))
-                    .timeout(Duration.ofSeconds(options.timeoutSeconds()))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(requestJson))
-                    .build();
+            Map<String, String> headers = Map.of("Authorization", "Bearer " + apiKey);
 
             log.info("embedding request model={} baseUrl={} inputCount={}", options.model(), baseUrl, texts.size());
             log.debug("embedding payload model={} payload={}", options.model(), requestJson);
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            // Embedding 是普通短请求，统一通过 AgentHttpClient 发送，避免每个模块重复维护 HTTP 细节。
+            AgentHttpResponse response = AgentHttpClient.postJson(
+                    baseUrl + "/embeddings",
+                    requestJson,
+                    headers,
+                    options.timeoutSeconds() * 1000);
             log.info("embedding response model={} statusCode={}", options.model(), response.statusCode());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 log.debug("embedding error body model={} response={}", options.model(), response.body());
@@ -88,9 +83,6 @@ public class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
             return results;
         } catch (IOException e) {
             throw new IllegalStateException("Embedding 请求序列化或响应解析失败：" + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Embedding 调用被中断", e);
         }
     }
 

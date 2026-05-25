@@ -15,6 +15,7 @@ import com.github.clawagent.spi.ModelClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -65,6 +66,7 @@ public class ReActAgentPlanner implements AgentReActPlanner {
         prompt.append("你可以根据 Observation 多轮规划工具调用。\n");
         prompt.append("如果还需要工具，输出：{\"thought\":\"简短思考\",\"finished\":false,\"calls\":[{\"toolId\":\"工具ID\",\"arguments\":{\"参数名\":\"参数值\"}}]}。\n");
         prompt.append("如果已经可以回答，输出：{\"thought\":\"简短思考\",\"finished\":true,\"answer\":\"最终答案\",\"calls\":[]}。\n");
+        prompt.append("Todo 状态展示必须一致：pending/未执行/待执行只能使用灰点或 ⏳，running/执行中使用红点或 🔴，completed/已完成/完成才可以使用 ✅，failed/失败使用 ❌；禁止输出“✅ pending”“✅ 未执行”“✅ 待执行”。\n");
         prompt.append("只能使用下面列出的工具，不能编造工具 ID。\n");
         prompt.append("可用工具：\n");
         for (ToolDefinition definition : toolRegistry.definitions()) {
@@ -74,12 +76,20 @@ public class ReActAgentPlanner implements AgentReActPlanner {
                     .append(", risk=").append(definition.riskLevel())
                     .append("\n");
         }
-        prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.fetch 使用 url，可选 format=html/text/markdown/json、headers(JSON)、timeoutMs、maxBytes。");
+        prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.fetch 使用 url，默认 format=markdown、extractMode=readable，可选 extractMode=readable/raw、maxOutputChars、headers(JSON)、timeoutMs、maxBytes。");
+        prompt.append("复杂、多步骤、需要拆解的任务，优先调用 builtin.todo.create_plan，items 参数为 JSON 数组字符串。");
+        prompt.append("Todo 执行规则：用户说执行第 N 步时，先用 builtin.todo.update_item 将 order=N 标记为 running，再调用完成该步骤所需工具，成功后再标记 completed，失败则标记 failed。");
+        prompt.append("用户说执行全部 Todo 时，按 order 从小到大执行所有 pending/running Todo；每轮 Observation 后继续规划下一步，直到全部完成或遇到阻塞。");
+        prompt.append("如果 Observation 提示工具被失败恢复策略阻断，必须换 API/路径/参数，或把当前 Todo 标记为 failed 并说明阻塞原因；禁止重复调用相同工具和相同参数。");
         return prompt.toString();
     }
 
     private String buildUserPrompt(AgentTask task, List<AgentStep> observations, int round) {
         StringBuilder prompt = new StringBuilder();
+        String context = LlmAgentPlanner.sessionContext(task);
+        if (!context.isBlank()) {
+            prompt.append("近期会话上下文：\n").append(context).append("\n\n");
+        }
         prompt.append("用户请求：").append(task.input()).append("\n");
         prompt.append("当前轮次：").append(round).append("\n\n");
         if (observations.isEmpty()) {
@@ -101,7 +111,7 @@ public class ReActAgentPlanner implements AgentReActPlanner {
 
     private AgentPlan parsePlan(String content) {
         try {
-            JsonNode root = objectMapper.readTree(stripCodeFence(content));
+            JsonNode root = objectMapper.readTree(extractJsonObject(stripCodeFence(content)));
             if (root.path("finished").asBoolean(false)) {
                 return AgentPlan.finalAnswer(root.path("answer").asText(""));
             }
@@ -109,6 +119,62 @@ public class ReActAgentPlanner implements AgentReActPlanner {
         } catch (Exception e) {
             throw new IllegalStateException("模型 ReAct 计划不是有效 JSON：" + content, e);
         }
+    }
+
+    private String extractJsonObject(String content) throws IOException {
+        String text = content.trim();
+        try {
+            objectMapper.readTree(text);
+            return text;
+        } catch (IOException ignored) {
+            // 整段不是纯 JSON 时，继续扫描其中的 JSON 对象。
+        }
+        String latest = "";
+        for (int start = 0; start < text.length(); start++) {
+            if (text.charAt(start) != '{') {
+                continue;
+            }
+            String candidate = readBalancedJsonCandidate(text, start);
+            if (candidate.isBlank()) {
+                continue;
+            }
+            JsonNode node = objectMapper.readTree(candidate);
+            if (node.has("finished") || node.has("calls")) {
+                // DeepSeek 有时会先输出草稿 JSON 再自我修正，取最后一个计划对象作为最终决策。
+                latest = candidate;
+            }
+        }
+        return latest.isBlank() ? text : latest;
+    }
+
+    private String readBalancedJsonCandidate(String text, int start) {
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = start; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+            } else if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return "";
     }
 
     private List<ToolCall> parseToolCalls(JsonNode callsNode) {

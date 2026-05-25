@@ -1,18 +1,34 @@
 package com.github.clawagent.spring;
 
-import com.github.clawagent.memory.markdown.MarkdownMemoryRepository;
-import com.github.clawagent.memory.markdown.MarkdownMemoryPromoter;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
 import com.github.clawagent.mcp.FileMcpRegistry;
 import com.github.clawagent.mcp.McpRegistry;
+import com.github.clawagent.memory.markdown.MarkdownMemoryPromoter;
+import com.github.clawagent.memory.markdown.MarkdownMemoryRepository;
 import com.github.clawagent.model.LlmAgentPlanner;
-import com.github.clawagent.model.LlmResponseGenerator;
 import com.github.clawagent.model.LlmSessionSummarizer;
 import com.github.clawagent.model.OpenAiCompatibleEmbeddingClient;
 import com.github.clawagent.model.OpenAiCompatibleModelClient;
 import com.github.clawagent.model.ReActAgentPlanner;
 import com.github.clawagent.model.SpringAiChatClientModelClient;
-import com.github.clawagent.model.ToolCallingAgentPlanner;
 import com.github.clawagent.model.StreamingLlmResponseGenerator;
+import com.github.clawagent.model.ToolCallingAgentPlanner;
 import com.github.clawagent.persistence.sqlite.SqliteTaskStore;
 import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.runtime.DefaultAgentRuntime;
@@ -20,10 +36,14 @@ import com.github.clawagent.runtime.InMemoryAgentEventStore;
 import com.github.clawagent.runtime.InMemorySessionMessageStore;
 import com.github.clawagent.runtime.InMemorySessionStore;
 import com.github.clawagent.runtime.InMemoryTaskStore;
+import com.github.clawagent.runtime.InMemoryTodoStore;
 import com.github.clawagent.runtime.RuleBasedPlanner;
 import com.github.clawagent.runtime.SimpleSessionSummarizer;
 import com.github.clawagent.runtime.ToolOutputResponseGenerator;
 import com.github.clawagent.security.DefaultToolExecutionGuard;
+import com.github.clawagent.skill.ExternalSkillInstallTool;
+import com.github.clawagent.skill.FileSkillRegistry;
+import com.github.clawagent.skill.SkillRegistry;
 import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.AgentEventStore;
 import com.github.clawagent.spi.AgentPlanner;
@@ -33,34 +53,17 @@ import com.github.clawagent.spi.AgentToolRegistry;
 import com.github.clawagent.spi.ChatOptions;
 import com.github.clawagent.spi.EmbeddingClient;
 import com.github.clawagent.spi.EmbeddingOptions;
-import com.github.clawagent.spi.ModelClient;
 import com.github.clawagent.spi.MemoryPromoter;
+import com.github.clawagent.spi.ModelClient;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
 import com.github.clawagent.spi.SessionSummarizer;
 import com.github.clawagent.spi.TaskStore;
+import com.github.clawagent.spi.TodoStore;
 import com.github.clawagent.spi.ToolExecutionGuard;
-import com.github.clawagent.skill.FileSkillRegistry;
-import com.github.clawagent.skill.SkillRegistry;
 import com.github.clawagent.toolkit.ToolkitProperties;
 import com.github.clawagent.toolkit.ToolkitRegistry;
 import com.github.clawagent.toolkit.ToolkitToolProperties;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.ApplicationRunner;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.ApplicationContext;
-
-import java.nio.file.Path;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
 /**
  * Spring Boot 自动配置入口。
@@ -183,6 +186,15 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public TodoStore todoStore(TaskStore taskStore) {
+        if (taskStore instanceof TodoStore todoStore) {
+            return todoStore;
+        }
+        return new InMemoryTodoStore();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public MarkdownMemoryRepository markdownMemoryRepository(ClawAgentProperties properties) {
         MarkdownMemoryRepository repository = new MarkdownMemoryRepository(Path.of(properties.getMemory().getMarkdown().getPath()));
         repository.initialize();
@@ -207,8 +219,8 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public ToolkitRegistry toolkitRegistry(AgentToolRegistry toolRegistry, ClawAgentProperties properties) {
-        ToolkitRegistry registry = new ToolkitRegistry(toolRegistry, toolkitProperties(properties));
+    public ToolkitRegistry toolkitRegistry(AgentToolRegistry toolRegistry, ClawAgentProperties properties, TodoStore todoStore) {
+        ToolkitRegistry registry = new ToolkitRegistry(toolRegistry, toolkitProperties(properties), todoStore);
         // starter 只初始化 toolkit 注册器，不再逐个实例化具体工具。
         registry.load();
         return registry;
@@ -245,6 +257,16 @@ public class ClawAgentAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(name = "clawAgentExternalSkillInstallToolRunner")
+    public ApplicationRunner clawAgentExternalSkillInstallToolRunner(AgentToolRegistry toolRegistry, SkillRegistry skillRegistry) {
+        return args -> {
+            // 用真实安装工具覆盖文档型 skills-install.install，使 Agent 能实际安装 Codex/Claude Skill。
+            toolRegistry.registerOrReplace(new ExternalSkillInstallTool(skillRegistry));
+            log.info("external skill install tool registered toolId=skill.skills-install.install");
+        };
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     public ToolExecutionGuard toolExecutionGuard() {
         return new DefaultToolExecutionGuard();
@@ -262,9 +284,11 @@ public class ClawAgentAutoConfiguration {
             SessionSummarizer sessionSummarizer,
             List<MemoryPromoter> memoryPromoters,
             @Qualifier("agentEventStore") AgentEventStore eventStore,
+            TodoStore todoStore,
             List<ToolExecutionGuard> toolGuards,
-            List<AgentCallback> callbacks) {
-        return new DefaultAgentRuntime(planner, responseGenerator, registry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, toolGuards, callbacks);
+            List<AgentCallback> callbacks,
+            ClawAgentProperties properties) {
+        return new DefaultAgentRuntime(planner, responseGenerator, registry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, properties.getRuntime().getMaxReactRounds());
     }
 
     private ClawAgentProperties.ModelConfig defaultModelConfig(ClawAgentProperties properties) {

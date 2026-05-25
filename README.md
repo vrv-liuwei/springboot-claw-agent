@@ -70,7 +70,7 @@ Start-Process `
 ```powershell
 & 'D:\tools\Java\64\jdk17.0.7\bin\java.exe' `
   -jar .\claw-agent-server\target\claw-agent-server-0.1.0-SNAPSHOT.jar `
-  --server.port=17891
+  --server.port=17890
 ```
 
 ### Stop
@@ -78,7 +78,7 @@ Start-Process `
 按端口停止服务：
 
 ```powershell
-$port=17891
+$port=17890
 $pid=(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess
 if ($pid) {
   Stop-Process -Id $pid
@@ -272,6 +272,12 @@ clawagent:
   toolkit:
     enabled: true
     tools:
+      web-fetch:
+        enabled: true
+        env:
+          # 默认禁止访问内网，访问局域网 Git 时优先配置白名单。
+          ALLOW_PRIVATE_ADDRESSES: "false"
+          ALLOWED_HOSTS: "192.168.6.160"
       filesystem:
         enabled: true
         env:

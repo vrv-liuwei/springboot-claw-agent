@@ -11,6 +11,7 @@ import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.core.SessionCreateRequest;
 import com.github.clawagent.core.StepType;
 import com.github.clawagent.core.TaskStatus;
+import com.github.clawagent.core.TodoItem;
 import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.core.ToolResult;
 import com.github.clawagent.spi.AgentCallback;
@@ -20,6 +21,7 @@ import com.github.clawagent.spi.AgentPlanner;
 import com.github.clawagent.spi.AgentReActPlanner;
 import com.github.clawagent.spi.AgentResponseGenerator;
 import com.github.clawagent.spi.AgentTool;
+import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.LlmCallTrace;
 import com.github.clawagent.spi.LlmTraceContext;
 import com.github.clawagent.spi.MemoryPromoter;
@@ -29,6 +31,7 @@ import com.github.clawagent.spi.SessionStore;
 import com.github.clawagent.spi.SessionSummarizer;
 import com.github.clawagent.spi.StreamingAgentResponseGenerator;
 import com.github.clawagent.spi.TaskStore;
+import com.github.clawagent.spi.TodoStore;
 import com.github.clawagent.spi.AgentToolRegistry;
 import com.github.clawagent.spi.ToolExecutionGuard;
 import org.slf4j.Logger;
@@ -36,9 +39,13 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -47,8 +54,14 @@ import java.util.UUID;
  */
 public class DefaultAgentRuntime implements AgentRuntime {
     private static final Logger log = LoggerFactory.getLogger(DefaultAgentRuntime.class);
-    /** ReAct 最大轮次，避免模型反复规划导致请求长时间不返回。 */
-    private static final int MAX_REACT_ROUNDS = 5;
+    /** 默认 ReAct 最大轮次，避免模型反复规划导致请求长时间不返回。 */
+    private static final int DEFAULT_MAX_REACT_ROUNDS = 20;
+    /** 传给模型的最近会话消息数量，避免短句追问丢失上下文。 */
+    private static final int SESSION_CONTEXT_MESSAGE_LIMIT = 20;
+    /** 会话上下文最大字符数，避免历史消息无限挤占工具列表和模型回复空间。 */
+    private static final int SESSION_CONTEXT_CHAR_LIMIT = 10_000;
+    /** Runtime 注入给 Planner/ResponseGenerator 的会话上下文 metadata key。 */
+    private static final String SESSION_CONTEXT_METADATA_KEY = "runtime.sessionContext";
 
     private final AgentPlanner planner;
     private final AgentResponseGenerator responseGenerator;
@@ -59,12 +72,24 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final SessionSummarizer sessionSummarizer;
     private final List<MemoryPromoter> memoryPromoters;
     private final AgentEventStore eventStore;
+    private final TodoStore todoStore;
     private final List<ToolExecutionGuard> toolGuards;
     private final List<AgentCallback> callbacks;
+    private final int maxReactRounds;
     /** 当前提交请求的临时回调列表，用于单次任务流式推送运行事件。 */
     private final ThreadLocal<List<AgentCallback>> activeCallbacks = new ThreadLocal<>();
+    /** 当前正在执行的 Todo，用于把后续工具调用日志挂到具体 Todo 上。 */
+    private final ThreadLocal<TodoItem> activeTodo = new ThreadLocal<>();
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, null, toolGuards, callbacks, DEFAULT_MAX_REACT_ROUNDS);
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, DEFAULT_MAX_REACT_ROUNDS);
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds) {
         this.planner = planner;
         this.responseGenerator = responseGenerator;
         this.toolRegistry = toolRegistry;
@@ -74,8 +99,10 @@ public class DefaultAgentRuntime implements AgentRuntime {
         this.sessionSummarizer = sessionSummarizer;
         this.memoryPromoters = memoryPromoters == null ? List.of() : List.copyOf(memoryPromoters);
         this.eventStore = eventStore;
+        this.todoStore = todoStore;
         this.toolGuards = toolGuards == null ? List.of() : List.copyOf(toolGuards);
         this.callbacks = new ArrayList<>(callbacks);
+        this.maxReactRounds = Math.max(1, maxReactRounds);
     }
 
     @Override
@@ -107,6 +134,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 request.userId(),
                 request.metadata());
         AgentTask task = new AgentTask(UUID.randomUUID().toString(), normalizedRequest);
+        attachSessionContext(task);
         task.markStatus(TaskStatus.RUNNING);
         taskStore.saveTask(task);
         String traceId = UUID.randomUUID().toString();
@@ -153,7 +181,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
             emit("task.completed", task.id(), answer);
             log.info("agent task completed status={} stepCount={} output={}", task.status(), steps.size(), preview(answer));
             log.debug("agent final answer taskId={} answer={}", task.id(), preview(answer));
-            return new AgentResult(task.id(), answer, task.status());
+            return new AgentResult(task.id(), answer, task.status(), task.sessionId());
         } catch (RuntimeException e) {
             saveLlmTraces(task, "error");
             task.markStatus(TaskStatus.FAILED);
@@ -163,10 +191,11 @@ public class DefaultAgentRuntime implements AgentRuntime {
                     "error", nullToEmpty(e.getMessage())));
             emit("task.failed", task.id(), e.getMessage());
             log.error("agent task failed error={}", e.getMessage(), e);
-            return new AgentResult(task.id(), "执行失败：" + e.getMessage(), task.status());
+            return new AgentResult(task.id(), "执行失败：" + e.getMessage(), task.status(), task.sessionId());
         } finally {
             MDC.clear();
             activeCallbacks.remove();
+            activeTodo.remove();
         }
     }
 
@@ -187,7 +216,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private String runReActPlanner(AgentTask task, List<AgentStep> steps, AgentReActPlanner reactPlanner) {
-        for (int round = 1; round <= MAX_REACT_ROUNDS; round++) {
+        ToolFailureTracker failureTracker = new ToolFailureTracker();
+        for (int round = 1; round <= maxReactRounds; round++) {
             LlmTraceContext.clear();
             AgentPlan plan = reactPlanner.planNext(task, steps, round);
             saveLlmTraces(task, "planner-react-" + round);
@@ -199,38 +229,126 @@ public class DefaultAgentRuntime implements AgentRuntime {
                     "toolCallCount", String.valueOf(plan.calls().size()),
                     "calls", plan.calls().toString()));
             if (plan.finished()) {
+                String incompleteTodos = incompleteTodoSummary(task, steps);
+                if (!incompleteTodos.isBlank()) {
+                    // 当前任务涉及 Todo 时，最终答案不能和持久化 Todo 状态不一致，必须继续规划状态更新工具。
+                    log.warn("agent react planner finish rejected by todo consistency guard taskId={} todos={}", task.id(), incompleteTodos);
+                    saveEvent(task, "WARN", "planner.react.todo_incomplete", "ReAct 收口被 Todo 状态一致性拦截", Map.of(
+                            "round", String.valueOf(round),
+                            "todos", incompleteTodos));
+                    addTodoConsistencyObservation(task, steps, incompleteTodos);
+                    continue;
+                }
                 return plan.finalAnswer();
             }
             if (plan.calls().isEmpty()) {
                 // 模型没有给出工具调用，也没有给最终答案时，退出 ReAct 循环，交给 ResponseGenerator 收口。
                 return null;
             }
-            executeToolCalls(task, steps, plan.calls());
+            executeToolCalls(task, steps, plan.calls(), failureTracker);
         }
         saveEvent(task, "WARN", "planner.react.max_rounds", "ReAct 达到最大轮次", Map.of(
-                "maxRounds", String.valueOf(MAX_REACT_ROUNDS)));
-        log.warn("agent react planner reached max rounds taskId={} maxRounds={}", task.id(), MAX_REACT_ROUNDS);
+                "maxRounds", String.valueOf(maxReactRounds)));
+        log.warn("agent react planner reached max rounds taskId={} maxRounds={}", task.id(), maxReactRounds);
+        String incompleteTodos = incompleteTodoSummary(task, steps);
+        if (!incompleteTodos.isBlank()) {
+            // 达到最大轮次后不能再交给最终回复模型发挥，否则会把未完成 Todo 说成已完成。
+            throw new IllegalStateException("ReAct 达到最大轮次，仍有未完成 Todo：" + incompleteTodos);
+        }
         return null;
     }
 
+    private String incompleteTodoSummary(AgentTask task, List<AgentStep> steps) {
+        if (todoStore == null || !shouldEnforceTodoConsistency(task, steps)) {
+            return "";
+        }
+        List<TodoItem> items = todoStore.listTodoItems(task.sessionId(), "", 200);
+        String latestPlanTaskId = items.stream()
+                .max(Comparator.comparing(TodoItem::createdAt))
+                .map(TodoItem::taskId)
+                .orElse("");
+        if (latestPlanTaskId.isBlank()) {
+            return "";
+        }
+        List<TodoItem> latestPlanItems = items.stream()
+                .filter(item -> latestPlanTaskId.equals(item.taskId()))
+                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
+                .toList();
+        List<TodoItem> incompleteItems = latestPlanItems.stream()
+                .filter(item -> "pending".equalsIgnoreCase(item.status()) || "running".equalsIgnoreCase(item.status()))
+                .toList();
+        if (incompleteItems.isEmpty()) {
+            return "";
+        }
+        StringBuilder summary = new StringBuilder();
+        for (TodoItem item : incompleteItems) {
+            if (!summary.isEmpty()) {
+                summary.append("; ");
+            }
+            summary.append(item.itemOrder()).append(". ").append(item.title()).append("=").append(item.status());
+        }
+        return summary.toString();
+    }
+
+    private boolean shouldEnforceTodoConsistency(AgentTask task, List<AgentStep> steps) {
+        String input = task.input() == null ? "" : task.input().toLowerCase();
+        boolean inputLooksLikeTodoWork = input.contains("todo") || input.contains("计划") || input.contains("执行全部") || input.contains("执行第");
+        boolean currentTaskTouchedTodo = steps.stream().anyMatch(step -> step.name() != null && step.name().startsWith("builtin.todo."));
+        return inputLooksLikeTodoWork || currentTaskTouchedTodo;
+    }
+
+    private void addTodoConsistencyObservation(AgentTask task, List<AgentStep> steps, String incompleteTodos) {
+        AgentStep observation = new AgentStep(
+                UUID.randomUUID().toString(),
+                task.id(),
+                StepType.OBSERVE,
+                "system.todo_consistency_guard",
+                Map.of("incompleteTodos", incompleteTodos));
+        observation.succeed("持久化 Todo 仍未完成：" + incompleteTodos + "。不要直接输出最终完成报告，请继续调用 builtin.todo.update_item 和对应业务工具推进这些 Todo。");
+        steps.add(observation);
+    }
+
     private void executeToolCalls(AgentTask task, List<AgentStep> steps, List<ToolCall> calls) {
+        executeToolCalls(task, steps, calls, null);
+    }
+
+    private void executeToolCalls(AgentTask task, List<AgentStep> steps, List<ToolCall> calls, ToolFailureTracker failureTracker) {
         for (ToolCall call : calls) {
-            executeToolCall(task, steps, call);
+            executeToolCall(task, steps, call, failureTracker);
         }
     }
 
-    private void executeToolCall(AgentTask task, List<AgentStep> steps, ToolCall call) {
+    private void executeToolCall(AgentTask task, List<AgentStep> steps, ToolCall call, ToolFailureTracker failureTracker) {
         AgentTool tool = toolRegistry.find(call.toolId())
                 .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + call.toolId()));
         AgentStep step = new AgentStep(UUID.randomUUID().toString(), task.id(), StepType.TOOL_CALL, call.toolId(), call.arguments());
-        emit("step.started", task.id(), call.toolId());
+        long startedAt = System.currentTimeMillis();
+        Map<String, String> startedDetails = toolEventDetails(step, call, tool, null, null, 0L, startedAt);
+        emit("step.started", task.id(), call.toolId(), streamToolDetails(startedDetails));
+        emit("tool.started", task.id(), call.toolId(), streamToolDetails(startedDetails));
         log.info("agent tool started stepId={} toolId={} input={}", step.id(), call.toolId(), call.arguments());
         log.debug("agent tool arguments taskId={} stepId={} arguments={}", task.id(), step.id(), call.arguments());
-        saveEvent(task, "DEBUG", "tool.started", "工具调用开始", Map.of(
-                "stepId", step.id(),
-                "toolId", call.toolId(),
-                "arguments", call.arguments().toString(),
-                "toolKind", toolKind(call.toolId())));
+        saveEvent(task, "DEBUG", "tool.started", "工具调用开始", startedDetails);
+
+        if (failureTracker != null) {
+            String blockReason = failureTracker.blockReason(call).orElse("");
+            if (!blockReason.isBlank()) {
+                // ReAct 场景下阻断重复失败调用，让下一轮模型基于失败原因换方案，而不是继续烧 token。
+                step.fail(blockReason);
+                taskStore.saveStep(step);
+                steps.add(step);
+                saveEvent(task, "WARN", "tool.repeated_failure_blocked", "工具重复失败调用被阻断", Map.of(
+                        "stepId", step.id(),
+                        "toolId", call.toolId(),
+                        "error", blockReason,
+                        "toolKind", toolKind(call.toolId())));
+                log.warn("agent tool repeated failure blocked stepId={} toolId={} reason={}", step.id(), call.toolId(), blockReason);
+                Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, blockReason, elapsedMs(startedAt), startedAt);
+                emit("tool.failed", task.id(), preview(blockReason), streamToolDetails(failedDetails));
+                emit("step.finished", task.id(), step.status().name(), streamToolDetails(failedDetails));
+                return;
+            }
+        }
 
         RuntimeException guardError = checkToolGuards(task, tool, call);
         if (guardError != null) {
@@ -244,32 +362,55 @@ public class DefaultAgentRuntime implements AgentRuntime {
                     "error", nullToEmpty(guardError.getMessage()),
                     "toolKind", toolKind(call.toolId())));
             log.warn("agent tool blocked stepId={} toolId={} error={}", step.id(), call.toolId(), guardError.getMessage());
-            emit("step.finished", task.id(), step.status().name());
+            Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, guardError.getMessage(), elapsedMs(startedAt), startedAt);
+            emit("tool.failed", task.id(), preview(guardError.getMessage()), streamToolDetails(failedDetails));
+            emit("step.finished", task.id(), step.status().name(), streamToolDetails(failedDetails));
             return;
         }
 
         ToolResult result = tool.execute(call, AgentContext.forTask(task));
         if (result.success()) {
             step.succeed(result.content());
+            TodoItem todoAfterTool = updateActiveTodoAfterTool(task, call);
+            if (failureTracker != null) {
+                failureTracker.recordSuccess(call, result.content())
+                        .ifPresent(message -> addFailureRecoveryObservation(task, steps, call, message));
+            }
             log.info("agent tool succeeded stepId={} toolId={} output={}", step.id(), call.toolId(), preview(result.content()));
             log.debug("agent tool output taskId={} stepId={} output={}", task.id(), step.id(), preview(result.content()));
-            saveEvent(task, "DEBUG", "tool.succeeded", "工具调用成功", Map.of(
-                    "stepId", step.id(),
-                    "toolId", call.toolId(),
-                    "output", nullToEmpty(result.content()),
-                    "toolKind", toolKind(call.toolId())));
+            Map<String, String> succeededDetails = toolEventDetails(step, call, tool, result.content(), null, elapsedMs(startedAt), startedAt);
+            mergeTodoDetails(succeededDetails, todoAfterTool);
+            succeededDetails.put("output", nullToEmpty(result.content()));
+            saveEvent(task, "DEBUG", "tool.succeeded", "工具调用成功", succeededDetails);
+            emit("tool.succeeded", task.id(), preview(result.content()), streamToolDetails(succeededDetails));
         } else {
             step.fail(result.content());
+            if (failureTracker != null) {
+                // 失败结果进入本任务的失败画像，下一轮相同参数会被策略判断是否允许重试。
+                failureTracker.recordFailure(call, result.content());
+            }
             log.warn("agent tool failed stepId={} toolId={} error={}", step.id(), call.toolId(), preview(result.content()));
-            saveEvent(task, "WARN", "tool.failed", "工具调用失败", Map.of(
-                    "stepId", step.id(),
-                    "toolId", call.toolId(),
-                    "error", nullToEmpty(result.content()),
-                    "toolKind", toolKind(call.toolId())));
+            Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, result.content(), elapsedMs(startedAt), startedAt);
+            saveEvent(task, "WARN", "tool.failed", "工具调用失败", failedDetails);
+            emit("tool.failed", task.id(), preview(result.content()), streamToolDetails(failedDetails));
         }
         taskStore.saveStep(step);
         steps.add(step);
-        emit("step.finished", task.id(), step.status().name());
+        emit("step.finished", task.id(), step.status().name(), streamToolDetails(toolEventDetails(step, call, tool, result.content(), result.success() ? null : result.content(), elapsedMs(startedAt), startedAt)));
+    }
+
+    private void addFailureRecoveryObservation(AgentTask task, List<AgentStep> steps, ToolCall call, String message) {
+        AgentStep observation = new AgentStep(
+                UUID.randomUUID().toString(),
+                task.id(),
+                StepType.OBSERVE,
+                "system.tool_failure_recovery",
+                Map.of("toolId", call.toolId(), "arguments", call.arguments().toString()));
+        observation.succeed(message);
+        steps.add(observation);
+        saveEvent(task, "WARN", "tool.failure_recovery_hint", "工具失败恢复提示", Map.of(
+                "toolId", call.toolId(),
+                "message", message));
     }
 
     private RuntimeException checkToolGuards(AgentTask task, AgentTool tool, ToolCall call) {
@@ -295,12 +436,45 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     @Override
+    public List<AgentMessage> getTaskMessages(String taskId, int limit) {
+        // 先校验任务存在，避免前端传错 taskId 时返回空数组掩盖问题。
+        getTask(taskId);
+        return messageStore.findMessagesByTask(taskId, limit);
+    }
+
+    @Override
     public AgentSession createSession(SessionCreateRequest request) {
         String title = request.title() == null || request.title().isBlank() ? "新会话" : request.title();
         AgentSession session = new AgentSession(UUID.randomUUID().toString(), title, request.channelId(), request.userId(), request.metadata());
         sessionStore.saveSession(session);
         log.info("agent session created sessionId={} channelId={} userId={}", session.id(), session.channelId(), session.userId());
         return session;
+    }
+
+    @Override
+    public String createSessionId() {
+        String sessionId;
+        do {
+            // 只生成页面当前会话 ID，不创建 AgentSession，空会话不会落盘。
+            sessionId = UUID.randomUUID().toString();
+        } while (sessionStore.findSession(sessionId).isPresent());
+        log.debug("agent session id allocated sessionId={}", sessionId);
+        return sessionId;
+    }
+
+    @Override
+    public Map<String, Object> clearAllSessions() {
+        Set<Object> cleanedStores = Collections.newSetFromMap(new IdentityHashMap<>());
+        int cleanedCount = 0;
+        for (Object store : List.of(sessionStore, taskStore, messageStore, eventStore)) {
+            if (store instanceof AgentDataCleaner cleaner && cleanedStores.add(store)) {
+                // 同一个 SQLite Store 会实现多个接口，用 identity set 保证只清理一次。
+                cleaner.clearAllAgentData();
+                cleanedCount++;
+            }
+        }
+        log.info("agent session data cleared storeCount={}", cleanedCount);
+        return Map.of("success", true, "storeCount", cleanedCount);
     }
 
     @Override
@@ -352,11 +526,15 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private void emit(String type, String taskId, String message) {
+        emit(type, taskId, message, Map.of());
+    }
+
+    private void emit(String type, String taskId, String message, Map<String, String> details) {
         List<AgentCallback> scopedCallbacks = activeCallbacks.get();
         if (scopedCallbacks == null) {
             scopedCallbacks = callbacks;
         }
-        scopedCallbacks.forEach(callback -> callback.onEvent(type, taskId, message));
+        scopedCallbacks.forEach(callback -> callback.onEvent(type, taskId, message, details == null ? Map.of() : details));
     }
 
     private void promoteSessionMemory(AgentSession session, List<AgentMessage> messages) {
@@ -381,19 +559,52 @@ public class DefaultAgentRuntime implements AgentRuntime {
                         log.debug("agent session touched sessionId={}", session.id());
                         return session;
                     })
-                    .orElseGet(() -> createSession(new SessionCreateRequest(
+                    .orElseGet(() -> createSessionWithId(
+                            request.sessionId(),
                             titleFromInput(request.input()),
                             request.channelId(),
                             request.userId(),
-                            request.metadata())));
+                            request.metadata()));
         }
         return createSession(new SessionCreateRequest(titleFromInput(request.input()), request.channelId(), request.userId(), request.metadata()));
+    }
+
+    private AgentSession createSessionWithId(String sessionId, String title, String channelId, String userId, Map<String, String> metadata) {
+        // 前端已申请但未落盘的 sessionId，在第一条消息到达时正式成为持久化会话。
+        AgentSession session = new AgentSession(sessionId, title, channelId, userId, metadata);
+        sessionStore.saveSession(session);
+        log.info("agent session created from requested id sessionId={} channelId={} userId={}", session.id(), session.channelId(), session.userId());
+        return session;
     }
 
     private void saveMessage(String sessionId, String taskId, String role, String content) {
         AgentMessage message = new AgentMessage(UUID.randomUUID().toString(), sessionId, taskId, role, content, java.util.Map.of());
         messageStore.saveMessage(message);
         log.debug("agent message saved sessionId={} taskId={} role={}", sessionId, taskId, role);
+    }
+
+    private void attachSessionContext(AgentTask task) {
+        List<AgentMessage> messages = messageStore.findMessages(task.sessionId(), SESSION_CONTEXT_MESSAGE_LIMIT);
+        if (messages.isEmpty()) {
+            return;
+        }
+        StringBuilder context = new StringBuilder();
+        for (AgentMessage message : messages) {
+            String content = preview(message.content(), 1200);
+            if (content.isBlank()) {
+                continue;
+            }
+            // 只注入最近会话摘要式上下文，当前用户输入仍由 task.input 单独提供，避免重复。
+            context.append(message.role()).append(": ").append(content).append("\n");
+            if (context.length() >= SESSION_CONTEXT_CHAR_LIMIT) {
+                break;
+            }
+        }
+        String value = preview(context.toString(), SESSION_CONTEXT_CHAR_LIMIT);
+        if (!value.isBlank()) {
+            task.metadata().put(SESSION_CONTEXT_METADATA_KEY, value);
+            log.debug("agent session context attached taskId={} chars={}", task.id(), value.length());
+        }
     }
 
     private void saveLlmTraces(AgentTask task, String phase) {
@@ -422,6 +633,95 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private void saveEvent(AgentTask task, String level, String type, String message, Map<String, String> details) {
         AgentEvent event = new AgentEvent(UUID.randomUUID().toString(), task.sessionId(), task.id(), level, type, message, details);
         eventStore.saveEvent(event);
+    }
+
+    private Map<String, String> toolEventDetails(AgentStep step, ToolCall call, AgentTool tool, String output, String error, long elapsedMs, long startedAt) {
+        Map<String, String> details = new LinkedHashMap<>();
+        details.put("stepId", step.id());
+        details.put("toolId", call.toolId());
+        details.put("status", step.status().name());
+        details.put("toolKind", toolKind(call.toolId()));
+        details.put("inputPreview", preview(call.arguments().toString()));
+        details.put("arguments", call.arguments().toString());
+        details.put("outputPreview", preview(output));
+        details.put("outputLength", String.valueOf(output == null ? 0 : output.length()));
+        details.put("error", nullToEmpty(error));
+        details.put("elapsedMs", String.valueOf(elapsedMs));
+        details.put("startedAt", String.valueOf(startedAt));
+        mergeTodoDetails(details, activeTodo.get());
+        return details;
+    }
+
+    private TodoItem updateActiveTodoAfterTool(AgentTask task, ToolCall call) {
+        if (todoStore == null || !"builtin.todo.update_item".equals(call.toolId())) {
+            return activeTodo.get();
+        }
+        String status = String.valueOf(call.arguments().getOrDefault("status", "")).toLowerCase();
+        TodoItem item = findTodoForUpdateCall(task, call);
+        if (item == null) {
+            return activeTodo.get();
+        }
+        if ("running".equals(status)) {
+            // Todo 进入 running 后，后续业务工具调用都挂到这个 Todo 上，便于页面点击查看执行日志。
+            activeTodo.set(item);
+            return item;
+        }
+        if ("completed".equals(status) || "failed".equals(status)) {
+            TodoItem current = activeTodo.get();
+            if (current != null && current.id().equals(item.id())) {
+                activeTodo.remove();
+            }
+            return item;
+        }
+        return activeTodo.get();
+    }
+
+    private TodoItem findTodoForUpdateCall(AgentTask task, ToolCall call) {
+        String id = String.valueOf(call.arguments().getOrDefault("id", ""));
+        if (!id.isBlank()) {
+            return todoStore.findTodoItem(id).orElse(null);
+        }
+        Object orderValue = call.arguments().get("order");
+        if (orderValue == null) {
+            return null;
+        }
+        int order;
+        try {
+            order = Integer.parseInt(String.valueOf(orderValue));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        List<TodoItem> items = todoStore.listTodoItems(task.sessionId(), "", 200);
+        String latestPlanTaskId = items.stream()
+                .max(Comparator.comparing(TodoItem::createdAt))
+                .map(TodoItem::taskId)
+                .orElse("");
+        return items.stream()
+                .filter(item -> latestPlanTaskId.equals(item.taskId()))
+                .filter(item -> item.itemOrder() == order)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void mergeTodoDetails(Map<String, String> details, TodoItem todo) {
+        if (todo == null) {
+            return;
+        }
+        details.put("todoId", todo.id());
+        details.put("todoTitle", nullToEmpty(todo.title()));
+        details.put("todoOrder", String.valueOf(todo.itemOrder()));
+    }
+
+    private Map<String, String> streamToolDetails(Map<String, String> details) {
+        Map<String, String> streamDetails = new LinkedHashMap<>(details);
+        // SSE 只承载页面实时展示需要的摘要，完整输入输出留在 AgentEvent 里供弹窗按 stepId 查询。
+        streamDetails.remove("arguments");
+        streamDetails.remove("output");
+        return streamDetails;
+    }
+
+    private long elapsedMs(long startedAt) {
+        return Math.max(0L, System.currentTimeMillis() - startedAt);
     }
 
     private void putMdc(String traceId, AgentTask task) {
@@ -458,10 +758,14 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private String preview(String text) {
+        return preview(text, 200);
+    }
+
+    private String preview(String text, int limit) {
         if (text == null) {
             return "";
         }
         String normalized = text.replaceAll("\\s+", " ").trim();
-        return normalized.length() <= 200 ? normalized : normalized.substring(0, 200) + "...";
+        return normalized.length() <= limit ? normalized : normalized.substring(0, limit) + "...";
     }
 }

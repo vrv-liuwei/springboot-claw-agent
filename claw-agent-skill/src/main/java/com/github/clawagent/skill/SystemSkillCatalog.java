@@ -135,7 +135,7 @@ final class SystemSkillCatalog {
                 "skills-install",
                 "Skills Install",
                 "0.1.0",
-                "安装、列出、启用、禁用 ClawAgent Skill。用于用户要求导入本地 Skill、从 JSON 安装 Skill、查看已安装 Skill 或管理 Skill 状态时。",
+                "安装、列出、启用、禁用 ClawAgent Skill。用于用户要求导入本地 Skill、安装 Codex/Claude Skill、从 GitHub 仓库安装 Skill、从 SKILL.md 转换安装、查看已安装 Skill 或管理 Skill 状态时。",
                 true,
                 "SKILL.md",
                 List.of("default", "install", "list"),
@@ -144,7 +144,7 @@ final class SystemSkillCatalog {
         return new SkillPackage(manifest, """
                 ---
                 name: skills-install
-                description: 安装、列出、启用、禁用 ClawAgent Skill。用于用户要求导入本地 Skill、从 JSON 安装 Skill、查看已安装 Skill、启用禁用 Skill 或管理 Skill 状态时。
+                description: 安装、列出、启用、禁用 ClawAgent Skill。用于用户要求导入本地 Skill、安装 Codex/Claude Skill、从 GitHub 仓库安装 Skill、从 SKILL.md 转换安装、查看已安装 Skill、启用禁用 Skill 或管理 Skill 状态时。
                 ---
 
                 # Skills Install
@@ -195,6 +195,22 @@ final class SystemSkillCatalog {
                 } | ConvertTo-Json -Depth 10
 
                 Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/skills' -Method Post -Body $body -ContentType 'application/json; charset=utf-8'
+                ```
+
+                安装 Codex/Claude 风格 Skill：
+
+                - 如果用户给 `SKILL.md` 原文，调用 `skill.skills-install.install`，参数 `skillMd` 填 SKILL.md 内容。
+                - 如果用户给 GitHub 仓库 URL，调用 `skill.skills-install.install`，参数 `sourceUrl` 填仓库 URL；工具会递归查找 `SKILL.md` 并转换安装。
+                - 如果用户要求覆盖同名 Skill，传 `overwrite=true`。
+                - 可选参数：`id`、`name`、`description`，用于覆盖 frontmatter 自动解析结果。
+
+                工具参数示例：
+
+                ```json
+                {
+                  "sourceUrl": "https://github.com/owner/repo.git",
+                  "overwrite": false
+                }
                 ```
 
                 启用或禁用：

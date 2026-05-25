@@ -1,7 +1,6 @@
 package com.github.clawagent.toolkit;
 
 import cn.hutool.core.net.URLEncodeUtil;
-import cn.hutool.http.HttpRequest;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
@@ -9,6 +8,7 @@ import com.github.clawagent.core.AgentContext;
 import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.core.ToolDefinition;
 import com.github.clawagent.core.ToolResult;
+import com.github.clawagent.core.http.AgentHttpClient;
 import com.github.clawagent.spi.AgentTool;
 
 import java.nio.charset.StandardCharsets;
@@ -37,11 +37,7 @@ public class WeatherTool implements AgentTool {
         try {
             // wttr.in 是免 key 的公开天气接口。这里使用 JSON 格式，避免解析自然语言文本。
             String encodedCity = URLEncodeUtil.encode(city, StandardCharsets.UTF_8);
-            String body = HttpRequest.get("https://wttr.in/" + encodedCity + "?format=j1")
-                    .timeout(15_000)
-                    .header("User-Agent", "ClawAgent/0.1 weather")
-                    .execute()
-                    .body();
+            String body = AgentHttpClient.get("https://wttr.in/" + encodedCity + "?format=j1", Map.of(), 15_000).body();
             JSONObject root = JSONUtil.parseObj(body);
             JSONArray current = root.getJSONArray("current_condition");
             if (current == null || current.isEmpty()) {

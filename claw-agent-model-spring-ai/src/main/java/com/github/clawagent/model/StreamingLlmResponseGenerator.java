@@ -34,7 +34,7 @@ public class StreamingLlmResponseGenerator extends LlmResponseGenerator implemen
             return content;
         }
         return streamingModelClient.chatStream(List.of(
-                ChatMessage.system("你是 ClawAgent 企业级 Harness Agent。请用中文回答用户。若提供了工具结果，只能基于工具结果和用户问题回答，不要伪造未执行的事实。"),
+                ChatMessage.system(systemPrompt()),
                 ChatMessage.user(buildUserPrompt(task, steps))
         ), options, callback);
     }

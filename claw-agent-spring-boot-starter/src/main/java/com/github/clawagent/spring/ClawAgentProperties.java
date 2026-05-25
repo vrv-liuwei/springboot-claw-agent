@@ -19,6 +19,7 @@ public class ClawAgentProperties {
     private final Mcp mcp = new Mcp();
     private final Skills skills = new Skills();
     private final Toolkit toolkit = new Toolkit();
+    private final Runtime runtime = new Runtime();
     private final Model model = new Model();
     private final Map<String, ModelConfig> models = new LinkedHashMap<>();
 
@@ -48,6 +49,10 @@ public class ClawAgentProperties {
 
     public Toolkit getToolkit() {
         return toolkit;
+    }
+
+    public Runtime getRuntime() {
+        return runtime;
     }
 
     public Model getModel() {
@@ -113,6 +118,13 @@ public class ClawAgentProperties {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public Map<String, Tool> getTools() { return tools; }
         public void setTools(Map<String, Tool> tools) { this.tools = tools == null ? new LinkedHashMap<>() : new LinkedHashMap<>(tools); }
+    }
+
+    public static class Runtime {
+        private int maxReactRounds = 15;
+
+        public int getMaxReactRounds() { return maxReactRounds; }
+        public void setMaxReactRounds(int maxReactRounds) { this.maxReactRounds = maxReactRounds; }
     }
 
     public static class Tool {

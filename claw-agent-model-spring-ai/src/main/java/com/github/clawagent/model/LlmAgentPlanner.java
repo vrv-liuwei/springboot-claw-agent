@@ -42,7 +42,7 @@ public class LlmAgentPlanner implements AgentPlanner {
         log.info("llm planner started taskId={} model={}", task.id(), options.model());
         String content = modelClient.chat(List.of(
                 ChatMessage.system(systemPrompt()),
-                ChatMessage.user("用户请求：" + task.input())
+                ChatMessage.user(userPromptWithSessionContext(task))
         ), options);
         List<ToolCall> calls = parseToolCalls(content);
         log.info("llm planner finished taskId={} toolCallCount={}", task.id(), calls.size());
@@ -64,13 +64,31 @@ public class LlmAgentPlanner implements AgentPlanner {
                     .append(", risk=").append(definition.riskLevel())
                     .append("\n");
         }
-        prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.fetch 使用 url，可选 format=html/text/markdown/json、headers(JSON)、timeoutMs、maxBytes。");
+        prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.fetch 使用 url，默认 format=markdown、extractMode=readable，可选 extractMode=readable/raw、maxOutputChars、headers(JSON)、timeoutMs、maxBytes。");
+        prompt.append("复杂、多步骤、需要拆解的任务，优先调用 builtin.todo.create_plan，items 参数为 JSON 数组字符串。");
+        prompt.append("Todo 执行规则：用户说执行第 N 步时，先用 builtin.todo.update_item 将 order=N 标记为 running，再调用完成该步骤所需工具，成功后再标记 completed，失败则标记 failed。");
+        prompt.append("用户说执行全部 Todo 时，按 order 从小到大执行所有 pending/running Todo；未知下一步需要先调用 builtin.todo.list 获取当前会话 Todo。");
+        return prompt.toString();
+    }
+
+    static String sessionContext(AgentTask task) {
+        String context = task.metadata().getOrDefault("runtime.sessionContext", "");
+        return context == null ? "" : context.trim();
+    }
+
+    static String userPromptWithSessionContext(AgentTask task) {
+        StringBuilder prompt = new StringBuilder();
+        String context = sessionContext(task);
+        if (!context.isBlank()) {
+            prompt.append("近期会话上下文：\n").append(context).append("\n\n");
+        }
+        prompt.append("用户请求：").append(task.input());
         return prompt.toString();
     }
 
     private List<ToolCall> parseToolCalls(String content) {
         try {
-            JsonNode callsNode = objectMapper.readTree(stripCodeFence(content)).path("calls");
+            JsonNode callsNode = objectMapper.readTree(extractJsonObject(stripCodeFence(content))).path("calls");
             List<ToolCall> calls = new ArrayList<>();
             if (!callsNode.isArray()) {
                 return calls;
@@ -86,6 +104,62 @@ public class LlmAgentPlanner implements AgentPlanner {
         } catch (Exception e) {
             throw new IllegalStateException("模型工具计划不是有效 JSON：" + content, e);
         }
+    }
+
+    private String extractJsonObject(String content) throws java.io.IOException {
+        String text = content.trim();
+        try {
+            objectMapper.readTree(text);
+            return text;
+        } catch (java.io.IOException ignored) {
+            // 整段不是纯 JSON 时，继续扫描其中的 JSON 对象。
+        }
+        String latest = "";
+        for (int start = 0; start < text.length(); start++) {
+            if (text.charAt(start) != '{') {
+                continue;
+            }
+            String candidate = readBalancedJsonCandidate(text, start);
+            if (candidate.isBlank()) {
+                continue;
+            }
+            JsonNode node = objectMapper.readTree(candidate);
+            if (node.has("calls")) {
+                // 模型偶尔会先输出草稿 JSON 再自我修正，取最后一个 calls 对象作为最终计划。
+                latest = candidate;
+            }
+        }
+        return latest.isBlank() ? text : latest;
+    }
+
+    private String readBalancedJsonCandidate(String text, int start) {
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = start; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+            } else if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return "";
     }
 
     private Map<String, String> readStringMap(JsonNode node) {

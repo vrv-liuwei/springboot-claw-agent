@@ -41,6 +41,8 @@ clawagent:
     enabled: true
     path:
       - .clawagent/skills
+  runtime:
+    max-react-rounds: 15
   toolkit:
     enabled: true
     tools:
@@ -51,6 +53,18 @@ clawagent:
         enabled: true
         env: {}
       web-fetch:
+        enabled: true
+        env:
+          ALLOW_PRIVATE_ADDRESSES: "true"
+          ALLOWED_HOSTS: "192.168.6.160"
+          MAX_OUTPUT_CHARS: "12000"
+      execute:
+        enabled: false
+        env:
+          ALLOWED_ROOTS: "D:/workspace/codex"
+          TIMEOUT_MS: "30000"
+          MAX_OUTPUT_CHARS: "20000"
+      todo:
         enabled: true
         env: {}
       filesystem:
@@ -63,7 +77,7 @@ clawagent:
           MAX_SEARCH_RESULTS: "100"
   model:
     mode: llm
-    planner: single
+    planner: react
     default: deepseek-v4-flash
   models:
     deepseek-v4-flash:

@@ -21,13 +21,22 @@ public class AgentStep {
     private String error;
 
     public AgentStep(String id, String taskId, StepType type, String name, Map<String, String> input) {
+        this(id, taskId, type, name, input, Instant.now(), null, StepStatus.RUNNING, null, null);
+    }
+
+    public AgentStep(String id, String taskId, StepType type, String name, Map<String, String> input,
+                     Instant startedAt, Instant finishedAt, StepStatus status, String output, String error) {
         this.id = id;
         this.taskId = taskId;
         this.type = type;
         this.name = name;
-        this.input = new LinkedHashMap<>(input);
-        this.startedAt = Instant.now();
-        this.status = StepStatus.RUNNING;
+        this.input = input == null ? new LinkedHashMap<>() : new LinkedHashMap<>(input);
+        // 步骤列表用于审计执行链路，读取历史记录时不能重新生成 startedAt/finishedAt。
+        this.startedAt = startedAt == null ? Instant.now() : startedAt;
+        this.finishedAt = finishedAt;
+        this.status = status == null ? StepStatus.RUNNING : status;
+        this.output = output;
+        this.error = error;
     }
 
     public String id() { return id; }

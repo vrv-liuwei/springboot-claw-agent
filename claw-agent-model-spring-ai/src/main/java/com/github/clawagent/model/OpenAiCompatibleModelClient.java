@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.core.ToolDefinition;
+import com.github.clawagent.core.http.AgentHttpClient;
+import com.github.clawagent.core.http.AgentHttpClient.AgentHttpResponse;
 import com.github.clawagent.spi.ChatMessage;
 import com.github.clawagent.spi.ChatOptions;
 import com.github.clawagent.spi.ChatStreamCallback;
@@ -24,6 +26,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +41,7 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleModelClient.class);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 流式响应需要逐行解析 SSE，暂保留 JDK HttpClient 的 InputStream/String BodyHandler 能力。 */
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final String baseUrl;
     private final String apiKey;
@@ -115,18 +119,16 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             payload.put("tool_choice", "auto");
 
             String requestJson = objectMapper.writeValueAsString(payload);
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/chat/completions"))
-                    .timeout(Duration.ofSeconds(options.timeoutSeconds()))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(requestJson))
-                    .build();
 
             log.info("model tool calling request model={} baseUrl={} messageCount={} toolCount={}",
                     options.model(), baseUrl, messages.size(), tools.size());
             log.debug("model tool calling payload model={} payload={}", options.model(), requestJson);
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            // 非流式 Tool Calling 是标准 JSON POST，统一走 AgentHttpClient，Authorization 只进 header，不进入日志。
+            AgentHttpResponse response = AgentHttpClient.postJson(
+                    baseUrl + "/chat/completions",
+                    requestJson,
+                    authHeaders(),
+                    options.timeoutSeconds() * 1000);
             long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
             log.info("model tool calling response model={} statusCode={} elapsedMs={}", options.model(), response.statusCode(), elapsedMs);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -144,9 +146,6 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             return new ToolCallingResult(content, calls);
         } catch (IOException e) {
             throw new IllegalStateException("模型 Tool Calling 请求序列化或响应解析失败：" + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("模型 Tool Calling 调用被中断", e);
         }
     }
 
@@ -166,17 +165,15 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             )).toList());
 
             String requestJson = objectMapper.writeValueAsString(payload);
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/chat/completions"))
-                    .timeout(Duration.ofSeconds(options.timeoutSeconds()))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(requestJson))
-                    .build();
 
             log.info("model chat request model={} baseUrl={} messageCount={}", options.model(), baseUrl, messages.size());
             log.debug("model chat payload model={} payload={}", options.model(), requestJson);
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            // 非流式 Chat 是标准 JSON POST，统一走 AgentHttpClient，减少各模块重复 HTTP 实现。
+            AgentHttpResponse response = AgentHttpClient.postJson(
+                    baseUrl + "/chat/completions",
+                    requestJson,
+                    authHeaders(),
+                    options.timeoutSeconds() * 1000);
             long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
             log.info("model chat response model={} statusCode={} elapsedMs={}", options.model(), response.statusCode(), elapsedMs);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -221,9 +218,6 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             return content.asText();
         } catch (IOException e) {
             throw new IllegalStateException("模型请求序列化或响应解析失败：" + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("模型调用被中断", e);
         }
     }
 
@@ -236,6 +230,13 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             result = result.substring(0, result.length() - 1);
         }
         return result;
+    }
+
+    private Map<String, String> authHeaders() {
+        Map<String, String> headers = new HashMap<>();
+        // 只把 API Key 放进请求头，不参与 requestJson 记录，避免调试日志泄露密钥。
+        headers.put("Authorization", "Bearer " + apiKey);
+        return headers;
     }
 
     private Map<String, Object> toOpenAiTool(ToolDefinition definition, Map<String, String> functionNameToToolId) {
@@ -344,9 +345,14 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
                 }
                 JsonNode root = objectMapper.readTree(data);
                 JsonNode delta = root.path("choices").path(0).path("delta").path("content");
-                if (!delta.isMissingNode() && !delta.asText().isEmpty()) {
-                    answer.append(delta.asText());
-                    callback.onDelta(delta.asText());
+                if (!delta.isMissingNode() && !delta.isNull() && !delta.asText().isEmpty()) {
+                    // 部分 OpenAI 兼容模型会在流式片段中返回 content:null，不能把它当成正文输出。
+                    String chunk = delta.asText();
+                    if ("null".equalsIgnoreCase(chunk.trim())) {
+                        continue;
+                    }
+                    answer.append(chunk);
+                    callback.onDelta(chunk);
                 }
             }
         }

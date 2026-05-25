@@ -8,6 +8,7 @@ import com.github.clawagent.core.AgentSession;
 import com.github.clawagent.core.AgentStep;
 import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.core.SessionCreateRequest;
+import com.github.clawagent.core.TodoItem;
 import com.github.clawagent.mcp.McpRegistry;
 import com.github.clawagent.mcp.McpImportRequest;
 import com.github.clawagent.mcp.McpServerConfig;
@@ -22,10 +23,14 @@ import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.skill.SkillPackage;
 import com.github.clawagent.skill.SkillRegistration;
 import com.github.clawagent.skill.SkillRegistry;
+import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.AgentToolRegistry;
+import com.github.clawagent.spi.AgentDataCleaner;
+import com.github.clawagent.spi.TodoStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -53,14 +58,16 @@ public class AgentController {
     private final AgentToolRegistry toolRegistry;
     private final McpRegistry mcpRegistry;
     private final SkillRegistry skillRegistry;
+    private final TodoStore todoStore;
     /** 流式任务后台执行池；避免阻塞 Spring MVC 请求线程。 */
     private final ExecutorService streamExecutor = Executors.newCachedThreadPool();
 
-    public AgentController(AgentRuntime runtime, AgentToolRegistry toolRegistry, McpRegistry mcpRegistry, SkillRegistry skillRegistry) {
+    public AgentController(AgentRuntime runtime, AgentToolRegistry toolRegistry, McpRegistry mcpRegistry, SkillRegistry skillRegistry, TodoStore todoStore) {
         this.runtime = runtime;
         this.toolRegistry = toolRegistry;
         this.mcpRegistry = mcpRegistry;
         this.skillRegistry = skillRegistry;
+        this.todoStore = todoStore;
     }
 
     @GetMapping("/health")
@@ -84,20 +91,37 @@ public class AgentController {
         SseEmitter emitter = new SseEmitter(0L);
         streamExecutor.submit(() -> {
             try {
-                AgentResult result = runtime.submitStream(request, (eventType, taskId, message) ->
-                        sendSse(emitter, eventType, Map.of(
-                                "eventType", eventType,
-                                "taskId", nullToEmpty(taskId),
-                                "message", nullToEmpty(message))),
+                AgentResult result = runtime.submitStream(request, new AgentCallback() {
+                            @Override
+                            public void onEvent(String eventType, String taskId, String message) {
+                                onEvent(eventType, taskId, message, Map.of());
+                            }
+
+                            @Override
+                            public void onEvent(String eventType, String taskId, String message, Map<String, String> details) {
+                                Map<String, Object> payload = new java.util.LinkedHashMap<>();
+                                payload.put("eventType", eventType);
+                                payload.put("taskId", nullToEmpty(taskId));
+                                payload.put("message", nullToEmpty(message));
+                                if (details != null) {
+                                    payload.putAll(details);
+                                }
+                                sendSse(emitter, eventType, payload);
+                            }
+                        },
                         new com.github.clawagent.spi.ChatStreamCallback() {
                             @Override
                             public void onDelta(String content) {
-                                sendSse(emitter, "llm.delta", Map.of("content", content));
+                                String delta = normalizeStreamContent(content);
+                                if (!delta.isBlank()) {
+                                    // 模型流式协议里可能出现 null 片段，后端先过滤，避免前端聊天窗口出现 nullnull。
+                                    sendSse(emitter, "llm.delta", Map.of("content", delta));
+                                }
                             }
 
                             @Override
                             public void onComplete(String content) {
-                                sendSse(emitter, "llm.completed", Map.of("length", String.valueOf(content.length())));
+                                sendSse(emitter, "llm.completed", Map.of("length", String.valueOf(nullToEmpty(content).length())));
                             }
                         });
                 sendSse(emitter, "result", Map.of(
@@ -125,6 +149,24 @@ public class AgentController {
     public AgentSession createSession(@RequestBody SessionCreateRequest request) {
         log.info("session create received channelId={} userId={} title={}", request.channelId(), request.userId(), preview(request.title()));
         return runtime.createSession(request);
+    }
+
+    @PostMapping("/sessions/id")
+    public Map<String, String> createSessionId() {
+        String sessionId = runtime.createSessionId();
+        log.info("session id allocated sessionId={}", sessionId);
+        return Map.of("sessionId", sessionId);
+    }
+
+    @DeleteMapping("/sessions")
+    public Map<String, Object> clearSessions() {
+        log.warn("session clear all requested");
+        Map<String, Object> result = runtime.clearAllSessions();
+        if (todoStore instanceof AgentDataCleaner cleaner) {
+            // TodoStore 可能是独立内存实现；SQLite 场景下重复 delete 空表也是安全的。
+            cleaner.clearAllAgentData();
+        }
+        return result;
     }
 
     @GetMapping("/sessions")
@@ -299,18 +341,57 @@ public class AgentController {
         return runtime.getSteps(taskId);
     }
 
+    @GetMapping("/tasks/{taskId}/messages")
+    public List<AgentMessage> taskMessages(
+            @PathVariable("taskId") String taskId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit) {
+        log.debug("task messages requested taskId={} limit={}", taskId, limit);
+        return runtime.getTaskMessages(taskId, limit);
+    }
+
     @GetMapping("/tasks/{taskId}/events")
     public List<AgentEvent> taskEvents(
             @PathVariable("taskId") String taskId,
-            @RequestParam(name = "limit", defaultValue = "200") int limit) {
-        log.debug("task events requested taskId={} limit={}", taskId, limit);
-        return runtime.getTaskEvents(taskId, limit);
+            @RequestParam(name = "limit", defaultValue = "200") int limit,
+            @RequestParam(name = "todoId", required = false) String todoId,
+            @RequestParam(name = "stepId", required = false) String stepId) {
+        log.debug("task events requested taskId={} limit={} todoId={} stepId={}", taskId, limit, todoId, stepId);
+        List<AgentEvent> events = runtime.getTaskEvents(taskId, limit);
+        if (todoId != null && !todoId.isBlank()) {
+            events = events.stream()
+                    .filter(event -> todoId.equals(event.details().get("todoId")))
+                    .toList();
+        }
+        if (stepId != null && !stepId.isBlank()) {
+            events = events.stream()
+                    .filter(event -> stepId.equals(event.details().get("stepId")))
+                    .toList();
+        }
+        return events;
     }
 
     @GetMapping("/tools")
     public Object tools() {
         log.debug("tool definitions requested");
         return toolRegistry.definitions();
+    }
+
+    @GetMapping("/todos")
+    public List<TodoItem> todos(
+            @RequestParam(name = "sessionId", required = false) String sessionId,
+            @RequestParam(name = "taskId", required = false) String taskId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit) {
+        log.trace("todo list requested sessionId={} taskId={} limit={}", sessionId, taskId, limit);
+        return todoStore.listTodoItems(sessionId, taskId, limit);
+    }
+
+    @PostMapping("/todos/{todoId}/status")
+    public TodoItem updateTodoStatus(
+            @PathVariable("todoId") String todoId,
+            @RequestBody Map<String, String> body) {
+        String status = body == null ? "" : body.getOrDefault("status", "");
+        log.info("todo status update requested id={} status={}", todoId, status);
+        return todoStore.updateTodoStatus(todoId, status);
     }
 
     private String preview(String text) {
@@ -331,5 +412,16 @@ public class AgentController {
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private String normalizeStreamContent(String content) {
+        if (content == null) {
+            return "";
+        }
+        String text = content.trim();
+        if (text.isBlank() || "null".equalsIgnoreCase(text)) {
+            return "";
+        }
+        return content.replaceFirst("(?i)^(null)+", "");
     }
 }

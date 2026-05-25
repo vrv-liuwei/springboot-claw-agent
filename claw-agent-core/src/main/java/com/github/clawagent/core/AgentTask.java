@@ -21,15 +21,23 @@ public class AgentTask {
     private String finalAnswer;
 
     public AgentTask(String id, AgentRequest request) {
+        this(id, request.input(), request.sessionId(), request.channelId(), request.userId(), request.metadata(),
+                Instant.now(), null, TaskStatus.PENDING, null);
+    }
+
+    public AgentTask(String id, String input, String sessionId, String channelId, String userId, Map<String, String> metadata,
+                     Instant createdAt, Instant updatedAt, TaskStatus status, String finalAnswer) {
         this.id = id;
-        this.input = request.input();
-        this.sessionId = request.sessionId();
-        this.channelId = request.channelId();
-        this.userId = request.userId();
-        this.metadata = new LinkedHashMap<>(request.metadata());
-        this.createdAt = Instant.now();
-        this.updatedAt = this.createdAt;
-        this.status = TaskStatus.PENDING;
+        this.input = input;
+        this.sessionId = sessionId;
+        this.channelId = channelId;
+        this.userId = userId;
+        this.metadata = metadata == null ? new LinkedHashMap<>() : new LinkedHashMap<>(metadata);
+        // 历史任务从数据库恢复时保留原始创建/更新时间，避免刷新页面导致时间跳动。
+        this.createdAt = createdAt == null ? Instant.now() : createdAt;
+        this.updatedAt = updatedAt == null ? this.createdAt : updatedAt;
+        this.status = status == null ? TaskStatus.PENDING : status;
+        this.finalAnswer = finalAnswer;
     }
 
     public String id() { return id; }

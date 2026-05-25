@@ -12,4 +12,6 @@ public interface SessionMessageStore {
     void saveMessage(AgentMessage message);
 
     List<AgentMessage> findMessages(String sessionId, int limit);
+
+    List<AgentMessage> findMessagesByTask(String taskId, int limit);
 }
