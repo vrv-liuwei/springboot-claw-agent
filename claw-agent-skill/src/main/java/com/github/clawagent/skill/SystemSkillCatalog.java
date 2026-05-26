@@ -200,7 +200,9 @@ final class SystemSkillCatalog {
                 安装 Codex/Claude 风格 Skill：
 
                 - 如果用户给 `SKILL.md` 原文，调用 `skill.skills-install.install`，参数 `skillMd` 填 SKILL.md 内容。
-                - 如果用户给 GitHub 仓库 URL，调用 `skill.skills-install.install`，参数 `sourceUrl` 填仓库 URL；工具会递归查找 `SKILL.md` 并转换安装。
+                - 如果用户给 GitHub 仓库 URL，必须直接调用 `skill.skills-install.install`，参数 `sourceUrl` 填仓库 URL；不要先用 `web.fetch` 读取 SKILL.md 再传 `skillMd`，否则 `scripts/`、`references/`、`assets/` 等仓库资源无法自动下载。
+                - 如果用户要求先分析仓库结构，优先调用 `builtin.github.repo_tree` 查看 `SKILL.md`、`scripts/`、`references/`、`assets/`、`runtime.conf`，再调用 `builtin.github.read_file` 读取关键文件。
+                - GitHub 专用工具只负责分析和读取仓库内容；真正安装仍调用 `skill.skills-install.install`。
                 - 如果用户要求覆盖同名 Skill，传 `overwrite=true`。
                 - 可选参数：`id`、`name`、`description`，用于覆盖 frontmatter 自动解析结果。
 

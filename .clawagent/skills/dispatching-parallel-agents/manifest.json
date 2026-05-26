@@ -1,0 +1,14 @@
+{
+  "id" : "dispatching-parallel-agents",
+  "name" : "dispatching-parallel-agents",
+  "version" : "0.1.0",
+  "description" : "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default" ],
+  "permissions" : [ ],
+  "metadata" : {
+    "sourceUrl" : "https://raw.githubusercontent.com/obra/superpowers/main/skills/dispatching-parallel-agents/SKILL.md",
+    "sourceFormat" : "codex-or-claude-skill"
+  }
+}

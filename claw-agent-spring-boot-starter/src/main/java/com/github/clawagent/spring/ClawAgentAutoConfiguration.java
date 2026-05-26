@@ -38,6 +38,8 @@ import com.github.clawagent.runtime.InMemorySessionStore;
 import com.github.clawagent.runtime.InMemoryTaskStore;
 import com.github.clawagent.runtime.InMemoryTodoStore;
 import com.github.clawagent.runtime.RuleBasedPlanner;
+import com.github.clawagent.runtime.SanitizationOptions;
+import com.github.clawagent.runtime.SensitiveDataInterceptor;
 import com.github.clawagent.runtime.SimpleSessionSummarizer;
 import com.github.clawagent.runtime.ToolOutputResponseGenerator;
 import com.github.clawagent.security.DefaultToolExecutionGuard;
@@ -48,6 +50,7 @@ import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.AgentEventStore;
 import com.github.clawagent.spi.AgentPlanner;
 import com.github.clawagent.spi.AgentResponseGenerator;
+import com.github.clawagent.spi.AgentRuntimeInterceptor;
 import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.AgentToolRegistry;
 import com.github.clawagent.spi.ChatOptions;
@@ -272,6 +275,19 @@ public class ClawAgentAutoConfiguration {
         return new DefaultToolExecutionGuard();
     }
 
+    @Bean(name = "clawAgentSensitiveDataInterceptor")
+    @ConditionalOnMissingBean(name = "clawAgentSensitiveDataInterceptor")
+    @ConditionalOnProperty(prefix = "clawagent.runtime.sanitization", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public AgentRuntimeInterceptor clawAgentSensitiveDataInterceptor(ClawAgentProperties properties) {
+        ClawAgentProperties.Sanitization sanitization = properties.getRuntime().getSanitization();
+        return new SensitiveDataInterceptor(new SanitizationOptions(
+                sanitization.isEnabled(),
+                0,
+                sanitization.getReplacement(),
+                sanitization.getSensitiveKeys(),
+                sanitization.getValuePatterns()));
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public AgentRuntime agentRuntime(
@@ -287,8 +303,23 @@ public class ClawAgentAutoConfiguration {
             TodoStore todoStore,
             List<ToolExecutionGuard> toolGuards,
             List<AgentCallback> callbacks,
+            List<AgentRuntimeInterceptor> runtimeInterceptors,
             ClawAgentProperties properties) {
-        return new DefaultAgentRuntime(planner, responseGenerator, registry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, properties.getRuntime().getMaxReactRounds());
+        return new DefaultAgentRuntime(
+                planner,
+                responseGenerator,
+                registry,
+                taskStore,
+                sessionStore,
+                messageStore,
+                sessionSummarizer,
+                memoryPromoters,
+                eventStore,
+                todoStore,
+                toolGuards,
+                callbacks,
+                properties.getRuntime().getMaxReactRounds(),
+                runtimeInterceptors);
     }
 
     private ClawAgentProperties.ModelConfig defaultModelConfig(ClawAgentProperties properties) {

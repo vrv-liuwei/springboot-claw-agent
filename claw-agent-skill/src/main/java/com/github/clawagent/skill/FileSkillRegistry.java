@@ -66,7 +66,14 @@ public class FileSkillRegistry implements SkillRegistry {
             Files.createDirectories(skillDir);
             objectMapper.writeValue(skillDir.resolve("manifest.json").toFile(), manifest);
             if (skillPackage.content() != null && !skillPackage.content().isBlank()) {
-                Files.writeString(skillDir.resolve("README.md"), skillPackage.content(), StandardCharsets.UTF_8);
+                // 外部 Skill 的入口通常是 SKILL.md，必须按 manifest.entrypoint 落盘，否则脚本说明和触发内容会错位。
+                Files.writeString(safeResolve(skillDir, entrypointOrDefault(manifest)), skillPackage.content(), StandardCharsets.UTF_8);
+            }
+            for (Map.Entry<String, String> resource : skillPackage.resourceFiles().entrySet()) {
+                Path resourcePath = safeResolve(skillDir, resource.getKey());
+                // GitHub Skill 的 scripts/references/assets 等资源随包保存，后续执行器可直接按相对路径读取。
+                Files.createDirectories(resourcePath.getParent());
+                Files.writeString(resourcePath, resource.getValue() == null ? "" : resource.getValue(), StandardCharsets.UTF_8);
             }
             SkillRegistration registration = new SkillRegistration(manifest, Instant.now(), skillDir.toString(), "INSTALLED", "installed");
             skills.put(manifest.id(), registration);
@@ -232,6 +239,20 @@ public class FileSkillRegistry implements SkillRegistry {
             throw new IllegalArgumentException("Skill id 越权：" + skillId);
         }
         return dir;
+    }
+
+    private Path safeResolve(Path root, String relativePath) {
+        String path = relativePath == null || relativePath.isBlank() ? "README.md" : relativePath.replace('\\', '/');
+        Path normalizedRoot = root.normalize();
+        Path target = normalizedRoot.resolve(path).normalize();
+        if (!target.startsWith(normalizedRoot)) {
+            throw new IllegalArgumentException("Skill 文件路径越权：" + relativePath);
+        }
+        return target;
+    }
+
+    private String entrypointOrDefault(SkillManifest manifest) {
+        return manifest.entrypoint() == null || manifest.entrypoint().isBlank() ? "README.md" : manifest.entrypoint();
     }
 
     private String toolPrefix(String skillId) {

@@ -1,0 +1,14 @@
+{
+  "id" : "using-superpowers",
+  "name" : "using-superpowers",
+  "version" : "0.1.0",
+  "description" : "Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default" ],
+  "permissions" : [ ],
+  "metadata" : {
+    "sourceUrl" : "https://raw.githubusercontent.com/obra/superpowers/main/skills/using-superpowers/SKILL.md",
+    "sourceFormat" : "codex-or-claude-skill"
+  }
+}

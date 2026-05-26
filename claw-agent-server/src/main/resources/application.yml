@@ -43,6 +43,8 @@ clawagent:
       - .clawagent/skills
   runtime:
     max-react-rounds: 15
+    sanitization:
+      enabled: true
   toolkit:
     enabled: true
     tools:
@@ -59,7 +61,7 @@ clawagent:
           ALLOWED_HOSTS: "192.168.6.160"
           MAX_OUTPUT_CHARS: "12000"
       execute:
-        enabled: false
+        enabled: true
         env:
           ALLOWED_ROOTS: "D:/workspace/codex"
           TIMEOUT_MS: "30000"

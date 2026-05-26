@@ -56,7 +56,7 @@ Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/skills' -Method Post -Body
 安装 Codex/Claude 风格 Skill：
 
 - 如果用户给 `SKILL.md` 原文，调用 `skill.skills-install.install`，参数 `skillMd` 填 SKILL.md 内容。
-- 如果用户给 GitHub 仓库 URL，调用 `skill.skills-install.install`，参数 `sourceUrl` 填仓库 URL；工具会递归查找 `SKILL.md` 并转换安装。
+- 如果用户给 GitHub 仓库 URL，必须直接调用 `skill.skills-install.install`，参数 `sourceUrl` 填仓库 URL；不要先用 `web.fetch` 读取 SKILL.md 再传 `skillMd`，否则 `scripts/`、`references/`、`assets/` 等仓库资源无法自动下载。
 - 如果用户要求覆盖同名 Skill，传 `overwrite=true`。
 - 可选参数：`id`、`name`、`description`，用于覆盖 frontmatter 自动解析结果。
 

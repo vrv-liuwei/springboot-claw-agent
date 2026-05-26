@@ -1,0 +1,14 @@
+{
+  "id" : "publish",
+  "name" : "publish",
+  "version" : "0.1.0",
+  "description" : "Publishes a new minor or major release of this npm package (codegraph). Reads the latest version from npm, generates a user-perspective CHANGELOG entry from commits since the last tag, bumps package.json, publishes to npm, and creates the matching GitHub release. Use when the user runs /publish or asks to cut, ship, or publish a release / new version.",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default" ],
+  "permissions" : [ ],
+  "metadata" : {
+    "sourceUrl" : "https://raw.githubusercontent.com/colbymchenry/codegraph/main/.claude/skills/publish/SKILL.md",
+    "sourceFormat" : "codex-or-claude-skill"
+  }
+}

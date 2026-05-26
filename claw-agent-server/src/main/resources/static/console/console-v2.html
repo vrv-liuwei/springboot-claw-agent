@@ -1,0 +1,1112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>ClawAgent Console V2</title>
+  <style>
+    body { margin: 0; font-family: Arial, "Microsoft YaHei", sans-serif; background: #f6f8fb; color: #111827; font-size: 14px; }
+    header { padding: 10px 20px; background: #111827; color: white; text-align: center; }
+    header h1 { margin: 0; font-size: 22px; line-height: 1.3; }
+    main { padding: 12px 28px; }
+    nav { display: flex; gap: 4px; border-bottom: 1px solid #d1d5db; margin-bottom: 10px; }
+    button { border: 0; border-radius: 6px; padding: 9px 14px; background: #2563eb; color: white; cursor: pointer; }
+    button.secondary { background: #4b5563; }
+    button.danger { background: #dc2626; }
+    button.ghost { background: transparent; color: #374151; border: 1px solid #d1d5db; }
+    button.compact { padding: 6px 10px; font-size: 12px; border-radius: 5px; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .tab-button { background: transparent; color: #374151; border-radius: 6px 6px 0 0; border: 1px solid transparent; border-bottom: 0; }
+    .tab-button.active { background: white; color: #1d4ed8; border-color: #d1d5db; font-weight: 700; margin-bottom: -1px; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    section { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
+    #tab-current { background: transparent; border: 0; border-radius: 0; padding: 0; }
+    #tab-current.active { height: calc(100vh - 110px); box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
+    label { display: block; margin: 12px 0 6px; font-weight: 700; }
+    input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 6px; padding: 9px; font: inherit; background: white; }
+    input[readonly] { background: #eef2ff; color: #1e3a8a; }
+    textarea { min-height: 96px; resize: vertical; }
+    pre { white-space: pre-wrap; overflow: auto; background: #111827; color: #e5e7eb; border-radius: 6px; padding: 12px; min-height: 80px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .current-layout { --todo-width: 360px; display: grid; grid-template-columns: minmax(420px, 1fr) 8px minmax(280px, var(--todo-width)); gap: 8px; align-items: stretch; flex: 0 0 auto; }
+    .chat-panel, .todo-panel { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; background: #fff; }
+    .chat-panel { padding-top: 20px; }
+    .todo-panel { max-height: 314px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; }
+    .layout-resizer { cursor: col-resize; border-radius: 999px; background: transparent; position: relative; }
+    .layout-resizer::after { content: ""; position: absolute; top: 12px; bottom: 12px; left: 3px; width: 2px; border-radius: 999px; background: #d1d5db; }
+    .layout-resizer:hover::after, .layout-resizer.dragging::after { background: #2563eb; }
+    body.resizing-layout { cursor: col-resize; user-select: none; }
+    .transcript-panel { margin-top: 12px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; background: #fff; flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .chat-list { display: grid; gap: 8px; margin-top: 16px; }
+    .transcript-panel .chat-list { margin-top: 0; overflow: auto; min-height: 0; padding-right: 4px; }
+    .chat-message { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; background: #f9fafb; }
+    .chat-message.user { background: #eff6ff; border-color: #bfdbfe; }
+    .chat-message.assistant { background: #ffffff; }
+    .chat-role { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+    .chat-meta { margin-left: 6px; }
+    .assistant-progress { display: none; align-items: center; gap: 8px; margin: 6px 0 8px; padding: 7px 9px; border-radius: 6px; background: #f3f4f6; color: #374151; font-size: 13px; }
+    .assistant-progress.active { display: flex; }
+    .assistant-progress strong { color: #111827; font-weight: 700; }
+    .tool-call-section { display: none; margin: 8px 0 10px; border: 1px solid #e5e7eb; border-radius: 7px; overflow: hidden; }
+    .tool-call-section.active { display: block; }
+    .tool-call-title { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 7px 9px; background: #f9fafb; color: #111827; font-size: 13px; font-weight: 700; border: 0; border-bottom: 1px solid #e5e7eb; border-radius: 0; text-align: left; }
+    .tool-call-toggle { color: #6b7280; font-size: 12px; font-weight: 400; }
+    .tool-call-list { display: grid; gap: 0; }
+    .tool-call-section.collapsed .tool-call-list { display: none; }
+    .tool-call-row { width: 100%; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 9px; background: #fff; color: #111827; border: 0; border-radius: 0; text-align: left; border-bottom: 1px solid #f3f4f6; }
+    .tool-call-row:last-child { border-bottom: 0; }
+    .tool-call-row:hover { background: #eff6ff; }
+    .tool-call-row .tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-call-row .tool-summary { color: #6b7280; font-size: 12px; white-space: nowrap; }
+    .chat-content { line-height: 1.55; font-size: 14px; }
+    .chat-content h1, .chat-content h2, .chat-content h3 { margin: 10px 0 6px; }
+    .chat-content p { margin: 6px 0; }
+    .chat-content ul, .chat-content ol { margin: 6px 0 6px 22px; }
+    .chat-content code { background: #eef2ff; padding: 1px 4px; border-radius: 4px; }
+    .chat-content pre { min-height: 0; margin: 8px 0; }
+    .chat-content table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+    .chat-content th, .chat-content td { border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; vertical-align: top; }
+    .chat-content th { background: #f3f4f6; font-weight: 700; }
+    .chat-status { display: none; }
+    .todo-list { display: grid; gap: 8px; overflow: auto; min-height: 0; padding-right: 2px; }
+    .todo-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; background: #f9fafb; font-weight: 400; }
+    .todo-head { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+    .todo-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .todo-status { margin-left: auto; color: #6b7280; font-size: 12px; white-space: nowrap; }
+    .status-dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; background: #9ca3af; flex: 0 0 auto; }
+    .status-dot.running { background: #ef4444; box-shadow: 0 0 0 3px #fee2e2; }
+    .status-dot.completed { width: auto; height: auto; background: transparent; color: #16a34a; }
+    .status-dot.failed { width: auto; height: auto; background: transparent; color: #dc2626; }
+    .history-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .session-list { display: grid; gap: 8px; }
+    .session-card { text-align: left; background: #f9fafb; color: #111827; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; }
+    .session-card.active { border-color: #2563eb; background: #eff6ff; }
+    .detail-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+    .detail-tabs button { background: #4b5563; }
+    .detail-tabs button.active { background: #2563eb; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .section-title h3 { margin: 0 0 4px; }
+    .section-title .actions { margin: 0; }
+    .muted { color: #6b7280; font-size: 12px; }
+    .modal-mask { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(17, 24, 39, .55); z-index: 20; }
+    .modal-mask.active { display: flex; }
+    .modal { width: min(980px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.28); }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .detail-pre { max-height: calc(100vh - 160px); }
+    @media (max-width: 980px) {
+      .current-layout, .history-layout, .grid { grid-template-columns: 1fr; }
+      .layout-resizer { display: none; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>ClawAgent Console</h1>
+</header>
+<main>
+  <nav>
+    <button class="tab-button active" type="button" data-tab="current" onclick="showTab('current')">当前会话</button>
+    <button class="tab-button" type="button" data-tab="history" onclick="showTab('history')">历史会话</button>
+    <button class="tab-button" type="button" data-tab="mcp" onclick="showTab('mcp')">MCP Server</button>
+    <button class="tab-button" type="button" data-tab="skills" onclick="showTab('skills')">Skills</button>
+    <button class="tab-button" type="button" data-tab="tools" onclick="showTab('tools')">工具能力</button>
+  </nav>
+
+  <section id="tab-current" class="tab-panel active">
+    <div class="current-layout">
+      <div class="chat-panel">
+        <label for="sessionId">会话ID</label>
+        <input id="sessionId" readonly>
+        <label for="query">输入</label>
+        <textarea id="query" placeholder="输入消息后运行。连续发送会复用当前 Session ID。"></textarea>
+        <div class="actions">
+          <button id="runButton" onclick="submitTask()">运行</button>
+          <button class="secondary" onclick="newCurrentSession()">新建会话</button>
+          <button class="secondary" onclick="openTaskRecordModal()">查看任务详情</button>
+        </div>
+      </div>
+      <div id="layoutResizer" class="layout-resizer" title="拖拽调整 Todo 面板宽度"></div>
+      <aside class="todo-panel">
+        <div class="section-title">
+          <h3>当前会话 Todo</h3>
+          <div class="actions"><button class="ghost compact" onclick="loadTodos()">刷新</button></div>
+        </div>
+        <div id="todos" class="todo-list">等待加载当前会话 Todo...</div>
+      </aside>
+    </div>
+    <div class="transcript-panel">
+      <div id="chatList" class="chat-list">
+        <div class="chat-message assistant">
+          <div class="chat-role">assistant</div>
+          <div class="chat-content">当前会话已准备就绪。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-history" class="tab-panel">
+    <div class="history-layout">
+      <div>
+        <div class="section-title">
+          <h3>历史会话</h3>
+          <div class="actions">
+            <button class="ghost" onclick="loadHistorySessions()">刷新</button>
+            <button class="danger" onclick="clearAllSessions()">清空</button>
+          </div>
+        </div>
+        <div id="historySessions" class="session-list">等待加载...</div>
+      </div>
+      <div>
+        <h3>历史详情</h3>
+        <div class="detail-tabs">
+          <button id="historyTabTasks" type="button" onclick="showHistoryDetail('tasks')">任务</button>
+          <button id="historyTabMessages" type="button" onclick="showHistoryDetail('messages')">消息</button>
+          <button id="historyTabEvents" type="button" onclick="showHistoryDetail('events')">日志</button>
+          <button id="historyTabTodos" type="button" onclick="showHistoryDetail('todos')">Todo</button>
+        </div>
+        <pre id="historyDetail">请选择历史会话。</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-mcp" class="tab-panel">
+    <h2>MCP Server</h2>
+    <label for="mcpImportJson">导入 mcpServers JSON</label>
+    <textarea id="mcpImportJson" placeholder='{"mcpServers":{"filesystem":{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","D:\\workspace\\codex"],"env":{}}}}'></textarea>
+    <div class="actions"><button onclick="importMcpServers()">导入 JSON</button></div>
+    <div class="grid">
+      <div>
+        <label for="mcpId">ID</label>
+        <input id="mcpId" placeholder="例如 filesystem">
+        <label for="mcpName">名称</label>
+        <input id="mcpName" placeholder="例如 Filesystem">
+        <label for="mcpTransport">传输</label>
+        <select id="mcpTransport" onchange="updateMcpTransportFields()">
+          <option selected>STDIO</option>
+          <option>HTTP</option>
+          <option>SSE</option>
+          <option>STREAMABLE_HTTP</option>
+        </select>
+      </div>
+      <div>
+        <div id="stdioFields">
+          <label for="mcpCommand">Command</label>
+          <input id="mcpCommand" placeholder="例如 npx">
+          <label for="mcpArgs">Args JSON Array</label>
+          <textarea id="mcpArgs" placeholder='["-y", "@modelcontextprotocol/server-filesystem", "D:\\workspace\\codex"]'></textarea>
+        </div>
+        <div id="remoteFields">
+          <label for="mcpEndpoint">Endpoint / URL</label>
+          <input id="mcpEndpoint" placeholder="例如 http://localhost:18080/mcp">
+          <label for="mcpHeaders">Headers JSON</label>
+          <textarea id="mcpHeaders">{}</textarea>
+        </div>
+        <label for="mcpEnv">Env JSON</label>
+        <textarea id="mcpEnv">{}</textarea>
+      </div>
+    </div>
+    <div class="actions">
+      <button onclick="testMcpServer()">测试连接</button>
+      <button onclick="registerMcpServer()">保存 MCP Server</button>
+      <button onclick="connectMcpServer()">连接</button>
+      <button class="secondary" onclick="refreshMcpTools()">刷新 MCP Tools</button>
+      <button class="secondary" onclick="loadMcpTools()">查看 MCP Tools</button>
+      <button class="secondary" onclick="disconnectMcpServer()">断开</button>
+      <button class="secondary" onclick="loadMcpServers()">刷新 MCP Server</button>
+    </div>
+    <pre id="mcpServers">等待加载 MCP Server...</pre>
+  </section>
+
+  <section id="tab-skills" class="tab-panel">
+    <h2>Skills</h2>
+    <p class="muted">这里先只查看和启停已安装 Skill。创建/安装 Skill 请在当前会话中使用 skills-create 或 skills-install 能力。</p>
+    <label for="skillId">Skill ID</label>
+    <select id="skillId">
+      <option value="">请先刷新 Skill 列表</option>
+    </select>
+    <div class="actions">
+      <button class="secondary" onclick="enableSkill()">启用</button>
+      <button class="secondary" onclick="disableSkill()">禁用</button>
+      <button class="secondary" onclick="loadSkills()">刷新 Skill</button>
+    </div>
+    <pre id="skills">等待加载 Skill...</pre>
+  </section>
+
+  <section id="tab-tools" class="tab-panel">
+    <div class="actions"><button onclick="loadTools()">刷新工具列表</button></div>
+    <pre id="tools">等待加载...</pre>
+  </section>
+</main>
+
+<div id="taskRecordModal" class="modal-mask" onclick="closeTaskRecordModalOnMask(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>任务详情</h3>
+      <button class="ghost" onclick="closeTaskRecordModal()">关闭</button>
+    </div>
+    <div class="detail-tabs">
+      <button id="modalTabTask" type="button" onclick="showTaskRecordDetail('task')">任务</button>
+      <button id="modalTabMessages" type="button" onclick="showTaskRecordDetail('messages')">消息</button>
+      <button id="modalTabEvents" type="button" onclick="showTaskRecordDetail('events')">日志</button>
+      <button id="modalTabTodos" type="button" onclick="showTaskRecordDetail('todos')">Todo</button>
+    </div>
+    <pre id="taskRecordDetail" class="detail-pre">当前还没有任务。</pre>
+  </div>
+</div>
+
+<div id="toolDetailModal" class="modal-mask" onclick="closeToolDetailModalOnMask(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="toolDetailTitle">工具详情</h3>
+      <button class="ghost" onclick="closeToolDetailModal()">关闭</button>
+    </div>
+    <pre id="toolDetailContent" class="detail-pre">请选择工具调用。</pre>
+  </div>
+</div>
+
+<script>
+let currentSessionId = '';
+let lastTaskId = '';
+let selectedHistorySessionId = '';
+let selectedHistoryDetailType = 'tasks';
+let selectedTaskRecordType = 'task';
+let todoPollingTimer = null;
+let running = false;
+const TODO_WIDTH_KEY = 'clawagent.console.todoWidth';
+
+function initLayoutResizer() {
+  const layout = document.querySelector('.current-layout');
+  const resizer = document.getElementById('layoutResizer');
+  if (!layout || !resizer) return;
+  const savedWidth = Number(localStorage.getItem(TODO_WIDTH_KEY) || '0');
+  if (savedWidth > 0) {
+    layout.style.setProperty('--todo-width', `${savedWidth}px`);
+  }
+  resizer.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing-layout');
+  });
+  resizer.addEventListener('pointermove', event => {
+    if (!resizer.classList.contains('dragging')) return;
+    const rect = layout.getBoundingClientRect();
+    const nextWidth = Math.round(rect.right - event.clientX - 8);
+    const maxWidth = Math.max(320, Math.round(rect.width * 0.62));
+    const width = Math.min(maxWidth, Math.max(280, nextWidth));
+    // 拖动时只调整 Todo 面板宽度，左侧输入区继续占用剩余空间。
+    layout.style.setProperty('--todo-width', `${width}px`);
+    localStorage.setItem(TODO_WIDTH_KEY, String(width));
+  });
+  const stopDrag = event => {
+    if (resizer.classList.contains('dragging')) {
+      resizer.releasePointerCapture(event.pointerId);
+    }
+    resizer.classList.remove('dragging');
+    document.body.classList.remove('resizing-layout');
+  };
+  resizer.addEventListener('pointerup', stopDrag);
+  resizer.addEventListener('pointercancel', stopDrag);
+}
+
+function showTab(tabName) {
+  document.querySelectorAll('.tab-button').forEach(button => {
+    button.classList.toggle('active', button.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `tab-${tabName}`);
+  });
+  if (tabName === 'current') ensureCurrentSessionId().then(loadTodos).catch(showError);
+  if (tabName === 'history') loadHistorySessions().catch(showError);
+}
+
+async function ensureCurrentSessionId() {
+  if (currentSessionId) {
+    document.getElementById('sessionId').value = currentSessionId;
+    return currentSessionId;
+  }
+  const restored = await restoreLatestCurrentSession();
+  if (restored) {
+    return restored;
+  }
+  return newCurrentSession(false);
+}
+
+async function restoreLatestCurrentSession() {
+  const response = await fetch('/api/v1/sessions?limit=1');
+  const sessions = await response.json();
+  if (!Array.isArray(sessions) || sessions.length === 0 || !sessions[0].id) {
+    return '';
+  }
+  currentSessionId = sessions[0].id;
+  document.getElementById('sessionId').value = currentSessionId;
+  await loadCurrentSessionMessages();
+  return currentSessionId;
+}
+
+async function loadCurrentSessionMessages() {
+  if (!currentSessionId) return;
+  const response = await fetch(`/api/v1/sessions/${encodeURIComponent(currentSessionId)}/messages?limit=100`);
+  const messages = await response.json();
+  const chatList = document.getElementById('chatList');
+  chatList.innerHTML = '';
+  if (!Array.isArray(messages) || messages.length === 0) {
+    appendAssistantMessage('当前会话已准备就绪。');
+    return;
+  }
+  messages.forEach(message => {
+    const item = appendChatMessage(message.role || 'assistant', message.content || '');
+    if (message.createdAt) {
+      updateChatMeta(item, '', formatTime(new Date(message.createdAt)));
+    }
+    if (message.taskId) {
+      lastTaskId = message.taskId;
+    }
+  });
+}
+
+async function newCurrentSession(clearView = true) {
+  const response = await fetch('/api/v1/sessions/id', { method: 'POST' });
+  const data = await response.json();
+  currentSessionId = data.sessionId;
+  lastTaskId = '';
+  document.getElementById('sessionId').value = currentSessionId;
+  if (clearView) {
+    document.getElementById('query').value = '';
+    document.getElementById('chatList').innerHTML = '<div class="chat-message assistant"><div class="chat-role">assistant</div><div class="chat-content">已创建新的当前会话。</div></div>';
+    document.getElementById('todos').textContent = '当前会话暂无 Todo。';
+  }
+  return currentSessionId;
+}
+
+async function submitTask() {
+  if (running) return;
+  const queryInput = document.getElementById('query');
+  const input = normalizeEscapedNewlines(queryInput.value).trim();
+  queryInput.value = input;
+  if (!input) {
+    appendAssistantMessage('请输入消息后再运行。');
+    return;
+  }
+  const sessionId = await ensureCurrentSessionId();
+  setRunning(true);
+  startTodoPolling();
+  appendChatMessage('user', input);
+  const assistantMessage = appendChatMessage('assistant', '', '正在提交任务...');
+  assistantMessage.startedAt = Date.now();
+  queryInput.value = '';
+  try {
+    const response = await fetch('/api/v1/tasks/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input, sessionId, channelId: 'webui', userId: 'console', metadata: {} })
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`任务提交失败 HTTP ${response.status}`);
+    }
+    await readSseStream(response.body, event => handleTaskStreamEvent(event, assistantMessage));
+  } catch (error) {
+    updateChatStatus(assistantMessage, `执行失败：${error.message || error}`);
+    if (!assistantMessage.raw) updateChatContent(assistantMessage, `执行失败：${error.message || error}`);
+    updateChatMeta(assistantMessage, '失败', formatTime(new Date()), elapsedText(assistantMessage));
+  } finally {
+    setRunning(false);
+    stopTodoPolling();
+    await loadTodos();
+  }
+}
+
+function normalizeEscapedNewlines(value) {
+  if (!value) return '';
+  // 只保留冒号后的 \n，避免把 Windows 路径 D:\new 误判成换行。
+  return value
+    .replace(/(^|[^:])\\\\r\\\\n/g, '$1\n')
+    .replace(/(^|[^:])\\\\n/g, '$1\n')
+    .replace(/(^|[^:])\\r\\n/g, '$1\n')
+    .replace(/(^|[^:])\\n/g, '$1\n');
+}
+
+function bindQueryInputNormalization() {
+  const queryInput = document.getElementById('query');
+  queryInput.addEventListener('input', () => {
+    const normalized = normalizeEscapedNewlines(queryInput.value);
+    if (normalized === queryInput.value) return;
+    const cursor = queryInput.selectionStart;
+    queryInput.value = normalized;
+    // 粘贴时转换换行后，把光标放回合理位置，避免跳到开头影响继续输入。
+    queryInput.selectionStart = queryInput.selectionEnd = Math.min(cursor, normalized.length);
+  });
+}
+
+async function readSseStream(stream, onEvent) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() || '';
+    parts.forEach(part => {
+      const event = parseSseEvent(part);
+      if (event) onEvent(event);
+    });
+  }
+  if (buffer.trim()) {
+    const event = parseSseEvent(buffer);
+    if (event) onEvent(event);
+  }
+}
+
+function parseSseEvent(chunk) {
+  let eventName = 'message';
+  const dataLines = [];
+  chunk.split(/\r?\n/).forEach(line => {
+    if (line.startsWith('event:')) eventName = line.substring(6).trim();
+    if (line.startsWith('data:')) dataLines.push(line.substring(5).trim());
+  });
+  if (dataLines.length === 0) return null;
+  const rawData = dataLines.join('\n');
+  let data = rawData;
+  try { data = JSON.parse(rawData); } catch (ignored) {}
+  return { name: eventName, data };
+}
+
+function handleTaskStreamEvent(event, assistantMessage) {
+  const data = event.data || {};
+  if (data.taskId) lastTaskId = data.taskId;
+  if (event.name === 'task.started') {
+    updateChatStatus(assistantMessage, '规划中...');
+  } else if (event.name === 'step.started') {
+    updateChatStatus(assistantMessage, `正在执行：${data.message || '工具调用'}`);
+  } else if (event.name === 'step.finished') {
+    updateChatStatus(assistantMessage, `步骤完成：${data.message || ''}`);
+    loadTodos().catch(showError);
+  } else if (event.name === 'tool.started') {
+    updateChatStatus(assistantMessage, `正在调用工具：${data.toolId || data.message || '未知工具'}`);
+    setToolSectionCollapsed(assistantMessage, false);
+    upsertToolCall(assistantMessage, data.stepId, 'running', data);
+  } else if (event.name === 'tool.succeeded') {
+    updateChatStatus(assistantMessage, `工具调用成功：${data.toolId || data.message || '未知工具'}`);
+    upsertToolCall(assistantMessage, data.stepId, 'completed', data);
+    loadTodos().catch(showError);
+  } else if (event.name === 'tool.failed') {
+    updateChatStatus(assistantMessage, `工具调用失败：${data.toolId || data.message || '未知工具'}`);
+    upsertToolCall(assistantMessage, data.stepId, 'failed', data);
+    loadTodos().catch(showError);
+  } else if (event.name === 'llm.delta') {
+    const chunk = normalizeStreamChunk(data.content);
+    if (!chunk) return;
+    assistantMessage.raw += chunk;
+    updateChatContent(assistantMessage, assistantMessage.raw);
+    updateChatStatus(assistantMessage, '正在生成回复...');
+  } else if (event.name === 'llm.completed') {
+    updateChatStatus(assistantMessage, '回复生成完成，等待任务收口...');
+  } else if (event.name === 'result') {
+    if (data.answer && !assistantMessage.raw) {
+      assistantMessage.raw = data.answer;
+      updateChatContent(assistantMessage, data.answer);
+    }
+    updateChatMeta(assistantMessage, statusText(data.status), formatTime(new Date()), elapsedText(assistantMessage));
+    updateChatStatus(assistantMessage, '');
+    setToolSectionCollapsed(assistantMessage, true);
+  } else if (event.name === 'error') {
+    const message = data.message || '任务执行失败';
+    updateChatContent(assistantMessage, message);
+    updateChatMeta(assistantMessage, '失败', formatTime(new Date()), elapsedText(assistantMessage));
+    updateChatStatus(assistantMessage, message);
+    setToolSectionCollapsed(assistantMessage, true);
+  }
+}
+
+function setRunning(value) {
+  running = value;
+  const button = document.getElementById('runButton');
+  button.disabled = value;
+  button.textContent = value ? '执行中...' : '运行';
+}
+
+function appendAssistantMessage(text) {
+  return appendChatMessage('assistant', text);
+}
+
+function appendChatMessage(role, content, status = '') {
+  const item = document.createElement('div');
+  item.className = `chat-message ${role}`;
+  item.raw = content || '';
+  item.toolCalls = new Map();
+  if (role === 'assistant') {
+    item.innerHTML = `<div class="chat-role">${escapeHtml(role)}<span class="chat-meta"></span></div><div class="assistant-progress"><strong>执行进度</strong><span class="progress-text"></span></div><div class="tool-call-section collapsed"><button type="button" class="tool-call-title" onclick="toggleToolSection(this)"><span>工具调用</span><span class="tool-call-toggle">展开</span></button><div class="tool-call-list"></div></div><div class="chat-content chat-answer"></div><div class="chat-status"></div>`;
+  } else {
+    item.innerHTML = `<div class="chat-role">${escapeHtml(role)}<span class="chat-meta"></span></div><div class="chat-content"></div><div class="chat-status"></div>`;
+  }
+  document.getElementById('chatList').appendChild(item);
+  updateChatContent(item, content || '');
+  updateChatStatus(item, status);
+  item.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  return item;
+}
+
+function toggleToolSection(button) {
+  const section = button.closest('.tool-call-section');
+  if (!section) return;
+  setToolSectionCollapsed(section.closest('.chat-message'), !section.classList.contains('collapsed'));
+}
+
+function setToolSectionCollapsed(item, collapsed) {
+  const section = item && item.querySelector ? item.querySelector('.tool-call-section') : null;
+  if (!section) return;
+  section.classList.toggle('collapsed', collapsed);
+  const toggle = section.querySelector('.tool-call-toggle');
+  if (toggle) toggle.textContent = collapsed ? '展开' : '收起';
+}
+
+function updateChatContent(item, content) {
+  item.querySelector('.chat-content').innerHTML = renderMarkdown(content || '');
+}
+
+function updateChatStatus(item, status) {
+  item.querySelector('.chat-status').textContent = '';
+  const progress = item.querySelector('.assistant-progress');
+  const progressText = item.querySelector('.progress-text');
+  if (progress && progressText) {
+    progressText.textContent = status || '';
+    progress.classList.toggle('active', Boolean(status));
+  }
+  if (status) {
+    updateChatMeta(item, status, '');
+  }
+}
+
+function upsertToolCall(item, stepId, status, data) {
+  if (!item || !stepId) return;
+  const section = item.querySelector('.tool-call-section');
+  const list = item.querySelector('.tool-call-list');
+  if (!section || !list) return;
+  section.classList.add('active');
+  let row = item.toolCalls.get(stepId);
+  if (!row) {
+    row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'tool-call-row';
+    row.onclick = () => openToolDetail(stepId);
+    item.toolCalls.set(stepId, row);
+    list.appendChild(row);
+  }
+  const toolId = data.toolId || data.message || '未知工具';
+  row.dataset.stepId = stepId;
+  row.innerHTML = `${statusIcon(status)}<span class="tool-name">${escapeHtml(toolCallText(status, toolId))}</span><span class="tool-summary">${escapeHtml(toolCallSummary(status, data))}</span>`;
+}
+
+function toolCallText(status, toolId) {
+  if (status === 'running') return `正在调用 ${toolId}`;
+  if (status === 'completed') return `调用成功 ${toolId}`;
+  if (status === 'failed') return `调用失败 ${toolId}`;
+  return toolId;
+}
+
+function toolCallSummary(status, data) {
+  if (status === 'completed') {
+    return `返回 ${data.outputLength || 0} 字符，内容可查看`;
+  }
+  if (status === 'failed') {
+    return data.error || data.message || '查看错误';
+  }
+  return '执行中';
+}
+
+function updateChatMeta(item, status, time, elapsed) {
+  const parts = [];
+  if (status) parts.push(status);
+  if (time) parts.push(time);
+  if (elapsed) parts.push(`耗时 ${elapsed}`);
+  item.querySelector('.chat-meta').textContent = parts.length ? `· ${parts.join(' · ')}` : '';
+}
+
+function statusText(status) {
+  return {
+    COMPLETED: '已完成',
+    FAILED: '失败',
+    RUNNING: '执行中',
+    PENDING: '未执行'
+  }[status] || status || '';
+}
+
+function normalizeStreamChunk(content) {
+  if (content === null || content === undefined) {
+    return '';
+  }
+  const text = String(content);
+  if (text.trim().toLowerCase() === 'null') return '';
+  return text.replace(/^(null)+/i, '');
+}
+
+function elapsedText(item) {
+  if (!item || !item.startedAt) return '';
+  return formatDuration(Date.now() - item.startedAt);
+}
+
+function formatDuration(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = seconds % 60;
+  if (minutes < 60) return restSeconds ? `${minutes}分${restSeconds}秒` : `${minutes}分`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes ? `${hours}小时${restMinutes}分` : `${hours}小时`;
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
+}
+
+function formatChinaDateTime(value) {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}.${String(date.getMilliseconds()).padStart(3, '0')} UTC+8`;
+}
+
+function formatJsonForDisplay(value) {
+  return JSON.stringify(normalizeDisplayTimestamps(value), null, 2);
+}
+
+function normalizeDisplayTimestamps(value) {
+  if (Array.isArray(value)) return value.map(normalizeDisplayTimestamps);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeDisplayTimestamps(item)]));
+  }
+  // 接口仍返回标准 UTC 时间，页面展示时统一转为中国时区，方便人工排查日志。
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) {
+    return formatChinaDateTime(value);
+  }
+  return value;
+}
+
+function startTodoPolling() {
+  stopTodoPolling();
+  todoPollingTimer = setInterval(() => loadTodos().catch(showError), 1000);
+}
+
+function stopTodoPolling() {
+  if (todoPollingTimer) clearInterval(todoPollingTimer);
+  todoPollingTimer = null;
+}
+
+async function loadHistorySessions() {
+  const response = await fetch('/api/v1/sessions?limit=20');
+  const data = await response.json();
+  const container = document.getElementById('historySessions');
+  if (!Array.isArray(data) || data.length === 0) {
+    selectedHistorySessionId = '';
+    container.textContent = '暂无历史会话。';
+    document.getElementById('historyDetail').textContent = '暂无历史数据。';
+    updateHistoryDetailTabs();
+    return;
+  }
+  if (!selectedHistorySessionId || !data.some(session => session.id === selectedHistorySessionId)) selectedHistorySessionId = data[0].id;
+  container.innerHTML = '';
+  data.forEach(session => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `session-card${session.id === selectedHistorySessionId ? ' active' : ''}`;
+    button.onclick = () => selectHistorySession(session.id);
+    button.innerHTML = `<strong>${escapeHtml(session.title || '未命名会话')}</strong><div class="muted">${escapeHtml(session.id)}</div><div class="muted">${escapeHtml(formatChinaDateTime(session.lastActiveAt || ''))}</div>`;
+    container.appendChild(button);
+  });
+  updateHistoryDetailTabs();
+  if (selectedHistorySessionId) await showHistoryDetail(selectedHistoryDetailType);
+}
+
+async function selectHistorySession(sessionId) {
+  selectedHistorySessionId = sessionId;
+  document.querySelectorAll('.session-card').forEach(button => button.classList.toggle('active', button.textContent.includes(sessionId)));
+  await showHistoryDetail(selectedHistoryDetailType);
+}
+
+async function showHistoryDetail(type) {
+  selectedHistoryDetailType = type;
+  updateHistoryDetailTabs();
+  if (type === 'tasks') await loadHistoryTasks();
+  if (type === 'messages') await loadHistoryMessages();
+  if (type === 'events') await loadHistoryEvents();
+  if (type === 'todos') await loadHistoryTodos();
+}
+
+function updateHistoryDetailTabs() {
+  const tabs = { tasks: 'historyTabTasks', messages: 'historyTabMessages', events: 'historyTabEvents', todos: 'historyTabTodos' };
+  Object.entries(tabs).forEach(([type, id]) => {
+    const button = document.getElementById(id);
+    if (button) button.classList.toggle('active', selectedHistoryDetailType === type);
+  });
+}
+
+async function loadHistoryTasks() {
+  const response = await fetch(`/api/v1/sessions/${encodeURIComponent(activeHistorySessionId())}/tasks?limit=20`);
+  document.getElementById('historyDetail').textContent = formatJsonForDisplay(await response.json());
+}
+
+async function loadHistoryMessages() {
+  const response = await fetch(`/api/v1/sessions/${encodeURIComponent(activeHistorySessionId())}/messages?limit=100`);
+  document.getElementById('historyDetail').textContent = formatJsonForDisplay(await response.json());
+}
+
+async function loadHistoryEvents() {
+  const response = await fetch(`/api/v1/sessions/${encodeURIComponent(activeHistorySessionId())}/events?limit=200`);
+  document.getElementById('historyDetail').textContent = formatJsonForDisplay(await response.json());
+}
+
+async function loadHistoryTodos() {
+  const params = new URLSearchParams({ sessionId: activeHistorySessionId(), limit: '100' });
+  const response = await fetch(`/api/v1/todos?${params.toString()}`);
+  document.getElementById('historyDetail').textContent = formatJsonForDisplay(await response.json());
+}
+
+async function clearAllSessions() {
+  if (!confirm('确认清空所有会话、任务、消息、日志、步骤和 Todo 吗？')) return;
+  const response = await fetch('/api/v1/sessions', { method: 'DELETE' });
+  const data = await response.json();
+  selectedHistorySessionId = '';
+  document.getElementById('historyDetail').textContent = formatJsonForDisplay(data);
+  await loadHistorySessions();
+}
+
+async function loadTodos() {
+  const params = new URLSearchParams();
+  const sessionId = await ensureCurrentSessionId();
+  if (sessionId) params.set('sessionId', sessionId);
+  const response = await fetch(`/api/v1/todos?${params.toString()}`);
+  renderTodoList(await response.json());
+}
+
+function renderTodoList(items) {
+  const container = document.getElementById('todos');
+  container.innerHTML = '';
+  if (!Array.isArray(items) || items.length === 0) {
+    container.textContent = '当前会话暂无 Todo。';
+    return;
+  }
+  items.forEach((item, index) => {
+    const card = document.createElement('div');
+    card.className = 'todo-card';
+    const status = item.status || 'pending';
+    const title = item.title || '未命名 Todo';
+    const detail = `${statusLabel(status)}\n${item.description || ''}\n${item.id || ''}`;
+    card.title = detail.trim();
+    card.onclick = () => openTodoLog(item);
+    card.innerHTML = `<div class="todo-head">${statusIcon(status)}<span class="todo-title">${index + 1}. ${escapeHtml(title)}</span><span class="todo-status">${escapeHtml(statusLabel(status))}</span></div>`;
+    container.appendChild(card);
+  });
+}
+
+function statusIcon(status) {
+  if (status === 'completed') return '<span class="status-dot completed">✓</span>';
+  if (status === 'failed') return '<span class="status-dot failed">✕</span>';
+  return `<span class="status-dot ${status === 'running' ? 'running' : ''}"></span>`;
+}
+
+function statusLabel(status) {
+  return { pending: '未执行', running: '执行中', completed: '执行完成', failed: '失败' }[status] || status;
+}
+
+function openTaskRecordModal() {
+  document.getElementById('taskRecordModal').classList.add('active');
+  showTaskRecordDetail(selectedTaskRecordType).catch(showError);
+}
+
+function closeTaskRecordModal() {
+  document.getElementById('taskRecordModal').classList.remove('active');
+}
+
+function closeTaskRecordModalOnMask(event) {
+  if (event.target.id === 'taskRecordModal') closeTaskRecordModal();
+}
+
+async function openToolDetail(stepId) {
+  if (!lastTaskId || !stepId) return;
+  document.getElementById('toolDetailTitle').textContent = '工具详情';
+  document.getElementById('toolDetailContent').textContent = '正在加载工具详情...';
+  document.getElementById('toolDetailModal').classList.add('active');
+  const response = await fetch(`/api/v1/tasks/${encodeURIComponent(lastTaskId)}/events?stepId=${encodeURIComponent(stepId)}&limit=200`);
+  const events = await response.json();
+  document.getElementById('toolDetailContent').textContent = formatToolEvents(events);
+}
+
+async function openTodoLog(item) {
+  const taskId = item.taskId || lastTaskId;
+  document.getElementById('toolDetailTitle').textContent = `Todo 日志：${item.itemOrder || ''}. ${item.title || ''}`;
+  document.getElementById('toolDetailContent').textContent = '正在加载 Todo 日志...';
+  document.getElementById('toolDetailModal').classList.add('active');
+  if (!taskId || !item.id) {
+    document.getElementById('toolDetailContent').textContent = '该 Todo 没有关联任务，无法查询日志。';
+    return;
+  }
+  const response = await fetch(`/api/v1/tasks/${encodeURIComponent(taskId)}/events?todoId=${encodeURIComponent(item.id)}&limit=200`);
+  const events = await response.json();
+  if (!Array.isArray(events) || events.length === 0) {
+    document.getElementById('toolDetailContent').textContent = '该 Todo 暂无精确关联日志，可通过“查看任务详情”查看完整任务日志。';
+    return;
+  }
+  document.getElementById('toolDetailContent').textContent = formatToolEvents(events);
+}
+
+function closeToolDetailModal() {
+  document.getElementById('toolDetailModal').classList.remove('active');
+}
+
+function closeToolDetailModalOnMask(event) {
+  if (event.target.id === 'toolDetailModal') closeToolDetailModal();
+}
+
+function formatToolEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return '暂无日志。';
+  return events.map(event => {
+    const details = event.details || {};
+    return [
+      `[${formatChinaDateTime(event.createdAt || '')}] ${event.type || ''} ${event.message || ''}`,
+      `toolId: ${details.toolId || ''}`,
+      `stepId: ${details.stepId || ''}`,
+      details.todoTitle ? `todo: ${details.todoOrder || ''}. ${details.todoTitle}` : '',
+      details.elapsedMs ? `elapsedMs: ${details.elapsedMs}` : '',
+      details.arguments ? `arguments:\n${details.arguments}` : '',
+      details.output ? `output:\n${details.output}` : '',
+      details.error ? `error:\n${details.error}` : ''
+    ].filter(Boolean).join('\n');
+  }).join('\n\n---\n\n');
+}
+
+async function showTaskRecordDetail(type) {
+  selectedTaskRecordType = type;
+  updateTaskRecordTabs();
+  const target = document.getElementById('taskRecordDetail');
+  if (!lastTaskId) {
+    target.textContent = '当前还没有任务。';
+    return;
+  }
+  let url;
+  if (type === 'task') url = `/api/v1/tasks/${encodeURIComponent(lastTaskId)}`;
+  if (type === 'messages') url = `/api/v1/tasks/${encodeURIComponent(lastTaskId)}/messages?limit=100`;
+  if (type === 'events') url = `/api/v1/tasks/${encodeURIComponent(lastTaskId)}/events?limit=200`;
+  if (type === 'todos') {
+    const params = new URLSearchParams({ sessionId: currentSessionId, taskId: lastTaskId, limit: '100' });
+    url = `/api/v1/todos?${params.toString()}`;
+  }
+  const response = await fetch(url);
+  target.textContent = formatJsonForDisplay(await response.json());
+}
+
+function updateTaskRecordTabs() {
+  const tabs = { task: 'modalTabTask', messages: 'modalTabMessages', events: 'modalTabEvents', todos: 'modalTabTodos' };
+  Object.entries(tabs).forEach(([type, id]) => document.getElementById(id).classList.toggle('active', selectedTaskRecordType === type));
+}
+
+async function loadTools() {
+  const response = await fetch('/api/v1/tools');
+  document.getElementById('tools').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function registerMcpServer() {
+  const response = await fetch('/api/v1/mcp/servers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mcpFormBody()) });
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function testMcpServer() {
+  const response = await fetch('/api/v1/mcp/servers/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mcpFormBody()) });
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function importMcpServers() {
+  const response = await fetch('/api/v1/mcp/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ json: document.getElementById('mcpImportJson').value }) });
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+  await loadMcpServers();
+}
+
+async function loadMcpServers() {
+  const response = await fetch('/api/v1/mcp/servers');
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function connectMcpServer() {
+  const response = await fetch(`/api/v1/mcp/servers/${encodeURIComponent(activeMcpId())}/connect`, { method: 'POST' });
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function disconnectMcpServer() {
+  const response = await fetch(`/api/v1/mcp/servers/${encodeURIComponent(activeMcpId())}/disconnect`, { method: 'POST' });
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function refreshMcpTools() {
+  const response = await fetch(`/api/v1/mcp/servers/${encodeURIComponent(activeMcpId())}/refresh-tools`, { method: 'POST' });
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function loadMcpTools() {
+  const response = await fetch(`/api/v1/mcp/servers/${encodeURIComponent(activeMcpId())}/tools`);
+  document.getElementById('mcpServers').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function enableSkill() {
+  const response = await fetch(`/api/v1/skills/${encodeURIComponent(activeSkillId())}/enable`, { method: 'POST' });
+  document.getElementById('skills').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function disableSkill() {
+  const response = await fetch(`/api/v1/skills/${encodeURIComponent(activeSkillId())}/disable`, { method: 'POST' });
+  document.getElementById('skills').textContent = JSON.stringify(await response.json(), null, 2);
+}
+
+async function loadSkills() {
+  const response = await fetch('/api/v1/skills');
+  const data = await response.json();
+  document.getElementById('skills').textContent = JSON.stringify(data, null, 2);
+  refreshSkillOptions(data);
+}
+
+function refreshSkillOptions(skills) {
+  const select = document.getElementById('skillId');
+  const previous = select.value;
+  select.innerHTML = '';
+  if (!Array.isArray(skills) || skills.length === 0) {
+    select.appendChild(new Option('暂无已安装 Skill', ''));
+    return;
+  }
+  skills.forEach(skill => {
+    const id = skill.id || skill.skillId || skill.manifest?.id || '';
+    const name = skill.name || skill.manifest?.name || id;
+    if (id) select.appendChild(new Option(`${name} (${id})`, id));
+  });
+  if (previous && Array.from(select.options).some(option => option.value === previous)) select.value = previous;
+}
+
+function mcpFormBody() {
+  const transport = document.getElementById('mcpTransport').value;
+  const body = { id: activeMcpId(), name: document.getElementById('mcpName').value.trim(), transport, env: parseJsonObject('mcpEnv') };
+  if (transport === 'STDIO') {
+    body.command = document.getElementById('mcpCommand').value.trim();
+    body.args = parseJsonArray('mcpArgs');
+  } else {
+    body.endpoint = document.getElementById('mcpEndpoint').value.trim();
+    body.headers = parseJsonObject('mcpHeaders');
+  }
+  return body;
+}
+
+function activeHistorySessionId() {
+  if (!selectedHistorySessionId) throw new Error('请先选择历史会话');
+  return selectedHistorySessionId;
+}
+
+function activeMcpId() {
+  const id = document.getElementById('mcpId').value.trim();
+  if (!id) throw new Error('请先填写 MCP Server ID');
+  return id;
+}
+
+function activeSkillId() {
+  const id = document.getElementById('skillId').value.trim();
+  if (!id) throw new Error('请先选择 Skill ID');
+  return id;
+}
+
+function parseJsonObject(elementId) {
+  const text = document.getElementById(elementId).value.trim();
+  return text ? JSON.parse(text) : {};
+}
+
+function parseJsonArray(elementId) {
+  const text = document.getElementById(elementId).value.trim();
+  if (!text) return [];
+  const value = JSON.parse(text);
+  if (!Array.isArray(value)) throw new Error('必须是 JSON 数组');
+  return value;
+}
+
+function updateMcpTransportFields() {
+  const transport = document.getElementById('mcpTransport').value;
+  document.getElementById('stdioFields').style.display = transport === 'STDIO' ? 'block' : 'none';
+  document.getElementById('remoteFields').style.display = transport === 'STDIO' ? 'none' : 'block';
+}
+
+function renderMarkdown(markdown) {
+  const escaped = escapeHtml(markdown || '');
+  const blocks = [];
+  let html = escaped.replace(/```([\s\S]*?)```/g, (_, code) => {
+    const token = `@@CODE_${blocks.length}@@`;
+    blocks.push(`<pre><code>${code.trim()}</code></pre>`);
+    return token;
+  });
+  html = html
+    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.*)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  html = html.split(/\n{2,}/).map(part => {
+    if (/^<h[123]>|^<pre>|^@@CODE_/.test(part.trim())) return part;
+    if (isMarkdownTable(part)) return renderMarkdownTable(part);
+    if (/^- /m.test(part)) {
+      return '<ul>' + part.split(/\n/).filter(Boolean).map(line => `<li>${line.replace(/^- /, '')}</li>`).join('') + '</ul>';
+    }
+    return `<p>${part.replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+  blocks.forEach((block, index) => html = html.replace(`@@CODE_${index}@@`, block));
+  return html || '';
+}
+
+function isMarkdownTable(block) {
+  const lines = block.trim().split(/\n/).filter(Boolean);
+  return lines.length >= 2
+    && lines[0].includes('|')
+    && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[1]);
+}
+
+function renderMarkdownTable(block) {
+  const lines = block.trim().split(/\n/).filter(Boolean);
+  const headers = splitTableRow(lines[0]);
+  const rows = lines.slice(2).map(splitTableRow);
+  const headHtml = headers.map(cell => `<th>${cell}</th>`).join('');
+  const bodyHtml = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('');
+  return `<table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+}
+
+function splitTableRow(line) {
+  return line.trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map(cell => cell.trim());
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function showError(error) {
+  appendAssistantMessage(`操作失败：${error.message || error}`);
+}
+
+ensureCurrentSessionId().then(() => loadTodos()).catch(showError);
+loadTools().catch(showError);
+loadMcpServers().catch(showError);
+loadSkills().catch(showError);
+updateMcpTransportFields();
+initLayoutResizer();
+bindQueryInputNormalization();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "id" : "agent-eval",
+  "name" : "agent-eval",
+  "version" : "0.1.0",
+  "description" : "Benchmark CodeGraph retrieval quality on a real codebase by comparing agent behavior with vs without CodeGraph. Use when the user runs /agent-eval or asks to test, benchmark, audit, or validate a codegraph version (the local dev build or a published npm version) against a language's repo.",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default" ],
+  "permissions" : [ ],
+  "metadata" : {
+    "sourceUrl" : "https://raw.githubusercontent.com/colbymchenry/codegraph/main/.claude/skills/agent-eval/SKILL.md",
+    "sourceFormat" : "codex-or-claude-skill"
+  }
+}

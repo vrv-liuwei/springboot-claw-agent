@@ -20,6 +20,8 @@ import com.github.clawagent.spi.AgentPlan;
 import com.github.clawagent.spi.AgentPlanner;
 import com.github.clawagent.spi.AgentReActPlanner;
 import com.github.clawagent.spi.AgentResponseGenerator;
+import com.github.clawagent.spi.AgentRuntimeInterceptor;
+import com.github.clawagent.spi.AgentRuntimeInterceptorContext;
 import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.LlmCallTrace;
@@ -76,6 +78,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final List<ToolExecutionGuard> toolGuards;
     private final List<AgentCallback> callbacks;
     private final int maxReactRounds;
+    /** Runtime 横切拦截器链，按 order 顺序处理脱敏、审计规范化、合规过滤等扩展逻辑。 */
+    private final List<AgentRuntimeInterceptor> runtimeInterceptors;
     /** 当前提交请求的临时回调列表，用于单次任务流式推送运行事件。 */
     private final ThreadLocal<List<AgentCallback>> activeCallbacks = new ThreadLocal<>();
     /** 当前正在执行的 Todo，用于把后续工具调用日志挂到具体 Todo 上。 */
@@ -90,6 +94,14 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, maxReactRounds, List.of(new SensitiveDataInterceptor(SanitizationOptions.defaults())));
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, SanitizationOptions sanitizationOptions) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, maxReactRounds, List.of(new SensitiveDataInterceptor(sanitizationOptions)));
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors) {
         this.planner = planner;
         this.responseGenerator = responseGenerator;
         this.toolRegistry = toolRegistry;
@@ -103,6 +115,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
         this.toolGuards = toolGuards == null ? List.of() : List.copyOf(toolGuards);
         this.callbacks = new ArrayList<>(callbacks);
         this.maxReactRounds = Math.max(1, maxReactRounds);
+        this.runtimeInterceptors = runtimeInterceptors == null
+                ? List.of()
+                : runtimeInterceptors.stream()
+                .filter(interceptor -> interceptor != null)
+                .sorted(Comparator.comparingInt(AgentRuntimeInterceptor::order))
+                .toList();
     }
 
     @Override
@@ -324,10 +342,10 @@ public class DefaultAgentRuntime implements AgentRuntime {
         AgentStep step = new AgentStep(UUID.randomUUID().toString(), task.id(), StepType.TOOL_CALL, call.toolId(), call.arguments());
         long startedAt = System.currentTimeMillis();
         Map<String, String> startedDetails = toolEventDetails(step, call, tool, null, null, 0L, startedAt);
-        emit("step.started", task.id(), call.toolId(), streamToolDetails(startedDetails));
-        emit("tool.started", task.id(), call.toolId(), streamToolDetails(startedDetails));
-        log.info("agent tool started stepId={} toolId={} input={}", step.id(), call.toolId(), call.arguments());
-        log.debug("agent tool arguments taskId={} stepId={} arguments={}", task.id(), step.id(), call.arguments());
+        emit("step.started", task.id(), call.toolId(), streamToolDetails(task, startedDetails));
+        emit("tool.started", task.id(), call.toolId(), streamToolDetails(task, startedDetails));
+        log.info("agent tool started stepId={} toolId={} input={}", step.id(), call.toolId(), sanitizeText("arguments", call.arguments().toString()));
+        log.debug("agent tool arguments taskId={} stepId={} arguments={}", task.id(), step.id(), sanitizeText("arguments", call.arguments().toString()));
         saveEvent(task, "DEBUG", "tool.started", "工具调用开始", startedDetails);
 
         if (failureTracker != null) {
@@ -344,8 +362,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                         "toolKind", toolKind(call.toolId())));
                 log.warn("agent tool repeated failure blocked stepId={} toolId={} reason={}", step.id(), call.toolId(), blockReason);
                 Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, blockReason, elapsedMs(startedAt), startedAt);
-                emit("tool.failed", task.id(), preview(blockReason), streamToolDetails(failedDetails));
-                emit("step.finished", task.id(), step.status().name(), streamToolDetails(failedDetails));
+                emit("tool.failed", task.id(), preview(blockReason), streamToolDetails(task, failedDetails));
+                emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, failedDetails));
                 return;
             }
         }
@@ -363,8 +381,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                     "toolKind", toolKind(call.toolId())));
             log.warn("agent tool blocked stepId={} toolId={} error={}", step.id(), call.toolId(), guardError.getMessage());
             Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, guardError.getMessage(), elapsedMs(startedAt), startedAt);
-            emit("tool.failed", task.id(), preview(guardError.getMessage()), streamToolDetails(failedDetails));
-            emit("step.finished", task.id(), step.status().name(), streamToolDetails(failedDetails));
+            emit("tool.failed", task.id(), preview(guardError.getMessage()), streamToolDetails(task, failedDetails));
+            emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, failedDetails));
             return;
         }
 
@@ -376,27 +394,27 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 failureTracker.recordSuccess(call, result.content())
                         .ifPresent(message -> addFailureRecoveryObservation(task, steps, call, message));
             }
-            log.info("agent tool succeeded stepId={} toolId={} output={}", step.id(), call.toolId(), preview(result.content()));
-            log.debug("agent tool output taskId={} stepId={} output={}", task.id(), step.id(), preview(result.content()));
+            log.info("agent tool succeeded stepId={} toolId={} output={}", step.id(), call.toolId(), sanitizeText("output", preview(result.content())));
+            log.debug("agent tool output taskId={} stepId={} output={}", task.id(), step.id(), sanitizeText("output", preview(result.content())));
             Map<String, String> succeededDetails = toolEventDetails(step, call, tool, result.content(), null, elapsedMs(startedAt), startedAt);
             mergeTodoDetails(succeededDetails, todoAfterTool);
             succeededDetails.put("output", nullToEmpty(result.content()));
             saveEvent(task, "DEBUG", "tool.succeeded", "工具调用成功", succeededDetails);
-            emit("tool.succeeded", task.id(), preview(result.content()), streamToolDetails(succeededDetails));
+            emit("tool.succeeded", task.id(), preview(result.content()), streamToolDetails(task, succeededDetails));
         } else {
             step.fail(result.content());
             if (failureTracker != null) {
                 // 失败结果进入本任务的失败画像，下一轮相同参数会被策略判断是否允许重试。
                 failureTracker.recordFailure(call, result.content());
             }
-            log.warn("agent tool failed stepId={} toolId={} error={}", step.id(), call.toolId(), preview(result.content()));
+            log.warn("agent tool failed stepId={} toolId={} error={}", step.id(), call.toolId(), sanitizeText("error", preview(result.content())));
             Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, result.content(), elapsedMs(startedAt), startedAt);
             saveEvent(task, "WARN", "tool.failed", "工具调用失败", failedDetails);
-            emit("tool.failed", task.id(), preview(result.content()), streamToolDetails(failedDetails));
+            emit("tool.failed", task.id(), preview(result.content()), streamToolDetails(task, failedDetails));
         }
         taskStore.saveStep(step);
         steps.add(step);
-        emit("step.finished", task.id(), step.status().name(), streamToolDetails(toolEventDetails(step, call, tool, result.content(), result.success() ? null : result.content(), elapsedMs(startedAt), startedAt)));
+        emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, toolEventDetails(step, call, tool, result.content(), result.success() ? null : result.content(), elapsedMs(startedAt), startedAt)));
     }
 
     private void addFailureRecoveryObservation(AgentTask task, List<AgentStep> steps, ToolCall call, String message) {
@@ -626,13 +644,17 @@ public class DefaultAgentRuntime implements AgentRuntime {
             details.put("content", nullToEmpty(trace.content()));
             saveEvent(task, "DEBUG", "llm.call", "LLM 调用记录", details);
             log.debug("agent llm trace taskId={} phase={} model={} statusCode={} promptTokens={} completionTokens={} totalTokens={} requestJson={} responseJson={}",
-                    task.id(), phase, trace.model(), trace.statusCode(), trace.promptTokens(), trace.completionTokens(), trace.totalTokens(), trace.requestJson(), trace.responseJson());
+                    task.id(), phase, trace.model(), trace.statusCode(), trace.promptTokens(), trace.completionTokens(), trace.totalTokens(),
+                    sanitizeText("requestJson", trace.requestJson()), sanitizeText("responseJson", trace.responseJson()));
         }
     }
 
     private void saveEvent(AgentTask task, String level, String type, String message, Map<String, String> details) {
-        AgentEvent event = new AgentEvent(UUID.randomUUID().toString(), task.sessionId(), task.id(), level, type, message, details);
+        AgentRuntimeInterceptorContext context = interceptorContext("event", type, message, task);
+        Map<String, String> interceptedDetails = applyBeforeEvent(context, details);
+        AgentEvent event = new AgentEvent(UUID.randomUUID().toString(), task.sessionId(), task.id(), level, type, message, interceptedDetails);
         eventStore.saveEvent(event);
+        applyAfterEvent(context, interceptedDetails);
     }
 
     private Map<String, String> toolEventDetails(AgentStep step, ToolCall call, AgentTool tool, String output, String error, long elapsedMs, long startedAt) {
@@ -641,11 +663,11 @@ public class DefaultAgentRuntime implements AgentRuntime {
         details.put("toolId", call.toolId());
         details.put("status", step.status().name());
         details.put("toolKind", toolKind(call.toolId()));
-        details.put("inputPreview", preview(call.arguments().toString()));
-        details.put("arguments", call.arguments().toString());
-        details.put("outputPreview", preview(output));
+        details.put("inputPreview", sanitizeText("arguments", preview(call.arguments().toString())));
+        details.put("arguments", sanitizeText("arguments", call.arguments().toString()));
+        details.put("outputPreview", sanitizeText("output", preview(output)));
         details.put("outputLength", String.valueOf(output == null ? 0 : output.length()));
-        details.put("error", nullToEmpty(error));
+        details.put("error", sanitizeText("error", nullToEmpty(error)));
         details.put("elapsedMs", String.valueOf(elapsedMs));
         details.put("startedAt", String.valueOf(startedAt));
         mergeTodoDetails(details, activeTodo.get());
@@ -712,12 +734,58 @@ public class DefaultAgentRuntime implements AgentRuntime {
         details.put("todoOrder", String.valueOf(todo.itemOrder()));
     }
 
-    private Map<String, String> streamToolDetails(Map<String, String> details) {
-        Map<String, String> streamDetails = new LinkedHashMap<>(details);
+    private Map<String, String> streamToolDetails(AgentTask task, Map<String, String> details) {
+        Map<String, String> streamDetails = new LinkedHashMap<>(applyBeforeStreamEvent(interceptorContext("stream", "tool", "工具流式事件", task), details));
         // SSE 只承载页面实时展示需要的摘要，完整输入输出留在 AgentEvent 里供弹窗按 stepId 查询。
         streamDetails.remove("arguments");
         streamDetails.remove("output");
         return streamDetails;
+    }
+
+    private Map<String, String> applyBeforeEvent(AgentRuntimeInterceptorContext context, Map<String, String> details) {
+        Map<String, String> current = copyDetails(details);
+        for (AgentRuntimeInterceptor interceptor : runtimeInterceptors) {
+            // 前置拦截器按顺序串联，后一个拦截器只能看到前一个处理后的结果。
+            current = copyDetails(interceptor.beforeEvent(context, current));
+        }
+        return current;
+    }
+
+    private Map<String, String> applyBeforeStreamEvent(AgentRuntimeInterceptorContext context, Map<String, String> details) {
+        Map<String, String> current = copyDetails(details);
+        for (AgentRuntimeInterceptor interceptor : runtimeInterceptors) {
+            // SSE 事件同样走拦截器链，避免前端收到未脱敏或未规范化的字段。
+            current = copyDetails(interceptor.beforeStreamEvent(context, current));
+        }
+        return current;
+    }
+
+    private void applyAfterEvent(AgentRuntimeInterceptorContext context, Map<String, String> details) {
+        for (AgentRuntimeInterceptor interceptor : runtimeInterceptors) {
+            // 后置拦截器只做旁路动作，不影响已经持久化的事件内容。
+            interceptor.afterEvent(context, details);
+        }
+    }
+
+    private Map<String, String> copyDetails(Map<String, String> details) {
+        if (details == null || details.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        return new LinkedHashMap<>(details);
+    }
+
+    private String sanitizeText(String key, String value) {
+        String current = value;
+        AgentRuntimeInterceptorContext context = interceptorContext("log", key, "Runtime 日志字段", null);
+        for (AgentRuntimeInterceptor interceptor : runtimeInterceptors) {
+            // 日志字段逐个通过拦截器处理，避免 requestJson/responseJson 中泄露敏感值。
+            current = interceptor.beforeLogValue(context, key, current);
+        }
+        return current == null ? "" : current;
+    }
+
+    private AgentRuntimeInterceptorContext interceptorContext(String channel, String type, String message, AgentTask task) {
+        return new AgentRuntimeInterceptorContext(channel, type, message, task);
     }
 
     private long elapsedMs(long startedAt) {

@@ -223,6 +223,7 @@ M1 当前执行流程：
 主要包含：
 
 - Runtime 扩展点：`AgentPlanner`、`AgentResponseGenerator`、`AgentCallback`。
+- Runtime 横切扩展点：`AgentRuntimeInterceptor`，用于脱敏、审计字段规范化、输出过滤等前置/后置处理。
 - 工具扩展点：`AgentTool`。
 - 模型扩展点：`ModelClient`、`EmbeddingClient`、`ChatMessage`、`ChatOptions`、`LlmCallTrace`。
 - 会话摘要扩展点：`SessionSummarizer`。
@@ -241,6 +242,8 @@ Agent 执行链路模块。
 - 会话消息、任务步骤、事件审计写入。
 - 会话摘要生成和回写。
 - 单次任务事件流回调，供 SSE API 推送任务进度。
+- Runtime 拦截器链：事件落库前、SSE 推送前、Runtime 日志写入前会按 `order` 顺序执行拦截器；事件落库后会执行后置回调。
+- 默认敏感数据脱敏拦截器：避免 API Key、Token、Password 等进入日志、事件表和前端流式事件。
 - Rule 模式兜底实现：`RuleBasedPlanner`、`ToolOutputResponseGenerator`、`SimpleSessionSummarizer`。
 - 内存版存储：`InMemoryTaskStore`、`InMemorySessionStore`、`InMemorySessionMessageStore`、`InMemoryAgentEventStore`。
 - 日志链路 MDC：`traceId`、`sessionId`、`taskId`、`userId`、`channelId`。
@@ -864,6 +867,7 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成通用 MCP 注册表、STDIO 连接、HTTP/streamableHttp 基础连接、SSE endpoint/message 连接、MCP tools/resources/prompts 管理、resource read、prompt get、MCP Server 管理 API 和本地配置保存。
 - 已完成 Skill 本地安装、启用、禁用、列表查询、本地 manifest 保存、工具自动注册和 document/http/script/java 执行器。
 - 已完成工具执行前置拦截点 `ToolExecutionGuard`，并提供默认高危工具审批校验。
+- 已完成 Runtime 拦截器 SPI `AgentRuntimeInterceptor`，默认提供敏感数据脱敏拦截器，可通过 Spring Bean 扩展。
 - 已完成 EmbeddingClient SPI 和 OpenAI 兼容 Embeddings 客户端。
 - 已完成内置 filesystem 工具：读取文本、列目录、搜索文件、文件信息、受控写入。
 
@@ -882,6 +886,17 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 ## 配置说明
 
 完整配置见 [docs/CONFIGURATION.md](docs/CONFIGURATION.md)。
+
+运行时脱敏默认启用，普通部署只需要保留：
+
+```yaml
+clawagent:
+  runtime:
+    sanitization:
+      enabled: true
+```
+
+需要扩展企业级审计、脱敏、过滤规则时，在业务应用中实现并注册 `com.github.clawagent.spi.AgentRuntimeInterceptor` Bean。Runtime 会按 `order()` 顺序执行前置拦截和后置回调。
 
 ## 后期计划
 

@@ -122,9 +122,36 @@ public class ClawAgentProperties {
 
     public static class Runtime {
         private int maxReactRounds = 15;
+        private final Sanitization sanitization = new Sanitization();
 
         public int getMaxReactRounds() { return maxReactRounds; }
         public void setMaxReactRounds(int maxReactRounds) { this.maxReactRounds = maxReactRounds; }
+        public Sanitization getSanitization() { return sanitization; }
+    }
+
+    public static class Sanitization {
+        private boolean enabled = true;
+        private String replacement = "***";
+        private List<String> sensitiveKeys = new ArrayList<>(List.of("api_key", "apikey", "api-key", "authorization", "token", "secret", "password", "key"));
+        private List<String> valuePatterns = new ArrayList<>(List.of(
+                "(?i)(api[_-]?key[\"'\\s:=]+)([^\"'\\s,}]+)",
+                "(?i)(authorization[\"'\\s:=]+Bearer\\s+)([^\"'\\s,}]+)",
+                "(?i)(token[\"'\\s:=]+)([^\"'\\s,}]+)",
+                "(?i)(secret[\"'\\s:=]+)([^\"'\\s,}]+)",
+                "(?i)(password[\"'\\s:=]+)([^\"'\\s,}]+)",
+                "as_sk_[A-Za-z0-9_\\-]+",
+                "sk-[A-Za-z0-9_\\-]+",
+                "glpat-[A-Za-z0-9_\\-]+"
+        ));
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getReplacement() { return replacement; }
+        public void setReplacement(String replacement) { this.replacement = replacement; }
+        public List<String> getSensitiveKeys() { return sensitiveKeys; }
+        public void setSensitiveKeys(List<String> sensitiveKeys) { this.sensitiveKeys = sensitiveKeys == null ? new ArrayList<>() : new ArrayList<>(sensitiveKeys); }
+        public List<String> getValuePatterns() { return valuePatterns; }
+        public void setValuePatterns(List<String> valuePatterns) { this.valuePatterns = valuePatterns == null ? new ArrayList<>() : new ArrayList<>(valuePatterns); }
     }
 
     public static class Tool {

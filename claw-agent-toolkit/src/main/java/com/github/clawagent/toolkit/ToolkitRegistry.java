@@ -11,6 +11,8 @@ import com.github.clawagent.toolkit.filesystem.FilesystemReadTextTool;
 import com.github.clawagent.toolkit.filesystem.FilesystemSearchFilesTool;
 import com.github.clawagent.toolkit.filesystem.FilesystemToolkitProperties;
 import com.github.clawagent.toolkit.filesystem.FilesystemWriteFileTool;
+import com.github.clawagent.toolkit.github.GithubReadFileTool;
+import com.github.clawagent.toolkit.github.GithubRepoTreeTool;
 import com.github.clawagent.toolkit.todo.TodoCreatePlanTool;
 import com.github.clawagent.toolkit.todo.TodoListTool;
 import com.github.clawagent.toolkit.todo.TodoUpdateItemTool;
@@ -31,6 +33,7 @@ public class ToolkitRegistry {
     public static final String TOOL_FILESYSTEM = "filesystem";
     public static final String TOOL_EXECUTE = "execute";
     public static final String TOOL_TODO = "todo";
+    public static final String TOOL_GITHUB = "github";
 
     private final AgentToolRegistry toolRegistry;
     private final ToolkitProperties properties;
@@ -100,6 +103,13 @@ public class ToolkitRegistry {
                     new TodoCreatePlanTool(todoStore),
                     new TodoUpdateItemTool(todoStore),
                     new TodoListTool(todoStore)
+            ).forEach(toolRegistry::registerOrReplace);
+        }
+        if (properties.tool(TOOL_GITHUB).isEnabled()) {
+            // GitHub 工具负责仓库结构和 raw 文件读取，避免 web-fetch 隐式猜测 GitHub 专用 URL。
+            List.of(
+                    new GithubRepoTreeTool(),
+                    new GithubReadFileTool()
             ).forEach(toolRegistry::registerOrReplace);
         }
         loaded = true;

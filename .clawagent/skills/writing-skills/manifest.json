@@ -1,0 +1,14 @@
+{
+  "id" : "writing-skills",
+  "name" : "writing-skills",
+  "version" : "0.1.0",
+  "description" : "Use when creating new skills, editing existing skills, or verifying skills work before deployment",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default" ],
+  "permissions" : [ ],
+  "metadata" : {
+    "sourceUrl" : "https://raw.githubusercontent.com/obra/superpowers/main/skills/writing-skills/SKILL.md",
+    "sourceFormat" : "codex-or-claude-skill"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "id" : "anysearch-skill",
+  "name" : "anysearch",
+  "version" : "0.1.0",
+  "description" : "API key for higher rate limits. Anonymous access available with lower rate limits.",
+  "enabled" : true,
+  "entrypoint" : "SKILL.md",
+  "tools" : [ "default" ],
+  "permissions" : [ "network", "script" ],
+  "metadata" : {
+    "sourceUrl" : "https://raw.githubusercontent.com/anysearch-ai/anysearch-skill/main/SKILL.md",
+    "sourceFormat" : "codex-or-claude-skill",
+    "executor" : {
+      "type" : "script",
+      "command" : "node",
+      "args" : [ "scripts/anysearch_cli.js", "search", "${query}" ],
+      "timeoutSeconds" : 60,
+      "env" : {
+        "SSLKEYLOGFILE" : ""
+      },
+      "inputSchema" : {
+        "type" : "object",
+        "properties" : {
+          "query" : {
+            "type" : "string",
+            "description" : "搜索关键词，例如 Spring AI latest version"
+          }
+        },
+        "required" : [ "query" ],
+        "additionalProperties" : true
+      }
+    }
+  }
+}
