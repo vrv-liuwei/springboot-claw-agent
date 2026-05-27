@@ -19,6 +19,8 @@ public interface AgentRuntime {
 
     AgentResult submitStream(AgentRequest request, com.github.clawagent.spi.AgentCallback callback, com.github.clawagent.spi.ChatStreamCallback streamCallback);
 
+    AgentTask cancelTask(String taskId);
+
     String createSessionId();
 
     Map<String, Object> clearAllSessions();

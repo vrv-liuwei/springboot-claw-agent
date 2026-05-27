@@ -20,6 +20,7 @@ logs/
 # Local ClawAgent runtime data
 .clawagent/*.db
 .clawagent/*.db-*
+.clawagent/artifacts/
 .clawagent/memory/
 .clawagent/npm-cache
 

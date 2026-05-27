@@ -2,6 +2,9 @@ package com.github.clawagent.toolkit;
 
 import com.github.clawagent.spi.AgentToolRegistry;
 import com.github.clawagent.spi.TodoStore;
+import com.github.clawagent.toolkit.content.ContentArtifactProperties;
+import com.github.clawagent.toolkit.content.ContentArtifactStore;
+import com.github.clawagent.toolkit.content.ContentReadTool;
 import com.github.clawagent.toolkit.execute.ExecuteCommandTool;
 import com.github.clawagent.toolkit.execute.ExecuteToolkitProperties;
 import com.github.clawagent.toolkit.filesystem.FilesystemAccess;
@@ -19,6 +22,8 @@ import com.github.clawagent.toolkit.todo.TodoUpdateItemTool;
 import com.github.clawagent.toolkit.webfetch.WebFetchClient;
 import com.github.clawagent.toolkit.webfetch.WebFetchTool;
 import com.github.clawagent.toolkit.webfetch.WebFetchToolkitProperties;
+import com.github.clawagent.toolkit.websearch.WebSearchProviderFactory;
+import com.github.clawagent.toolkit.websearch.WebSearchTool;
 
 import java.util.List;
 
@@ -30,6 +35,8 @@ public class ToolkitRegistry {
     public static final String TOOL_TIME = "time";
     public static final String TOOL_WEATHER = "weather";
     public static final String TOOL_WEB_FETCH = "web-fetch";
+    public static final String TOOL_WEB_SEARCH = "web-search";
+    public static final String TOOL_CONTENT = "content";
     public static final String TOOL_FILESYSTEM = "filesystem";
     public static final String TOOL_EXECUTE = "execute";
     public static final String TOOL_TODO = "todo";
@@ -66,6 +73,13 @@ public class ToolkitRegistry {
             loaded = true;
             return;
         }
+        ContentArtifactStore contentStore = null;
+        ContentArtifactProperties contentProperties = ContentArtifactProperties.fromEnv(properties.tool(TOOL_CONTENT).getEnv());
+        if (properties.tool(TOOL_CONTENT).isEnabled()) {
+            // Content Artifact 是 web-fetch/web-search 的本地缓存层，同时暴露 content.read 给模型按需读取。
+            contentStore = new ContentArtifactStore(contentProperties);
+            toolRegistry.registerOrReplace(new ContentReadTool(contentStore, contentProperties));
+        }
         // 每个系统工具都通过统一 tools.<id>.enabled 开关控制；未配置时默认启用。
         if (properties.tool(TOOL_TIME).isEnabled()) {
             toolRegistry.registerOrReplace(new TimeTool());
@@ -77,7 +91,13 @@ public class ToolkitRegistry {
             // WebFetchTool 的依赖在 toolkit 内部组装，避免 starter 感知具体工具依赖关系。
             WebFetchToolkitProperties webFetchProperties =
                     WebFetchToolkitProperties.fromEnv(properties.tool(TOOL_WEB_FETCH).getEnv());
-            toolRegistry.registerOrReplace(new WebFetchTool(new WebFetchClient(webFetchProperties), webFetchProperties));
+            toolRegistry.registerOrReplace(new WebFetchTool(new WebFetchClient(webFetchProperties), webFetchProperties, contentStore));
+        }
+        if (properties.tool(TOOL_WEB_SEARCH).isEnabled()) {
+            // WebSearchProvider 只在 toolkit 内部选择；每个厂商独立解析自己的 env 配置。
+            toolRegistry.registerOrReplace(new WebSearchTool(
+                    WebSearchProviderFactory.create(properties.tool(TOOL_WEB_SEARCH).getEnv()),
+                    contentStore));
         }
         if (properties.tool(TOOL_FILESYSTEM).isEnabled()) {
             FilesystemToolkitProperties filesystemProperties =

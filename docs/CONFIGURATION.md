@@ -63,11 +63,29 @@ clawagent:
       weather:
         enabled: true
         env: {}
+      content:
+        enabled: true
+        env:
+          PATH: ".clawagent/artifacts"
+          CHUNK_CHARS: "6000"
+          SUMMARY_CHARS: "2400"
+          READ_MAX_CHARS: "12000"
       web-fetch:
         enabled: true
         env:
           ALLOW_PRIVATE_ADDRESSES: "false"
           ALLOWED_HOSTS: ""
+      web-search:
+        enabled: true
+        env:
+          PROVIDER: bocha
+          BOCHA_API_KEY: ${BOCHA_API_KEY:}
+          BOCHA_ENDPOINT: https://api.bochaai.com/v1/web-search
+          BOCHA_COUNT: "8"
+          BOCHA_FRESHNESS: noLimit
+          BOCHA_SUMMARY: "true"
+          BOCHA_TIMEOUT_MS: "60000"
+          BOCHA_MAX_OUTPUT_CHARS: "12000"
       filesystem:
         enabled: true
         env:
@@ -108,8 +126,16 @@ clawagent:
 - `clawagent.toolkit.enabled`：是否启用内置系统工具集合，默认 `true`。
 - `clawagent.toolkit.tools.<toolId>.enabled`：是否启用某个内置工具，未配置时默认启用。
 - `clawagent.toolkit.tools.<toolId>.env`：工具私有参数，具体含义由对应 `AgentTool` 自己解析。
+- `clawagent.toolkit.tools.content.env.PATH`：Content Artifact 本地缓存目录，默认 `.clawagent/artifacts`。
+- `clawagent.toolkit.tools.content.env.CHUNK_CHARS`：缓存内容按字符切块大小，默认 `6000`。
+- `clawagent.toolkit.tools.content.env.SUMMARY_CHARS`：规则摘要最大字符数，默认 `2400`。
+- `clawagent.toolkit.tools.content.env.READ_MAX_CHARS`：`builtin.content.read` 默认最大返回字符数，默认 `12000`。
 - `clawagent.toolkit.tools.web-fetch.env.ALLOW_PRIVATE_ADDRESSES`：是否允许访问 `192.168.x.x`、`10.x.x.x`、`172.16-31.x.x` 等私网地址，默认 `false`。
 - `clawagent.toolkit.tools.web-fetch.env.ALLOWED_HOSTS`：只放行指定私网 host，多个值用英文逗号或分号分隔，例如 `192.168.6.160,git.example.local`。优先推荐白名单，而不是全局打开私网访问。
+- `clawagent.toolkit.tools.web-search.env.PROVIDER`：Web 搜索内置厂商，第一版支持 `bocha`。
+- `clawagent.toolkit.tools.web-search.env.BOCHA_*`：博查 Provider 专用配置，包括 `BOCHA_API_KEY`、`BOCHA_ENDPOINT`、`BOCHA_COUNT`、`BOCHA_FRESHNESS`、`BOCHA_SUMMARY`、`BOCHA_TIMEOUT_MS`、`BOCHA_MAX_OUTPUT_CHARS`。后续新增 Bing/SearXNG 时使用各自前缀，不复用博查字段。
+- `builtin.web.search` 工具只固定 `query` 公共参数；`count`、`freshness`、`summary`、`timeoutMs` 等由当前 Provider 动态暴露和解析，不作为所有搜索厂商的统一字段。
+- `builtin.web.search` 与 `builtin.web.fetch` 默认只向模型返回摘要和 `artifactId`；需要原文片段时调用 `builtin.content.read`，避免 ReAct 重复请求相同 URL 或搜索相同 query。
 - `clawagent.toolkit.tools.filesystem.env`：filesystem 当前支持 `READONLY`、`ALLOWED_ROOTS`、`BLOCKED_PATTERNS`、`MAX_READ_BYTES`、`MAX_SEARCH_RESULTS`。
 - `clawagent.model.mode`：`llm` 使用真实模型；`rule` 使用本地规则兜底。
 - `clawagent.model.client`：模型客户端类型，`openai-compatible` 使用内置 HTTP 客户端；`spring-ai` 使用业务应用提供的 Spring AI `ChatClient.Builder`。
@@ -259,6 +285,13 @@ clawagent:
       weather:
         enabled: true
         env: {}
+      content:
+        enabled: true
+        env:
+          PATH: ".clawagent/artifacts"
+          CHUNK_CHARS: "6000"
+          SUMMARY_CHARS: "2400"
+          READ_MAX_CHARS: "12000"
       web-fetch:
         enabled: true
         env:
@@ -266,6 +299,17 @@ clawagent:
           MAX_BYTES: "1048576"
           ALLOW_PRIVATE_ADDRESSES: "false"
           ALLOWED_HOSTS: ""
+      web-search:
+        enabled: true
+        env:
+          PROVIDER: bocha
+          BOCHA_API_KEY: ${BOCHA_API_KEY:}
+          BOCHA_ENDPOINT: https://api.bochaai.com/v1/web-search
+          BOCHA_COUNT: "8"
+          BOCHA_FRESHNESS: noLimit
+          BOCHA_SUMMARY: "true"
+          BOCHA_TIMEOUT_MS: "60000"
+          BOCHA_MAX_OUTPUT_CHARS: "12000"
       filesystem:
         enabled: true
         env:

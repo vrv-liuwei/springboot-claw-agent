@@ -54,12 +54,30 @@ clawagent:
       weather:
         enabled: true
         env: {}
+      content:
+        enabled: true
+        env:
+          PATH: ".clawagent/artifacts"
+          CHUNK_CHARS: "6000"
+          SUMMARY_CHARS: "2400"
+          READ_MAX_CHARS: "12000"
       web-fetch:
         enabled: true
         env:
           ALLOW_PRIVATE_ADDRESSES: "true"
           ALLOWED_HOSTS: "192.168.6.160"
           MAX_OUTPUT_CHARS: "12000"
+      web-search:
+        enabled: true
+        env:
+          PROVIDER: bocha
+          BOCHA_API_KEY: ${BOCHA_API_KEY:}
+          BOCHA_ENDPOINT: https://api.bochaai.com/v1/web-search
+          BOCHA_COUNT: "5"
+          BOCHA_FRESHNESS: noLimit
+          BOCHA_SUMMARY: "true"
+          BOCHA_TIMEOUT_MS: "60000"
+          BOCHA_MAX_OUTPUT_CHARS: "12000"
       execute:
         enabled: true
         env:

@@ -13,6 +13,7 @@ import com.github.clawagent.core.StepType;
 import com.github.clawagent.core.TaskStatus;
 import com.github.clawagent.core.TodoItem;
 import com.github.clawagent.core.ToolCall;
+import com.github.clawagent.core.ToolDefinition;
 import com.github.clawagent.core.ToolResult;
 import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.AgentEventStore;
@@ -49,6 +50,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * DefaultAgentRuntime 是 M1 的核心执行链路。
@@ -64,6 +70,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private static final int SESSION_CONTEXT_CHAR_LIMIT = 10_000;
     /** Runtime 注入给 Planner/ResponseGenerator 的会话上下文 metadata key。 */
     private static final String SESSION_CONTEXT_METADATA_KEY = "runtime.sessionContext";
+    /** JDK17 下平台线程仍然较重，先限制单轮只读工具并发数，避免一次 ReAct 打满服务器线程。 */
+    private static final int MAX_PARALLEL_TOOL_CALLS = 8;
 
     private final AgentPlanner planner;
     private final AgentResponseGenerator responseGenerator;
@@ -77,6 +85,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final TodoStore todoStore;
     private final List<ToolExecutionGuard> toolGuards;
     private final List<AgentCallback> callbacks;
+    /** 已收到取消请求的任务 ID。运行线程会在规划、工具和最终回复边界协作式检查。 */
+    private final Set<String> cancelledTaskIds = ConcurrentHashMap.newKeySet();
     private final int maxReactRounds;
     /** Runtime 横切拦截器链，按 order 顺序处理脱敏、审计规范化、合规过滤等扩展逻辑。 */
     private final List<AgentRuntimeInterceptor> runtimeInterceptors;
@@ -169,6 +179,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         List<AgentStep> steps = new ArrayList<>();
         try {
             String directAnswer = runPlanner(task, steps);
+            checkTaskCancelled(task);
 
             // 最终回复交给 ResponseGenerator 生成。
             // 当配置了真实模型时，这里会调用 LLM；Runtime 本身不再拼接模拟回答。
@@ -189,6 +200,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 answer = responseGenerator.generate(task, steps);
                 saveLlmTraces(task, "response");
             }
+            checkTaskCancelled(task);
             task.complete(answer);
             taskStore.updateTask(task);
             saveMessage(task.sessionId(), task.id(), "assistant", answer);
@@ -200,6 +212,16 @@ public class DefaultAgentRuntime implements AgentRuntime {
             log.info("agent task completed status={} stepCount={} output={}", task.status(), steps.size(), preview(answer));
             log.debug("agent final answer taskId={} answer={}", task.id(), preview(answer));
             return new AgentResult(task.id(), answer, task.status(), task.sessionId());
+        } catch (TaskCancelledException e) {
+            saveLlmTraces(task, "cancelled");
+            task.markStatus(TaskStatus.CANCELLED);
+            taskStore.updateTask(task);
+            saveEvent(task, "WARN", "task.cancelled", "任务已取消", Map.of(
+                    "status", task.status().name(),
+                    "reason", nullToEmpty(e.getMessage())));
+            emit("task.cancelled", task.id(), e.getMessage());
+            log.warn("agent task cancelled taskId={} reason={}", task.id(), e.getMessage());
+            return new AgentResult(task.id(), "任务已取消", task.status(), task.sessionId());
         } catch (RuntimeException e) {
             saveLlmTraces(task, "error");
             task.markStatus(TaskStatus.FAILED);
@@ -211,6 +233,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
             log.error("agent task failed error={}", e.getMessage(), e);
             return new AgentResult(task.id(), "执行失败：" + e.getMessage(), task.status(), task.sessionId());
         } finally {
+            cancelledTaskIds.remove(task.id());
             MDC.clear();
             activeCallbacks.remove();
             activeTodo.remove();
@@ -218,11 +241,13 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private String runPlanner(AgentTask task, List<AgentStep> steps) {
+        checkTaskCancelled(task);
         if (planner instanceof AgentReActPlanner reactPlanner) {
             return runReActPlanner(task, steps, reactPlanner);
         }
         LlmTraceContext.clear();
         List<ToolCall> plannedCalls = planner.plan(task);
+        checkTaskCancelled(task);
         saveLlmTraces(task, "planner");
         log.info("agent planner finished toolCallCount={} calls={}", plannedCalls.size(), plannedCalls);
         log.debug("agent planner calls taskId={} calls={}", task.id(), plannedCalls);
@@ -230,15 +255,18 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 "toolCallCount", String.valueOf(plannedCalls.size()),
                 "calls", plannedCalls.toString()));
         executeToolCalls(task, steps, plannedCalls);
+        checkTaskCancelled(task);
         return null;
     }
 
     private String runReActPlanner(AgentTask task, List<AgentStep> steps, AgentReActPlanner reactPlanner) {
         ToolFailureTracker failureTracker = new ToolFailureTracker();
         for (int round = 1; round <= maxReactRounds; round++) {
+            checkTaskCancelled(task);
             LlmTraceContext.clear();
             AgentPlan plan = reactPlanner.planNext(task, steps, round);
             saveLlmTraces(task, "planner-react-" + round);
+            checkTaskCancelled(task);
             log.info("agent react planner finished round={} finished={} toolCallCount={} calls={}",
                     round, plan.finished(), plan.calls().size(), plan.calls());
             saveEvent(task, "INFO", "planner.react.finished", "ReAct 规划完成", Map.of(
@@ -264,6 +292,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 return null;
             }
             executeToolCalls(task, steps, plan.calls(), failureTracker);
+            checkTaskCancelled(task);
         }
         saveEvent(task, "WARN", "planner.react.max_rounds", "ReAct 达到最大轮次", Map.of(
                 "maxRounds", String.valueOf(maxReactRounds)));
@@ -331,15 +360,122 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private void executeToolCalls(AgentTask task, List<AgentStep> steps, List<ToolCall> calls, ToolFailureTracker failureTracker) {
-        for (ToolCall call : calls) {
-            executeToolCall(task, steps, call, failureTracker);
+        checkTaskCancelled(task);
+        List<IndexedToolCall> parallelBatch = new ArrayList<>();
+        for (int i = 0; i < calls.size(); i++) {
+            checkTaskCancelled(task);
+            ToolCall call = calls.get(i);
+            if (isParallelReadOnlyTool(call)) {
+                parallelBatch.add(new IndexedToolCall(i, call));
+                continue;
+            }
+            flushParallelToolCalls(task, steps, parallelBatch, failureTracker);
+            checkTaskCancelled(task);
+            appendToolExecutionOutput(steps, executeToolCall(task, call, failureTracker));
+        }
+        flushParallelToolCalls(task, steps, parallelBatch, failureTracker);
+        checkTaskCancelled(task);
+    }
+
+    private boolean isParallelReadOnlyTool(ToolCall call) {
+        AgentTool tool = toolRegistry.find(call.toolId()).orElse(null);
+        if (tool == null) {
+            // 不存在的工具走顺序路径，让原有错误信息保持一致。
+            return false;
+        }
+        ToolDefinition definition = tool.definition();
+        if (definition == null || !"low".equalsIgnoreCase(definition.riskLevel())) {
+            return false;
+        }
+        // 只把无状态、只读、低风险工具放入并发批次；Todo、安装、写文件、执行命令等仍保持顺序执行。
+        return switch (call.toolId()) {
+            case "builtin.web.fetch",
+                    "builtin.web.search",
+                    "builtin.content.read",
+                    "builtin.github.repo_tree",
+                    "builtin.github.read_file",
+                    "builtin.filesystem.read_text_file",
+                    "builtin.filesystem.list_directory",
+                    "builtin.filesystem.search_files",
+                    "builtin.filesystem.get_file_info",
+                    "builtin.weather",
+                    "builtin.time" -> true;
+            default -> false;
+        };
+    }
+
+    private void flushParallelToolCalls(AgentTask task, List<AgentStep> steps, List<IndexedToolCall> batch, ToolFailureTracker failureTracker) {
+        if (batch.isEmpty()) {
+            return;
+        }
+        if (batch.size() == 1) {
+            appendToolExecutionOutput(steps, executeToolCall(task, batch.remove(0).call(), failureTracker));
+            return;
+        }
+
+        List<IndexedToolCall> currentBatch = new ArrayList<>(batch);
+        batch.clear();
+        List<AgentCallback> scopedCallbacks = activeCallbacks.get();
+        TodoItem scopedTodo = activeTodo.get();
+        Map<String, String> scopedMdc = MDC.getCopyOfContextMap();
+        int poolSize = Math.min(MAX_PARALLEL_TOOL_CALLS, currentBatch.size());
+        ExecutorService executor = Executors.newFixedThreadPool(poolSize);
+        try {
+            List<Future<ToolExecutionOutput>> futures = new ArrayList<>();
+            for (IndexedToolCall indexedCall : currentBatch) {
+                futures.add(executor.submit(parallelToolTask(task, indexedCall, failureTracker, scopedCallbacks, scopedTodo, scopedMdc)));
+            }
+            List<ToolExecutionOutput> outputs = new ArrayList<>();
+            for (Future<ToolExecutionOutput> future : futures) {
+                try {
+                    outputs.add(future.get());
+                } catch (Exception e) {
+                    throw new IllegalStateException("并发工具执行失败：" + e.getMessage(), e);
+                }
+            }
+            checkTaskCancelled(task);
+            outputs.stream()
+                    .sorted(Comparator.comparingInt(ToolExecutionOutput::index))
+                    .forEach(output -> appendToolExecutionOutput(steps, output));
+        } finally {
+            executor.shutdownNow();
         }
     }
 
-    private void executeToolCall(AgentTask task, List<AgentStep> steps, ToolCall call, ToolFailureTracker failureTracker) {
+    private Callable<ToolExecutionOutput> parallelToolTask(AgentTask task, IndexedToolCall indexedCall, ToolFailureTracker failureTracker,
+                                                           List<AgentCallback> scopedCallbacks, TodoItem scopedTodo, Map<String, String> scopedMdc) {
+        return () -> {
+            try {
+                if (scopedCallbacks != null) {
+                    activeCallbacks.set(scopedCallbacks);
+                }
+                if (scopedTodo != null) {
+                    activeTodo.set(scopedTodo);
+                }
+                if (scopedMdc != null) {
+                    MDC.setContextMap(scopedMdc);
+                }
+                return executeToolCall(task, indexedCall.call(), failureTracker).withIndex(indexedCall.index());
+            } finally {
+                activeCallbacks.remove();
+                activeTodo.remove();
+                MDC.clear();
+            }
+        };
+    }
+
+    private void appendToolExecutionOutput(List<AgentStep> steps, ToolExecutionOutput output) {
+        taskStore.saveStep(output.step());
+        steps.add(output.step());
+        steps.addAll(output.observations());
+    }
+
+    private ToolExecutionOutput executeToolCall(AgentTask task, ToolCall call, ToolFailureTracker failureTracker) {
+        checkTaskCancelled(task);
         AgentTool tool = toolRegistry.find(call.toolId())
                 .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + call.toolId()));
         AgentStep step = new AgentStep(UUID.randomUUID().toString(), task.id(), StepType.TOOL_CALL, call.toolId(), call.arguments());
+        List<AgentStep> observations = new ArrayList<>();
         long startedAt = System.currentTimeMillis();
         Map<String, String> startedDetails = toolEventDetails(step, call, tool, null, null, 0L, startedAt);
         emit("step.started", task.id(), call.toolId(), streamToolDetails(task, startedDetails));
@@ -349,12 +485,13 @@ public class DefaultAgentRuntime implements AgentRuntime {
         saveEvent(task, "DEBUG", "tool.started", "工具调用开始", startedDetails);
 
         if (failureTracker != null) {
-            String blockReason = failureTracker.blockReason(call).orElse("");
+            String blockReason;
+            synchronized (failureTracker) {
+                blockReason = failureTracker.blockReason(call).orElse("");
+            }
             if (!blockReason.isBlank()) {
                 // ReAct 场景下阻断重复失败调用，让下一轮模型基于失败原因换方案，而不是继续烧 token。
                 step.fail(blockReason);
-                taskStore.saveStep(step);
-                steps.add(step);
                 saveEvent(task, "WARN", "tool.repeated_failure_blocked", "工具重复失败调用被阻断", Map.of(
                         "stepId", step.id(),
                         "toolId", call.toolId(),
@@ -364,7 +501,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, blockReason, elapsedMs(startedAt), startedAt);
                 emit("tool.failed", task.id(), preview(blockReason), streamToolDetails(task, failedDetails));
                 emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, failedDetails));
-                return;
+                return new ToolExecutionOutput(-1, step, observations);
             }
         }
 
@@ -372,8 +509,6 @@ public class DefaultAgentRuntime implements AgentRuntime {
         if (guardError != null) {
             // 拦截失败只影响当前工具步骤，后续由 ResponseGenerator 汇总失败原因给用户。
             step.fail(guardError.getMessage());
-            taskStore.saveStep(step);
-            steps.add(step);
             saveEvent(task, "WARN", "tool.blocked", "工具调用被安全策略拦截", Map.of(
                     "stepId", step.id(),
                     "toolId", call.toolId(),
@@ -383,16 +518,23 @@ public class DefaultAgentRuntime implements AgentRuntime {
             Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, guardError.getMessage(), elapsedMs(startedAt), startedAt);
             emit("tool.failed", task.id(), preview(guardError.getMessage()), streamToolDetails(task, failedDetails));
             emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, failedDetails));
-            return;
+            return new ToolExecutionOutput(-1, step, observations);
         }
 
+        checkTaskCancelled(task);
         ToolResult result = tool.execute(call, AgentContext.forTask(task));
+        checkTaskCancelled(task);
         if (result.success()) {
             step.succeed(result.content());
             TodoItem todoAfterTool = updateActiveTodoAfterTool(task, call);
             if (failureTracker != null) {
-                failureTracker.recordSuccess(call, result.content())
-                        .ifPresent(message -> addFailureRecoveryObservation(task, steps, call, message));
+                String recoveryMessage;
+                synchronized (failureTracker) {
+                    recoveryMessage = failureTracker.recordSuccess(call, result.content()).orElse("");
+                }
+                if (!recoveryMessage.isBlank()) {
+                    observations.add(createFailureRecoveryObservation(task, call, recoveryMessage));
+                }
             }
             log.info("agent tool succeeded stepId={} toolId={} output={}", step.id(), call.toolId(), sanitizeText("output", preview(result.content())));
             log.debug("agent tool output taskId={} stepId={} output={}", task.id(), step.id(), sanitizeText("output", preview(result.content())));
@@ -405,19 +547,29 @@ public class DefaultAgentRuntime implements AgentRuntime {
             step.fail(result.content());
             if (failureTracker != null) {
                 // 失败结果进入本任务的失败画像，下一轮相同参数会被策略判断是否允许重试。
-                failureTracker.recordFailure(call, result.content());
+                synchronized (failureTracker) {
+                    failureTracker.recordFailure(call, result.content());
+                }
             }
             log.warn("agent tool failed stepId={} toolId={} error={}", step.id(), call.toolId(), sanitizeText("error", preview(result.content())));
             Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, result.content(), elapsedMs(startedAt), startedAt);
             saveEvent(task, "WARN", "tool.failed", "工具调用失败", failedDetails);
             emit("tool.failed", task.id(), preview(result.content()), streamToolDetails(task, failedDetails));
         }
-        taskStore.saveStep(step);
-        steps.add(step);
         emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, toolEventDetails(step, call, tool, result.content(), result.success() ? null : result.content(), elapsedMs(startedAt), startedAt)));
+        return new ToolExecutionOutput(-1, step, observations);
     }
 
-    private void addFailureRecoveryObservation(AgentTask task, List<AgentStep> steps, ToolCall call, String message) {
+    private record IndexedToolCall(int index, ToolCall call) {
+    }
+
+    private record ToolExecutionOutput(int index, AgentStep step, List<AgentStep> observations) {
+        private ToolExecutionOutput withIndex(int index) {
+            return new ToolExecutionOutput(index, step, observations);
+        }
+    }
+
+    private AgentStep createFailureRecoveryObservation(AgentTask task, ToolCall call, String message) {
         AgentStep observation = new AgentStep(
                 UUID.randomUUID().toString(),
                 task.id(),
@@ -425,10 +577,10 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 "system.tool_failure_recovery",
                 Map.of("toolId", call.toolId(), "arguments", call.arguments().toString()));
         observation.succeed(message);
-        steps.add(observation);
         saveEvent(task, "WARN", "tool.failure_recovery_hint", "工具失败恢复提示", Map.of(
                 "toolId", call.toolId(),
                 "message", message));
+        return observation;
     }
 
     private RuntimeException checkToolGuards(AgentTask task, AgentTool tool, ToolCall call) {
@@ -441,6 +593,38 @@ public class DefaultAgentRuntime implements AgentRuntime {
             }
         }
         return null;
+    }
+
+    @Override
+    public AgentTask cancelTask(String taskId) {
+        AgentTask task = getTask(taskId);
+        if (isTerminalStatus(task.status())) {
+            return task;
+        }
+        cancelledTaskIds.add(taskId);
+        task.markStatus(TaskStatus.CANCELLED);
+        taskStore.updateTask(task);
+        saveEvent(task, "WARN", "task.cancel.requested", "任务取消请求已接收", Map.of(
+                "status", task.status().name()));
+        log.warn("agent task cancel requested taskId={}", taskId);
+        return task;
+    }
+
+    private void checkTaskCancelled(AgentTask task) {
+        if (cancelledTaskIds.contains(task.id()) || Thread.currentThread().isInterrupted()) {
+            // 取消是协作式的：运行线程在规划、工具调用和最终回复边界检查，避免取消后继续写完成状态。
+            throw new TaskCancelledException("用户请求停止执行");
+        }
+    }
+
+    private boolean isTerminalStatus(TaskStatus status) {
+        return status == TaskStatus.COMPLETED || status == TaskStatus.FAILED || status == TaskStatus.CANCELLED;
+    }
+
+    private static class TaskCancelledException extends RuntimeException {
+        private TaskCancelledException(String message) {
+            super(message);
+        }
     }
 
     @Override

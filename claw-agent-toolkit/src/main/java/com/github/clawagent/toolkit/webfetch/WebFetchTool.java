@@ -7,6 +7,8 @@ import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.core.ToolDefinition;
 import com.github.clawagent.core.ToolResult;
 import com.github.clawagent.spi.AgentTool;
+import com.github.clawagent.toolkit.content.ContentArtifact;
+import com.github.clawagent.toolkit.content.ContentArtifactStore;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -23,14 +25,20 @@ import java.util.Map;
 public class WebFetchTool implements AgentTool {
     private final WebFetchClient client;
     private final WebFetchToolkitProperties properties;
+    private final ContentArtifactStore artifactStore;
 
     public WebFetchTool(WebFetchClient client) {
-        this(client, new WebFetchToolkitProperties());
+        this(client, new WebFetchToolkitProperties(), null);
     }
 
     public WebFetchTool(WebFetchClient client, WebFetchToolkitProperties properties) {
+        this(client, properties, null);
+    }
+
+    public WebFetchTool(WebFetchClient client, WebFetchToolkitProperties properties, ContentArtifactStore artifactStore) {
         this.client = client;
         this.properties = properties == null ? new WebFetchToolkitProperties() : properties;
+        this.artifactStore = artifactStore;
     }
 
     @Override
@@ -49,10 +57,11 @@ public class WebFetchTool implements AgentTool {
                 "description", "正文提取模式，默认 readable；raw 用于调试原始页面",
                 "enum", List.of("readable", "raw")));
         properties.put("maxOutputChars", ToolDefinition.integerProperty("可选最大输出字符数，默认使用配置 MAX_OUTPUT_CHARS"));
+        properties.put("cache", Map.of("type", "boolean", "description", "是否写入本地 Content Artifact 缓存，默认 true"));
         return ToolDefinition.low(
                 "builtin.web.fetch",
                 "Web Fetch",
-                "打开指定 URL 并按 format 返回内容。默认 extractMode=readable，会提取正文并减少 HTML/JS/CSS token；format 可选 html/text/markdown/json。",
+                "打开指定 URL 并按 format 返回内容。默认写入 Content Artifact 缓存并返回摘要；需要原文细节时用 builtin.content.read 读取 artifactId。",
                 ToolDefinition.objectSchema(properties, false, List.of("url")));
     }
 
@@ -66,15 +75,16 @@ public class WebFetchTool implements AgentTool {
             int maxBytes = intArg(call, "maxBytes", 1024 * 1024);
             String extractMode = call.arguments().getOrDefault("extractMode", "readable").trim().toLowerCase(Locale.ROOT);
             int maxOutputChars = intArg(call, "maxOutputChars", properties.getMaxOutputChars());
+            boolean cache = booleanArg(call, "cache", true);
             Map<String, String> headers = jsonObjectArg(call, "headers");
             WebFetchResponse response = client.fetch(url, headers, timeoutMs, maxBytes);
-            return ToolResult.success(format(response, format, extractMode, maxOutputChars));
+            return ToolResult.success(format(response, format, extractMode, maxOutputChars, cache));
         } catch (Exception e) {
             return ToolResult.error(e.getMessage());
         }
     }
 
-    private String format(WebFetchResponse response, String format, String extractMode, int maxOutputChars) {
+    private String format(WebFetchResponse response, String format, String extractMode, int maxOutputChars, boolean cache) {
         String rawBody = response.body() == null ? "" : response.body();
         String extracted = "raw".equals(extractMode) ? rawBody : readableHtml(rawBody, response.url());
         String formatted = switch (format) {
@@ -84,6 +94,15 @@ public class WebFetchTool implements AgentTool {
             case "markdown", "md" -> "raw".equals(extractMode) ? toMarkdown(rawBody) : toMarkdown(extracted);
             default -> throw new IllegalArgumentException("不支持的 format：" + format + "，可选 html/text/markdown/json");
         };
+        if (cache && artifactStore != null) {
+            // 长内容只把本地摘要交给模型，完整 raw/readable/chunks 保存在 artifact 中供后续按需读取。
+            ContentArtifact artifact = artifactStore.save("web", response.url(), response.contentType(), rawBody, formatted);
+            TruncatedText summary = truncate(artifact.summary(), maxOutputChars);
+            return metadata(response, extractMode, rawBody.length(), formatted.length(), summary.truncated(), artifact)
+                    + summary.text()
+                    + "\n\n后续如需原文细节，请调用 builtin.content.read，参数 artifactId="
+                    + artifact.artifactId() + "，可选 chunk 或 query。";
+        }
         TruncatedText truncated = truncate(formatted, maxOutputChars);
         return metadata(response, extractMode, rawBody.length(), formatted.length(), truncated.truncated()) + truncated.text();
     }
@@ -95,6 +114,20 @@ public class WebFetchTool implements AgentTool {
                 + "extractMode: " + extractMode + "\n"
                 + "originalChars: " + originalChars + "\n"
                 + "extractedChars: " + extractedChars + "\n"
+                + "truncated: " + truncated + "\n\n";
+    }
+
+    private String metadata(WebFetchResponse response, String extractMode, int originalChars, int extractedChars, boolean truncated, ContentArtifact artifact) {
+        return "url: " + response.url() + "\n"
+                + "status: " + response.status() + "\n"
+                + "contentType: " + response.contentType() + "\n"
+                + "extractMode: " + extractMode + "\n"
+                + "artifactId: " + artifact.artifactId() + "\n"
+                + "cached: true\n"
+                + "originalChars: " + originalChars + "\n"
+                + "extractedChars: " + extractedChars + "\n"
+                + "summaryChars: " + artifact.summaryChars() + "\n"
+                + "chunkCount: " + artifact.chunkCount() + "\n"
                 + "truncated: " + truncated + "\n\n";
     }
 
@@ -172,6 +205,14 @@ public class WebFetchTool implements AgentTool {
             return defaultValue;
         }
         return Integer.parseInt(value);
+    }
+
+    private boolean booleanArg(ToolCall call, String name, boolean defaultValue) {
+        String value = call.arguments().get(name);
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
     }
 
     private Map<String, String> jsonObjectArg(ToolCall call, String name) {

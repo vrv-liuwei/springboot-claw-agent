@@ -76,7 +76,9 @@ public class ReActAgentPlanner implements AgentReActPlanner {
                     .append(", risk=").append(definition.riskLevel())
                     .append("\n");
         }
-        prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.fetch 使用 url，默认 format=markdown、extractMode=readable，可选 extractMode=readable/raw、maxOutputChars、headers(JSON)、timeoutMs、maxBytes。");
+        prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.search 必须使用 query，其他可选参数以工具定义中当前 Provider 暴露的字段为准；builtin.web.fetch 使用 url，默认 format=markdown、extractMode=readable，可选 extractMode=readable/raw、maxOutputChars、headers(JSON)、timeoutMs、maxBytes。");
+        prompt.append("web.search/web.fetch 返回 artifactId 和摘要；已有 artifactId 时，如需原文细节必须优先调用 builtin.content.read，避免重复请求相同 URL 或重复搜索相同 query。");
+        prompt.append("实时信息、最新版本、新闻、资料检索、事实核验优先调用 builtin.web.search；拿到具体 URL 后，如需阅读全文再调用 builtin.web.fetch；如果 Observation 已有 artifactId，则用 builtin.content.read 按 query/chunk 读取缓存内容。");
         prompt.append("复杂、多步骤、需要拆解的任务，优先调用 builtin.todo.create_plan，items 参数为 JSON 数组字符串。");
         prompt.append("Todo 执行规则：用户说执行第 N 步时，先用 builtin.todo.update_item 将 order=N 标记为 running，再调用完成该步骤所需工具，成功后再标记 completed，失败则标记 failed。");
         prompt.append("用户说执行全部 Todo 时，按 order 从小到大执行所有 pending/running Todo；每轮 Observation 后继续规划下一步，直到全部完成或遇到阻塞。");

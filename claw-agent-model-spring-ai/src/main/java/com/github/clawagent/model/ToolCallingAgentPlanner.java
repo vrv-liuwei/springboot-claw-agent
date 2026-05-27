@@ -41,7 +41,7 @@ public class ToolCallingAgentPlanner implements AgentPlanner {
         }
         log.info("tool calling planner started taskId={} model={}", task.id(), options.model());
         ToolCallingResult result = toolCallingModelClient.chatWithTools(List.of(
-                ChatMessage.system("你是 ClawAgent 的工具规划器。需要工具时请通过 tool_calls 调用工具；不需要工具时不要调用工具。web-fetch 默认使用 extractMode=readable 减少网页噪声；复杂多步骤任务优先创建 todo plan。用户说执行第 N 步时，用 builtin.todo.update_item 的 order=N 更新状态；用户说执行全部 Todo 时，按 order 顺序推进 pending/running Todo。"),
+                ChatMessage.system("你是 ClawAgent 的工具规划器。需要工具时请通过 tool_calls 调用工具；不需要工具时不要调用工具。实时信息、最新版本、新闻、资料检索、事实核验优先调用 builtin.web.search；拿到具体 URL 后，如需阅读全文再调用 builtin.web.fetch。web.search/web.fetch 会返回 artifactId 和摘要；已有 artifactId 时优先调用 builtin.content.read 按 query/chunk 读取缓存，避免重复请求 URL 或重复搜索。web-fetch 默认使用 extractMode=readable 减少网页噪声；复杂多步骤任务优先创建 todo plan。用户说执行第 N 步时，用 builtin.todo.update_item 的 order=N 更新状态；用户说执行全部 Todo 时，按 order 顺序推进 pending/running Todo。"),
                 ChatMessage.user(LlmAgentPlanner.userPromptWithSessionContext(task))
         ), options, toolRegistry.definitions());
         List<ToolCall> calls = result.toolCalls().stream()

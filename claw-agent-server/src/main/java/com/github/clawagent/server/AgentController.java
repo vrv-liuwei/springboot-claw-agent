@@ -336,6 +336,12 @@ public class AgentController {
         return runtime.getTask(taskId);
     }
 
+    @PostMapping("/tasks/{taskId}/cancel")
+    public AgentTask cancelTask(@PathVariable("taskId") String taskId) {
+        log.warn("task cancel requested taskId={}", taskId);
+        return runtime.cancelTask(taskId);
+    }
+
     @GetMapping("/tasks/{taskId}/steps")
     public List<AgentStep> steps(@PathVariable("taskId") String taskId) {
         return runtime.getSteps(taskId);

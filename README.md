@@ -262,6 +262,7 @@ Agent 执行链路模块。
   - `TimeTool`：返回当前服务器时间。
   - `WeatherTool`：通过 Hutool 请求免 key 天气接口并解析当前天气。
   - `WebFetchTool`：`builtin.web.fetch`，打开 URL，并通过 `format=html/text/markdown/json` 返回不同格式内容。
+  - `WebSearchTool`：`builtin.web.search`，通过 `WebSearchProvider` 搜索互联网，第一版内置博查 provider。
   - `filesystem` 工具组：内置读取文本、列目录、搜索文件、文件信息、受控写入，不依赖外部 MCP Server。
 
 计算器工具已移除。Web fetch 工具内置在 Java 进程内，不依赖外部 `uvx`、Python 或 stdio MCP 子进程；默认只允许 `http/https`，并拒绝访问 localhost、内网、链路本地地址，降低 SSRF 风险。
@@ -275,12 +276,32 @@ clawagent:
   toolkit:
     enabled: true
     tools:
+      content:
+        enabled: true
+        env:
+          # web-fetch/web-search 的本地内容缓存，保存 raw/readable/summary/chunks。
+          PATH: ".clawagent/artifacts"
+          CHUNK_CHARS: "6000"
+          SUMMARY_CHARS: "2400"
+          READ_MAX_CHARS: "12000"
       web-fetch:
         enabled: true
         env:
           # 默认禁止访问内网，访问局域网 Git 时优先配置白名单。
           ALLOW_PRIVATE_ADDRESSES: "false"
           ALLOWED_HOSTS: "192.168.6.160"
+      web-search:
+        enabled: true
+        env:
+          # PROVIDER 只负责选择内置厂商；每个厂商使用自己的配置前缀。
+          PROVIDER: bocha
+          BOCHA_API_KEY: ${BOCHA_API_KEY:}
+          BOCHA_ENDPOINT: https://api.bochaai.com/v1/web-search
+          BOCHA_COUNT: "8"
+          BOCHA_FRESHNESS: noLimit
+          BOCHA_SUMMARY: "true"
+          BOCHA_TIMEOUT_MS: "60000"
+          BOCHA_MAX_OUTPUT_CHARS: "12000"
       filesystem:
         enabled: true
         env:
@@ -290,6 +311,10 @@ clawagent:
           MAX_READ_BYTES: "1048576"
           MAX_SEARCH_RESULTS: "100"
 ```
+
+`web-search` 和 `web-fetch` 的职责不同：`web-search` 用来发现网页 URL、标题和摘要；`web-fetch` 用来打开某个具体 URL 并提取正文。两者默认会把长内容写入本地 Content Artifact 缓存，只把摘要、`artifactId` 和 metadata 返回给模型；后续需要原文细节时调用 `builtin.content.read` 读取指定 `artifactId` 的 `summary`、`chunk` 或关键词匹配内容，避免重复请求 URL 或重复搜索。
+
+`WebSearchTool` 只固定 `query` 这个公共参数，其余工具入参由当前 `WebSearchProvider` 暴露并解析。后续接入 Bing、SearXNG 等搜索源时，只新增对应 `Provider + Properties`，不会复用或污染博查的 `BOCHA_*` 配置。
 
 ### `claw-agent-persistence-sqlite`
 
@@ -854,7 +879,7 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成 Spring Boot starter 自动配置。
 - 已完成独立 server，默认端口 `17890`。
 - 已完成最小 Web Console。
-- 已完成内置工具：天气、时间、WebFetch、Filesystem。
+- 已完成内置工具：天气、时间、WebFetch、WebSearch、Filesystem。
 - 已完成 DeepSeek / OpenAI 兼容真实模型调用。
 - 已完成 Spring AI ChatClient 可选适配，默认不强制绑定 Spring AI 依赖。
 - 已完成 LLM 工具规划和 LLM 最终回复生成。

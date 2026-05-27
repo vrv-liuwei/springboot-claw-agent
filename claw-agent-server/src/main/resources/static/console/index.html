@@ -273,6 +273,10 @@ let selectedHistoryDetailType = 'tasks';
 let selectedTaskRecordType = 'task';
 let todoPollingTimer = null;
 let running = false;
+let runningTaskId = '';
+let activeTaskController = null;
+let activeAssistantMessage = null;
+let stopRequested = false;
 const TODO_WIDTH_KEY = 'clawagent.console.todoWidth';
 
 function initLayoutResizer() {
@@ -381,7 +385,10 @@ async function newCurrentSession(clearView = true) {
 }
 
 async function submitTask() {
-  if (running) return;
+  if (running) {
+    await cancelRunningTask();
+    return;
+  }
   const queryInput = document.getElementById('query');
   const input = normalizeEscapedNewlines(queryInput.value).trim();
   queryInput.value = input;
@@ -390,30 +397,68 @@ async function submitTask() {
     return;
   }
   const sessionId = await ensureCurrentSessionId();
+  runningTaskId = '';
+  stopRequested = false;
+  activeTaskController = new AbortController();
   setRunning(true);
   startTodoPolling();
   appendChatMessage('user', input);
   const assistantMessage = appendChatMessage('assistant', '', '正在提交任务...');
+  activeAssistantMessage = assistantMessage;
   assistantMessage.startedAt = Date.now();
   queryInput.value = '';
   try {
     const response = await fetch('/api/v1/tasks/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input, sessionId, channelId: 'webui', userId: 'console', metadata: {} })
+      body: JSON.stringify({ input, sessionId, channelId: 'webui', userId: 'console', metadata: {} }),
+      signal: activeTaskController.signal
     });
     if (!response.ok || !response.body) {
       throw new Error(`任务提交失败 HTTP ${response.status}`);
     }
     await readSseStream(response.body, event => handleTaskStreamEvent(event, assistantMessage));
   } catch (error) {
-    updateChatStatus(assistantMessage, `执行失败：${error.message || error}`);
-    if (!assistantMessage.raw) updateChatContent(assistantMessage, `执行失败：${error.message || error}`);
-    updateChatMeta(assistantMessage, '失败', formatTime(new Date()), elapsedText(assistantMessage));
+    if (stopRequested || error.name === 'AbortError') {
+      if (!assistantMessage.raw) updateChatContent(assistantMessage, '任务已请求停止。');
+      updateChatStatus(assistantMessage, '');
+      updateChatMeta(assistantMessage, '已停止', formatTime(new Date()), elapsedText(assistantMessage));
+    } else {
+      updateChatStatus(assistantMessage, `执行失败：${error.message || error}`);
+      if (!assistantMessage.raw) updateChatContent(assistantMessage, `执行失败：${error.message || error}`);
+      updateChatMeta(assistantMessage, '失败', formatTime(new Date()), elapsedText(assistantMessage));
+    }
   } finally {
     setRunning(false);
+    activeTaskController = null;
+    activeAssistantMessage = null;
+    stopRequested = false;
+    runningTaskId = '';
     stopTodoPolling();
     await loadTodos();
+  }
+}
+
+async function cancelRunningTask() {
+  if (!running) return;
+  stopRequested = true;
+  const button = document.getElementById('runButton');
+  button.disabled = true;
+  button.textContent = '停止中...';
+  if (activeAssistantMessage) {
+    updateChatStatus(activeAssistantMessage, '正在停止任务...');
+  }
+  try {
+    if (runningTaskId) {
+      await fetch(`/api/v1/tasks/${encodeURIComponent(runningTaskId)}/cancel`, { method: 'POST' });
+    }
+  } catch (error) {
+    showError(error);
+  } finally {
+    if (activeTaskController) {
+      // 前端先断开当前 SSE，后端通过 cancel 接口在下一处检查点协作式停止。
+      activeTaskController.abort();
+    }
   }
 }
 
@@ -476,7 +521,10 @@ function parseSseEvent(chunk) {
 
 function handleTaskStreamEvent(event, assistantMessage) {
   const data = event.data || {};
-  if (data.taskId) lastTaskId = data.taskId;
+  if (data.taskId) {
+    lastTaskId = data.taskId;
+    runningTaskId = data.taskId;
+  }
   if (event.name === 'task.started') {
     updateChatStatus(assistantMessage, '规划中...');
   } else if (event.name === 'step.started') {
@@ -512,6 +560,11 @@ function handleTaskStreamEvent(event, assistantMessage) {
     updateChatMeta(assistantMessage, statusText(data.status), formatTime(new Date()), elapsedText(assistantMessage));
     updateChatStatus(assistantMessage, '');
     setToolSectionCollapsed(assistantMessage, true);
+  } else if (event.name === 'task.cancelled') {
+    if (!assistantMessage.raw) updateChatContent(assistantMessage, data.message || '任务已取消。');
+    updateChatMeta(assistantMessage, '已停止', formatTime(new Date()), elapsedText(assistantMessage));
+    updateChatStatus(assistantMessage, '');
+    setToolSectionCollapsed(assistantMessage, true);
   } else if (event.name === 'error') {
     const message = data.message || '任务执行失败';
     updateChatContent(assistantMessage, message);
@@ -524,8 +577,9 @@ function handleTaskStreamEvent(event, assistantMessage) {
 function setRunning(value) {
   running = value;
   const button = document.getElementById('runButton');
-  button.disabled = value;
-  button.textContent = value ? '执行中...' : '运行';
+  button.disabled = false;
+  button.textContent = value ? '停止' : '运行';
+  button.classList.toggle('danger', value);
 }
 
 function appendAssistantMessage(text) {
@@ -608,13 +662,24 @@ function toolCallText(status, toolId) {
 }
 
 function toolCallSummary(status, data) {
+  const elapsed = toolElapsedText(data);
   if (status === 'completed') {
-    return `返回 ${data.outputLength || 0} 字符，内容可查看`;
+    const summary = `返回 ${data.outputLength || 0} 字符`;
+    return elapsed ? `${summary} · 耗时 ${elapsed}` : summary;
   }
   if (status === 'failed') {
-    return data.error || data.message || '查看错误';
+    const summary = data.error || data.message || '执行失败';
+    return elapsed ? `${summary} · 耗时 ${elapsed}` : summary;
   }
-  return '执行中';
+  return elapsed ? `执行中 · ${elapsed}` : '执行中';
+}
+
+function toolElapsedText(data) {
+  const raw = data && data.elapsedMs;
+  if (raw === null || raw === undefined || raw === '') return '';
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return '';
+  return `${Math.round(value)}毫秒`;
 }
 
 function updateChatMeta(item, status, time, elapsed) {
@@ -629,6 +694,7 @@ function statusText(status) {
   return {
     COMPLETED: '已完成',
     FAILED: '失败',
+    CANCELLED: '已停止',
     RUNNING: '执行中',
     PENDING: '未执行'
   }[status] || status || '';
