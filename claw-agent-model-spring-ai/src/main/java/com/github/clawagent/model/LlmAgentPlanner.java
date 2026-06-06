@@ -78,8 +78,17 @@ public class LlmAgentPlanner implements AgentPlanner {
         return context == null ? "" : context.trim();
     }
 
+    static String knowledgeContext(AgentTask task) {
+        String context = task.metadata().getOrDefault("knowledge.context", "");
+        return context == null ? "" : context.trim();
+    }
+
     static String userPromptWithSessionContext(AgentTask task) {
         StringBuilder prompt = new StringBuilder();
+        String knowledge = knowledgeContext(task);
+        if (!knowledge.isBlank()) {
+            prompt.append("知识库上下文：\n").append(knowledge).append("\n\n");
+        }
         String context = sessionContext(task);
         if (!context.isBlank()) {
             prompt.append("近期会话上下文：\n").append(context).append("\n\n");

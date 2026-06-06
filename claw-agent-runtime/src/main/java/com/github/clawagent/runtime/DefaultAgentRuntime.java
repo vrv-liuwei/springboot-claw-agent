@@ -15,6 +15,7 @@ import com.github.clawagent.core.TodoItem;
 import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.core.ToolDefinition;
 import com.github.clawagent.core.ToolResult;
+import com.github.clawagent.core.TokenUsageSummary;
 import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.AgentEventStore;
 import com.github.clawagent.spi.AgentPlan;
@@ -167,11 +168,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
         taskStore.saveTask(task);
         String traceId = UUID.randomUUID().toString();
         putMdc(traceId, task);
-        saveMessage(task.sessionId(), task.id(), "user", task.input());
+        saveMessage(task.sessionId(), task.id(), "user", task.input(), messageMetadata(task.metadata()));
         saveEvent(task, "INFO", "task.started", "任务开始", Map.of(
                 "input", task.input(),
                 "channelId", nullToEmpty(task.channelId()),
                 "userId", nullToEmpty(task.userId())));
+        saveApprovalEvent(task);
         emit("task.started", task.id(), request.input());
         log.info("agent task started input={}", preview(task.input()));
         log.debug("agent task input taskId={} input={}", task.id(), preview(task.input()));
@@ -641,7 +643,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
     public List<AgentMessage> getTaskMessages(String taskId, int limit) {
         // 先校验任务存在，避免前端传错 taskId 时返回空数组掩盖问题。
         getTask(taskId);
-        return messageStore.findMessagesByTask(taskId, limit);
+        return hydrateMessageMetadata(messageStore.findMessagesByTask(taskId, limit));
     }
 
     @Override
@@ -698,7 +700,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
     @Override
     public List<AgentMessage> getSessionMessages(String sessionId, int limit) {
         getSession(sessionId);
-        return messageStore.findMessages(sessionId, limit);
+        return hydrateMessageMetadata(messageStore.findMessages(sessionId, limit));
     }
 
     @Override
@@ -725,6 +727,20 @@ public class DefaultAgentRuntime implements AgentRuntime {
     public List<AgentEvent> getTaskEvents(String taskId, int limit) {
         getTask(taskId);
         return eventStore.findEventsByTask(taskId, limit);
+    }
+
+    @Override
+    public TokenUsageSummary getSessionTokenUsage(String sessionId, int limit) {
+        getSession(sessionId);
+        // Token usage 当前从 llm.call 事件汇总；limit 用来控制历史窗口，避免一次性扫太多审计记录。
+        return aggregateTokenUsage("session", sessionId, eventStore.findEventsBySession(sessionId, limit));
+    }
+
+    @Override
+    public TokenUsageSummary getTaskTokenUsage(String taskId) {
+        getTask(taskId);
+        // 单任务事件量有限，给足够大的窗口，避免多轮 ReAct 的 LLM 调用被截断。
+        return aggregateTokenUsage("task", taskId, eventStore.findEventsByTask(taskId, 1000));
     }
 
     private void emit(String type, String taskId, String message) {
@@ -780,9 +796,61 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private void saveMessage(String sessionId, String taskId, String role, String content) {
-        AgentMessage message = new AgentMessage(UUID.randomUUID().toString(), sessionId, taskId, role, content, java.util.Map.of());
+        saveMessage(sessionId, taskId, role, content, java.util.Map.of());
+    }
+
+    private void saveMessage(String sessionId, String taskId, String role, String content, Map<String, String> metadata) {
+        // 用户消息需要保留附件、知识库范围等轻量 metadata，刷新历史会话时才能恢复附件卡片。
+        AgentMessage message = new AgentMessage(UUID.randomUUID().toString(), sessionId, taskId, role, content, metadata);
         messageStore.saveMessage(message);
         log.debug("agent message saved sessionId={} taskId={} role={}", sessionId, taskId, role);
+    }
+
+    private Map<String, String> messageMetadata(Map<String, String> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> allowedKeys = Set.of(
+                "attachments",
+                "attachmentIds",
+                "attachmentStoragePaths",
+                "attachmentKnowledgeDocumentIds",
+                "knowledge.enabled",
+                "knowledge.documentIds",
+                "knowledge.scope",
+                "knowledge.intent");
+        Map<String, String> result = new LinkedHashMap<>();
+        for (String key : allowedKeys) {
+            String value = metadata.get(key);
+            if (value != null && !value.isBlank()) {
+                result.put(key, value);
+            }
+        }
+        return result;
+    }
+
+    private List<AgentMessage> hydrateMessageMetadata(List<AgentMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        return messages.stream()
+                .map(message -> {
+                    if (!"user".equals(message.role()) || message.metadata().containsKey("attachments") || message.taskId() == null) {
+                        return message;
+                    }
+                    return taskStore.findTask(message.taskId())
+                            .map(task -> {
+                                Map<String, String> metadata = messageMetadata(task.metadata());
+                                if (metadata.isEmpty()) {
+                                    return message;
+                                }
+                                // 兼容旧消息：早期 user message 未保存附件 metadata，读取历史时从 task metadata 轻量补齐。
+                                return new AgentMessage(message.id(), message.sessionId(), message.taskId(),
+                                        message.role(), message.content(), metadata, message.createdAt());
+                            })
+                            .orElse(message);
+                })
+                .toList();
     }
 
     private void attachSessionContext(AgentTask task) {
@@ -833,12 +901,52 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
     }
 
+    private TokenUsageSummary aggregateTokenUsage(String scopeType, String scopeId, List<AgentEvent> events) {
+        int callCount = 0;
+        int promptTokens = 0;
+        int completionTokens = 0;
+        int totalTokens = 0;
+        Map<String, TokenUsageSummary.Breakdown> byModel = new LinkedHashMap<>();
+        Map<String, TokenUsageSummary.Breakdown> byPhase = new LinkedHashMap<>();
+
+        for (AgentEvent event : events) {
+            if (!"llm.call".equals(event.type())) {
+                continue;
+            }
+            Map<String, String> details = event.details();
+            int prompt = parseInt(details.get("promptTokens"));
+            int completion = parseInt(details.get("completionTokens"));
+            int total = parseInt(details.get("totalTokens"));
+            callCount++;
+            promptTokens += prompt;
+            completionTokens += completion;
+            totalTokens += total;
+            // model/phase 维度用于管理台快速定位哪个阶段、哪个模型消耗较高。
+            byModel.computeIfAbsent(emptyToUnknown(details.get("model")), key -> new TokenUsageSummary.Breakdown())
+                    .add(prompt, completion, total);
+            byPhase.computeIfAbsent(emptyToUnknown(details.get("phase")), key -> new TokenUsageSummary.Breakdown())
+                    .add(prompt, completion, total);
+        }
+
+        return new TokenUsageSummary(scopeType, scopeId, callCount, promptTokens, completionTokens, totalTokens, byModel, byPhase);
+    }
+
     private void saveEvent(AgentTask task, String level, String type, String message, Map<String, String> details) {
         AgentRuntimeInterceptorContext context = interceptorContext("event", type, message, task);
         Map<String, String> interceptedDetails = applyBeforeEvent(context, details);
         AgentEvent event = new AgentEvent(UUID.randomUUID().toString(), task.sessionId(), task.id(), level, type, message, interceptedDetails);
         eventStore.saveEvent(event);
         applyAfterEvent(context, interceptedDetails);
+    }
+
+    private void saveApprovalEvent(AgentTask task) {
+        Map<String, String> details = new LinkedHashMap<>();
+        // 只记录审批相关白名单字段，避免把用户自定义 metadata 或密钥写入任务事件。
+        details.put("allowHighRiskTools", nullToEmpty(task.metadata().get("allowHighRiskTools")));
+        details.put("approvedToolIds", nullToEmpty(task.metadata().get("approvedToolIds")));
+        saveEvent(task, "DEBUG", "task.approval", "任务审批元数据", details);
+        log.debug("agent task approval metadata taskId={} allowHighRiskTools={} approvedToolIds={}",
+                task.id(), details.get("allowHighRiskTools"), details.get("approvedToolIds"));
     }
 
     private Map<String, String> toolEventDetails(AgentStep step, ToolCall call, AgentTool tool, String output, String error, long elapsedMs, long startedAt) {
@@ -995,6 +1103,21 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return "local";
         }
         return "custom";
+    }
+
+    private int parseInt(String value) {
+        if (value == null || value.isBlank()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private String emptyToUnknown(String value) {
+        return value == null || value.isBlank() ? "unknown" : value;
     }
 
     private String nullToEmpty(String value) {

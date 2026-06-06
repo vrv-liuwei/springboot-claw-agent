@@ -9,19 +9,50 @@ import java.util.Map;
  * 它记录工具链路、LLM 请求响应、token 用量和运行错误，便于按 session/task 查询完整执行过程。
  */
 public class AgentEvent {
+    /** 事件 ID。 */
     private final String id;
+    /** 事件所属会话 ID。 */
     private final String sessionId;
+    /** 事件所属任务 ID。 */
     private final String taskId;
+    /** 事件级别，例如 info、warn、error。 */
     private final String level;
+    /** 事件类型，例如 llm.call、tool.call、task.failed。 */
     private final String type;
+    /** 面向管理台展示的简短事件说明。 */
     private final String message;
+    /** 事件结构化详情，保存轻量字符串键值。 */
     private final Map<String, String> details;
+    /** 事件创建时间。 */
     private final Instant createdAt;
 
+    /**
+     * 创建当前时间的 AgentEvent。
+     *
+     * @param id 事件 ID。
+     * @param sessionId 事件所属会话 ID。
+     * @param taskId 事件所属任务 ID。
+     * @param level 事件级别。
+     * @param type 事件类型。
+     * @param message 事件说明。
+     * @param details 事件详情。
+     */
     public AgentEvent(String id, String sessionId, String taskId, String level, String type, String message, Map<String, String> details) {
         this(id, sessionId, taskId, level, type, message, details, Instant.now());
     }
 
+    /**
+     * 创建可恢复历史时间的 AgentEvent。
+     *
+     * @param id 事件 ID。
+     * @param sessionId 事件所属会话 ID。
+     * @param taskId 事件所属任务 ID。
+     * @param level 事件级别。
+     * @param type 事件类型。
+     * @param message 事件说明。
+     * @param details 事件详情。
+     * @param createdAt 事件创建时间。
+     */
     public AgentEvent(String id, String sessionId, String taskId, String level, String type, String message, Map<String, String> details, Instant createdAt) {
         this.id = id;
         this.sessionId = sessionId;

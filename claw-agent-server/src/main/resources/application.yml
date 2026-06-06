@@ -1,5 +1,15 @@
 server:
-  port: 17890
+  port: 17891
+
+spring:
+  config:
+    import:
+      - optional:file:.clawagent/config/clawagent.yml
+      - optional:file:../.clawagent/config/clawagent.yml
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 60MB
 
 logging:
   file:
@@ -14,14 +24,20 @@ logging:
 
 clawagent:
   enabled: true
+  path:
+    base: .clawagent
+  attachments:
+    storage: local
+    local:
+      path: ${clawagent.path.base}/attachments
   persistence:
     type: sqlite
     sqlite:
-      path: .clawagent/clawagent.db
+      path: ${clawagent.path.base}/clawagent.db
   memory:
     markdown:
       enabled: true
-      path: .clawagent/memory
+      path: ${clawagent.path.base}/memory
     vector:
       enabled: false
       provider: none
@@ -36,15 +52,21 @@ clawagent:
     enabled: true
     auto-connect: true
     path:
-      - .clawagent/mcp/mcp.json
+      - ${clawagent.path.base}/mcp/mcp.json
   skills:
     enabled: true
     path:
-      - .clawagent/skills
+      - ${clawagent.path.base}/skills
   runtime:
     max-react-rounds: 15
     sanitization:
       enabled: true
+  automation:
+    enabled: true
+    poll-interval-seconds: 5
+    due-batch-size: 10
+    default-channel-id: automation
+    default-user-id: automation
   toolkit:
     enabled: true
     tools:
@@ -57,7 +79,7 @@ clawagent:
       content:
         enabled: true
         env:
-          PATH: ".clawagent/artifacts"
+          PATH: "${clawagent.path.base}/artifacts"
           CHUNK_CHARS: "6000"
           SUMMARY_CHARS: "2400"
           READ_MAX_CHARS: "12000"
@@ -81,7 +103,7 @@ clawagent:
       execute:
         enabled: true
         env:
-          ALLOWED_ROOTS: "D:/workspace/codex"
+          ALLOWED_ROOTS: "${clawagent.path.base}/workspace/codex"
           TIMEOUT_MS: "30000"
           MAX_OUTPUT_CHARS: "20000"
       todo:

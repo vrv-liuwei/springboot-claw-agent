@@ -8,6 +8,7 @@ import com.github.clawagent.core.AgentSession;
 import com.github.clawagent.core.AgentStep;
 import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.core.SessionCreateRequest;
+import com.github.clawagent.core.TokenUsageSummary;
 
 import java.util.List;
 import java.util.Map;
@@ -46,4 +47,8 @@ public interface AgentRuntime {
     List<AgentEvent> getSessionEvents(String sessionId, int limit);
 
     List<AgentEvent> getTaskEvents(String taskId, int limit);
+
+    TokenUsageSummary getSessionTokenUsage(String sessionId, int limit);
+
+    TokenUsageSummary getTaskTokenUsage(String taskId);
 }

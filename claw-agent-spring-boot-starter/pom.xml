@@ -48,6 +48,11 @@
         </dependency>
         <dependency>
             <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-knowledge</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
             <artifactId>claw-agent-security</artifactId>
             <version>${project.version}</version>
         </dependency>

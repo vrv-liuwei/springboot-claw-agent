@@ -2,6 +2,11 @@
 target/
 bin/
 **/bin/
+.omx/
+node_modules/
+claw-agent-admin/dist/
+docs/
+
 scripts/
 .codegraph/
 .cursor/
@@ -23,6 +28,8 @@ logs/
 .clawagent/artifacts/
 .clawagent/memory/
 .clawagent/npm-cache
+.clawagent/knowledge
+.clawagent/attachments
 
 # Keep editable MCP and Skill definitions, but ignore transient legacy/runtime files
 .clawagent/mcp/servers.json

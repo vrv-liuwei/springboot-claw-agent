@@ -6,6 +6,12 @@ import java.util.Map;
 /**
  * ToolDefinition 是工具暴露给 Planner 和管理台的元数据。
  * riskLevel 用字符串保留扩展空间，当前约定 low / medium / high。
+ *
+ * @param id 工具唯一 ID。
+ * @param name 工具展示名称。
+ * @param description 工具能力描述，供 Planner 和管理台展示。
+ * @param riskLevel 工具风险等级，当前约定 low、medium、high。
+ * @param inputSchema 工具输入 JSON Schema。
  */
 public record ToolDefinition(String id, String name, String description, String riskLevel, Map<String, Object> inputSchema) {
     public ToolDefinition(String id, String name, String description, String riskLevel) {

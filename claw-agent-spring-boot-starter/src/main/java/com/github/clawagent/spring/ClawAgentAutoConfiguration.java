@@ -1,5 +1,6 @@
 package com.github.clawagent.spring;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +18,10 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.github.clawagent.knowledge.AttachmentService;
+import com.github.clawagent.knowledge.KnowledgeService;
+import com.github.clawagent.knowledge.LocalFileStorageProvider;
+import com.github.clawagent.knowledge.LocalKnowledgeProvider;
 import com.github.clawagent.mcp.FileMcpRegistry;
 import com.github.clawagent.mcp.McpRegistry;
 import com.github.clawagent.memory.markdown.MarkdownMemoryPromoter;
@@ -33,6 +38,7 @@ import com.github.clawagent.persistence.sqlite.SqliteTaskStore;
 import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.runtime.DefaultAgentRuntime;
 import com.github.clawagent.runtime.InMemoryAgentEventStore;
+import com.github.clawagent.runtime.InMemoryAutomationStore;
 import com.github.clawagent.runtime.InMemorySessionMessageStore;
 import com.github.clawagent.runtime.InMemorySessionStore;
 import com.github.clawagent.runtime.InMemoryTaskStore;
@@ -53,9 +59,12 @@ import com.github.clawagent.spi.AgentResponseGenerator;
 import com.github.clawagent.spi.AgentRuntimeInterceptor;
 import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.AgentToolRegistry;
+import com.github.clawagent.spi.AutomationStore;
 import com.github.clawagent.spi.ChatOptions;
 import com.github.clawagent.spi.EmbeddingClient;
 import com.github.clawagent.spi.EmbeddingOptions;
+import com.github.clawagent.spi.FileStorageProvider;
+import com.github.clawagent.spi.KnowledgeProvider;
 import com.github.clawagent.spi.MemoryPromoter;
 import com.github.clawagent.spi.ModelClient;
 import com.github.clawagent.spi.SessionMessageStore;
@@ -64,6 +73,7 @@ import com.github.clawagent.spi.SessionSummarizer;
 import com.github.clawagent.spi.TaskStore;
 import com.github.clawagent.spi.TodoStore;
 import com.github.clawagent.spi.ToolExecutionGuard;
+import com.github.clawagent.spring.automation.AutomationSchedulerService;
 import com.github.clawagent.toolkit.ToolkitProperties;
 import com.github.clawagent.toolkit.ToolkitRegistry;
 import com.github.clawagent.toolkit.ToolkitToolProperties;
@@ -113,6 +123,39 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "clawagent.knowledge", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public KnowledgeProvider localKnowledgeProvider(
+            ClawAgentProperties properties,
+            EmbeddingClient embeddingClient,
+            EmbeddingOptions embeddingOptions) {
+        return new LocalKnowledgeProvider(
+                resolveRuntimePath(properties.getPersistence().getSqlite().getPath()),
+                resolveRuntimePath(properties.getKnowledge().getFilesPath()),
+                resolveRuntimePath(properties.getKnowledge().getVectorsPath()),
+                embeddingClient,
+                embeddingOptions);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public KnowledgeService knowledgeService(ClawAgentProperties properties, List<KnowledgeProvider> providers) {
+        return new KnowledgeService(providers, properties.getKnowledge().getProvider());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public FileStorageProvider fileStorageProvider(ClawAgentProperties properties) {
+        return new LocalFileStorageProvider(resolveRuntimePath(properties.getAttachments().getLocalPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public AttachmentService attachmentService(FileStorageProvider fileStorageProvider, KnowledgeService knowledgeService) {
+        return new AttachmentService(fileStorageProvider, knowledgeService);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public AgentPlanner agentPlanner(
             ClawAgentProperties properties,
             ModelClient modelClient,
@@ -155,7 +198,7 @@ public class ClawAgentAutoConfiguration {
     @ConditionalOnMissingBean
     public TaskStore taskStore(ClawAgentProperties properties) {
         if ("sqlite".equalsIgnoreCase(properties.getPersistence().getType())) {
-            return new SqliteTaskStore(Path.of(properties.getPersistence().getSqlite().getPath()));
+            return new SqliteTaskStore(resolveRuntimePath(properties.getPersistence().getSqlite().getPath()));
         }
         return new InMemoryTaskStore();
     }
@@ -198,8 +241,17 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public AutomationStore automationStore(TaskStore taskStore) {
+        if (taskStore instanceof AutomationStore automationStore) {
+            return automationStore;
+        }
+        return new InMemoryAutomationStore();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public MarkdownMemoryRepository markdownMemoryRepository(ClawAgentProperties properties) {
-        MarkdownMemoryRepository repository = new MarkdownMemoryRepository(Path.of(properties.getMemory().getMarkdown().getPath()));
+        MarkdownMemoryRepository repository = new MarkdownMemoryRepository(resolveRuntimePath(properties.getMemory().getMarkdown().getPath()));
         repository.initialize();
         return repository;
     }
@@ -232,7 +284,7 @@ public class ClawAgentAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public McpRegistry mcpRegistry(AgentToolRegistry toolRegistry, ClawAgentProperties properties) {
-        return new FileMcpRegistry(toolRegistry, properties.getMcp().getPath().stream().map(Path::of).toList());
+        return new FileMcpRegistry(toolRegistry, resolveRuntimePaths(properties.getMcp().getPath()));
     }
 
     @Bean
@@ -256,7 +308,7 @@ public class ClawAgentAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public SkillRegistry skillRegistry(ClawAgentProperties properties, AgentToolRegistry toolRegistry) {
-        return new FileSkillRegistry(properties.getSkills().getPath().stream().map(Path::of).toList(), toolRegistry);
+        return new FileSkillRegistry(resolveRuntimePaths(properties.getSkills().getPath()), toolRegistry);
     }
 
     @Bean
@@ -322,6 +374,15 @@ public class ClawAgentAutoConfiguration {
                 runtimeInterceptors);
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public AutomationSchedulerService automationSchedulerService(
+            @Qualifier("automationStore") AutomationStore automationStore,
+            AgentRuntime agentRuntime,
+            ClawAgentProperties properties) {
+        return new AutomationSchedulerService(automationStore, agentRuntime, properties);
+    }
+
     private ClawAgentProperties.ModelConfig defaultModelConfig(ClawAgentProperties properties) {
         String defaultModelId = properties.getModel().getDefault();
         return Optional.ofNullable(properties.getModels().get(defaultModelId))
@@ -360,6 +421,37 @@ public class ClawAgentAutoConfiguration {
         }
         target.setTools(tools);
         return target;
+    }
+
+    private List<Path> resolveRuntimePaths(List<String> paths) {
+        return paths.stream().map(this::resolveRuntimePath).toList();
+    }
+
+    private Path resolveRuntimePath(String configuredPath) {
+        Path path = Path.of(configuredPath);
+        if (path.isAbsolute()) {
+            return path.normalize();
+        }
+
+        Path userDir = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        Path directPath = userDir.resolve(path).normalize();
+        if (Files.exists(directPath)) {
+            return directPath;
+        }
+
+        // 业务数据目录默认放在项目根目录；从 server 子模块启动时，向上查找最近的 .clawagent 根目录。
+        if (path.getNameCount() > 0 && ".clawagent".equals(path.getName(0).toString())) {
+            Path cursor = userDir;
+            while (cursor != null) {
+                Path base = cursor.resolve(".clawagent").normalize();
+                if (Files.exists(base)) {
+                    return cursor.resolve(path).normalize();
+                }
+                cursor = cursor.getParent();
+            }
+        }
+
+        return directPath;
     }
 
     private Object findSpringAiChatClientBuilder(ApplicationContext applicationContext) {

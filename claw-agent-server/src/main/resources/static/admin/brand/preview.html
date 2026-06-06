@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClawAgent Logo Preview</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 32px;
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+        background: #f6f7fb;
+        color: #111827;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: 20px;
+        max-width: 920px;
+      }
+      .card {
+        background: white;
+        border: 1px solid #dfe5ee;
+        border-radius: 14px;
+        padding: 22px;
+      }
+      .icons {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin: 18px 0;
+      }
+      .small {
+        width: 32px;
+        height: 32px;
+      }
+      .large {
+        width: 96px;
+        height: 96px;
+      }
+      h1 {
+        margin: 0 0 20px;
+        font-size: 24px;
+      }
+      h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+      p {
+        color: #5f6b7a;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ClawAgent Logo 候选</h1>
+    <div class="grid">
+      <section class="card">
+        <h2>A. C + Agent 节点</h2>
+        <div class="icons">
+          <img class="large" src="./clawagent-option-a.svg" alt="option a" />
+          <img class="small" src="./clawagent-option-a.svg" alt="option a small" />
+        </div>
+        <p>更像正式产品标识，当前已作为默认方向。</p>
+      </section>
+      <section class="card">
+        <h2>B. 暗色爪痕</h2>
+        <div class="icons">
+          <img class="large" src="./clawagent-option-b.svg" alt="option b" />
+          <img class="small" src="./clawagent-option-b.svg" alt="option b small" />
+        </div>
+        <p>更偏工程工具，适合深色控制台。</p>
+      </section>
+      <section class="card">
+        <h2>C. 六边形 Agent</h2>
+        <div class="icons">
+          <img class="large" src="./clawagent-option-c.svg" alt="option c" />
+          <img class="small" src="./clawagent-option-c.svg" alt="option c small" />
+        </div>
+        <p>更偏平台/节点/网关含义。</p>
+      </section>
+    </div>
+  </body>
+</html>

@@ -23,6 +23,7 @@
         <module>claw-agent-mcp</module>
         <module>claw-agent-skill</module>
         <module>claw-agent-toolkit</module>
+        <module>claw-agent-knowledge</module>
         <module>claw-agent-observability</module>
         <module>claw-agent-security</module>
         <module>claw-agent-spring-boot-starter</module>
@@ -36,6 +37,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <spring.boot.version>3.2.5</spring.boot.version>
         <sqlite.jdbc.version>3.45.3.0</sqlite.jdbc.version>
+        <jvector.version>4.0.0-rc.8</jvector.version>
         <hutool.version>5.8.36</hutool.version>
         <jsoup.version>1.17.2</jsoup.version>
         <commons-exec.version>1.4.0</commons-exec.version>

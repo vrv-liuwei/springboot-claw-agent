@@ -9,22 +9,52 @@ import java.util.Map;
  * 所有执行步骤、恢复、审批和审计都以 taskId 作为关联键。
  */
 public class AgentTask {
+    /** 任务 ID。 */
     private final String id;
+    /** 用户原始输入。 */
     private final String input;
+    /** 任务所属会话 ID。 */
     private final String sessionId;
+    /** 任务来源渠道，例如 webui、automation、api。 */
     private final String channelId;
+    /** 任务所属用户 ID。 */
     private final String userId;
+    /** 任务轻量扩展元信息。 */
     private final Map<String, String> metadata;
+    /** 任务创建时间。 */
     private final Instant createdAt;
+    /** 任务最后更新时间。 */
     private Instant updatedAt;
+    /** 任务状态。 */
     private TaskStatus status;
+    /** 任务最终回答。 */
     private String finalAnswer;
 
+    /**
+     * 从请求创建新任务。
+     *
+     * @param id 任务 ID。
+     * @param request Agent 请求对象。
+     */
     public AgentTask(String id, AgentRequest request) {
         this(id, request.input(), request.sessionId(), request.channelId(), request.userId(), request.metadata(),
                 Instant.now(), null, TaskStatus.PENDING, null);
     }
 
+    /**
+     * 创建或恢复任务。
+     *
+     * @param id 任务 ID。
+     * @param input 用户原始输入。
+     * @param sessionId 任务所属会话 ID。
+     * @param channelId 任务来源渠道。
+     * @param userId 任务所属用户 ID。
+     * @param metadata 任务轻量扩展元信息。
+     * @param createdAt 任务创建时间。
+     * @param updatedAt 任务最后更新时间。
+     * @param status 任务状态。
+     * @param finalAnswer 任务最终回答。
+     */
     public AgentTask(String id, String input, String sessionId, String channelId, String userId, Map<String, String> metadata,
                      Instant createdAt, Instant updatedAt, TaskStatus status, String finalAnswer) {
         this.id = id;

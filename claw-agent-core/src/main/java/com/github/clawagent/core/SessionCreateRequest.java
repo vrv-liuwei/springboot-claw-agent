@@ -6,6 +6,11 @@ import java.util.Map;
 /**
  * 创建会话的请求对象。
  * 嵌入式业务也可以直接复用该对象创建受控 session。
+ *
+ * @param title 会话标题。
+ * @param channelId 会话来源渠道，例如 webui、automation、api。
+ * @param userId 会话所属用户 ID。
+ * @param metadata 会话轻量扩展元信息。
  */
 public record SessionCreateRequest(String title, String channelId, String userId, Map<String, String> metadata) {
     public SessionCreateRequest {

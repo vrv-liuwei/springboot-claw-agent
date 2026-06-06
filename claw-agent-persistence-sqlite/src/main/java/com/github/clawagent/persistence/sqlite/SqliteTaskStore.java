@@ -6,12 +6,18 @@ import com.github.clawagent.core.AgentMessage;
 import com.github.clawagent.core.AgentSession;
 import com.github.clawagent.core.AgentStep;
 import com.github.clawagent.core.AgentTask;
+import com.github.clawagent.core.AutomationDefinition;
+import com.github.clawagent.core.AutomationRun;
+import com.github.clawagent.core.AutomationRunStatus;
+import com.github.clawagent.core.AutomationScheduleType;
+import com.github.clawagent.core.AutomationStatus;
 import com.github.clawagent.core.StepStatus;
 import com.github.clawagent.core.StepType;
 import com.github.clawagent.core.TaskStatus;
 import com.github.clawagent.core.TodoItem;
 import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.AgentEventStore;
+import com.github.clawagent.spi.AutomationStore;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
 import com.github.clawagent.spi.TaskStore;
@@ -38,7 +44,7 @@ import java.util.Properties;
  * SQLite 任务存储用于 ClawAgent 单机默认模式。
  * 这里直接用 JDBC，避免把 core/runtime 绑定到 Spring JDBC 或 JPA。
  */
-public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageStore, AgentEventStore, TodoStore, AgentDataCleaner {
+public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageStore, AgentEventStore, TodoStore, AutomationStore, AgentDataCleaner {
     private final String jdbcUrl;
 
     public SqliteTaskStore(Path databasePath) {
@@ -72,6 +78,12 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             statement.executeUpdate("create table if not exists agent_todo_item (" +
                     "id text primary key, session_id text, task_id text, item_order integer, title text, description text, " +
                     "status text, metadata text, created_at text, updated_at text)");
+            statement.executeUpdate("create table if not exists agent_automation (" +
+                    "id text primary key, name text, prompt text, session_id text, channel_id text, user_id text, " +
+                    "schedule_type text, cron_expression text, interval_seconds integer, timezone text, " +
+                    "next_run_at text, last_run_at text, status text, metadata text, created_at text, updated_at text)");
+            statement.executeUpdate("create table if not exists agent_automation_run (" +
+                    "id text primary key, automation_id text, task_id text, status text, started_at text, finished_at text, error text)");
         } catch (SQLException e) {
             throw new IllegalStateException("初始化 SQLite 表结构失败", e);
         }
@@ -187,7 +199,8 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                             rs.getString("task_id"),
                             rs.getString("role"),
                             rs.getString("content"),
-                            parseMap(rs.getString("metadata"))));
+                            parseMap(rs.getString("metadata")),
+                            Instant.parse(rs.getString("created_at"))));
                 }
                 return messages;
             }
@@ -212,7 +225,8 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                             rs.getString("task_id"),
                             rs.getString("role"),
                             rs.getString("content"),
-                            parseMap(rs.getString("metadata"))));
+                            parseMap(rs.getString("metadata")),
+                            Instant.parse(rs.getString("created_at"))));
                 }
                 return messages;
             }
@@ -420,6 +434,106 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         return updated;
     }
 
+    @Override
+    public void saveAutomation(AutomationDefinition automation) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("insert or replace into agent_automation values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            bindAutomation(ps, automation);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("保存自动化任务失败：" + automation.id(), e);
+        }
+    }
+
+    @Override
+    public Optional<AutomationDefinition> findAutomation(String id) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_automation where id = ?")) {
+            ps.setString(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(readAutomation(rs));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询自动化任务失败：" + id, e);
+        }
+    }
+
+    @Override
+    public List<AutomationDefinition> listAutomations(int limit) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_automation order by updated_at desc limit ?")) {
+            ps.setInt(1, Math.max(1, limit));
+            return readAutomations(ps);
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询自动化任务列表失败", e);
+        }
+    }
+
+    @Override
+    public List<AutomationDefinition> listDueAutomations(Instant now, int limit) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_automation where status = ? and next_run_at is not null and next_run_at <= ? order by next_run_at asc limit ?")) {
+            ps.setString(1, AutomationStatus.ENABLED.name());
+            ps.setString(2, now.toString());
+            ps.setInt(3, Math.max(1, limit));
+            return readAutomations(ps);
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询到期自动化任务失败", e);
+        }
+    }
+
+    @Override
+    public void deleteAutomation(String id) {
+        try (Connection connection = connect()) {
+            try (PreparedStatement ps = connection.prepareStatement("delete from agent_automation_run where automation_id = ?")) {
+                ps.setString(1, id);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = connection.prepareStatement("delete from agent_automation where id = ?")) {
+                ps.setString(1, id);
+                ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("删除自动化任务失败：" + id, e);
+        }
+    }
+
+    @Override
+    public void saveAutomationRun(AutomationRun run) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("insert or replace into agent_automation_run values (?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, run.id());
+            ps.setString(2, run.automationId());
+            ps.setString(3, run.taskId());
+            ps.setString(4, run.status().name());
+            ps.setString(5, run.startedAt() == null ? null : run.startedAt().toString());
+            ps.setString(6, run.finishedAt() == null ? null : run.finishedAt().toString());
+            ps.setString(7, run.error());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("保存自动化运行记录失败：" + run.id(), e);
+        }
+    }
+
+    @Override
+    public List<AutomationRun> listAutomationRuns(String automationId, int limit) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_automation_run where automation_id = ? order by started_at desc limit ?")) {
+            ps.setString(1, automationId);
+            ps.setInt(2, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<AutomationRun> result = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    result.add(readAutomationRun(rs));
+                }
+                return result;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询自动化运行记录失败：" + automationId, e);
+        }
+    }
+
     private Connection connect() throws SQLException {
         return DriverManager.getConnection(jdbcUrl);
     }
@@ -439,6 +553,16 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                         Instant.parse(rs.getString("created_at"))));
             }
             return events;
+        }
+    }
+
+    private List<AutomationDefinition> readAutomations(PreparedStatement ps) throws SQLException {
+        try (ResultSet rs = ps.executeQuery()) {
+            java.util.ArrayList<AutomationDefinition> result = new java.util.ArrayList<>();
+            while (rs.next()) {
+                result.add(readAutomation(rs));
+            }
+            return result;
         }
     }
 
@@ -464,6 +588,29 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         ps.setString(7, session.createdAt().toString());
         ps.setString(8, session.updatedAt().toString());
         ps.setString(9, session.lastActiveAt().toString());
+    }
+
+    private void bindAutomation(PreparedStatement ps, AutomationDefinition automation) throws SQLException {
+        ps.setString(1, automation.id());
+        ps.setString(2, automation.name());
+        ps.setString(3, automation.prompt());
+        ps.setString(4, automation.sessionId());
+        ps.setString(5, automation.channelId());
+        ps.setString(6, automation.userId());
+        ps.setString(7, automation.scheduleType().name());
+        ps.setString(8, automation.cronExpression());
+        if (automation.intervalSeconds() == null) {
+            ps.setObject(9, null);
+        } else {
+            ps.setLong(9, automation.intervalSeconds());
+        }
+        ps.setString(10, automation.timezone());
+        ps.setString(11, automation.nextRunAt() == null ? null : automation.nextRunAt().toString());
+        ps.setString(12, automation.lastRunAt() == null ? null : automation.lastRunAt().toString());
+        ps.setString(13, automation.status().name());
+        ps.setString(14, serializeMap(automation.metadata()));
+        ps.setString(15, automation.createdAt().toString());
+        ps.setString(16, automation.updatedAt().toString());
     }
 
     private AgentTask readTask(ResultSet rs) throws SQLException {
@@ -505,6 +652,38 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                 parseMap(rs.getString("metadata")),
                 Instant.parse(rs.getString("created_at")),
                 Instant.parse(rs.getString("updated_at")));
+    }
+
+    private AutomationDefinition readAutomation(ResultSet rs) throws SQLException {
+        long interval = rs.getLong("interval_seconds");
+        return new AutomationDefinition(
+                rs.getString("id"),
+                rs.getString("name"),
+                rs.getString("prompt"),
+                rs.getString("session_id"),
+                rs.getString("channel_id"),
+                rs.getString("user_id"),
+                AutomationScheduleType.valueOf(rs.getString("schedule_type")),
+                rs.getString("cron_expression"),
+                rs.wasNull() ? null : interval,
+                rs.getString("timezone"),
+                parseInstant(rs.getString("next_run_at")),
+                parseInstant(rs.getString("last_run_at")),
+                AutomationStatus.valueOf(rs.getString("status")),
+                parseMap(rs.getString("metadata")),
+                parseInstant(rs.getString("created_at")),
+                parseInstant(rs.getString("updated_at")));
+    }
+
+    private AutomationRun readAutomationRun(ResultSet rs) throws SQLException {
+        return new AutomationRun(
+                rs.getString("id"),
+                rs.getString("automation_id"),
+                rs.getString("task_id"),
+                AutomationRunStatus.valueOf(rs.getString("status")),
+                parseInstant(rs.getString("started_at")),
+                parseInstant(rs.getString("finished_at")),
+                rs.getString("error"));
     }
 
     private String serializeMap(Map<String, String> input) {

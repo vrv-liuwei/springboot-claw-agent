@@ -19,6 +19,9 @@ public class ClawAgentProperties {
     private final Mcp mcp = new Mcp();
     private final Skills skills = new Skills();
     private final Toolkit toolkit = new Toolkit();
+    private final Knowledge knowledge = new Knowledge();
+    private final Attachments attachments = new Attachments();
+    private final Automation automation = new Automation();
     private final Runtime runtime = new Runtime();
     private final Model model = new Model();
     private final Map<String, ModelConfig> models = new LinkedHashMap<>();
@@ -49,6 +52,18 @@ public class ClawAgentProperties {
 
     public Toolkit getToolkit() {
         return toolkit;
+    }
+
+    public Knowledge getKnowledge() {
+        return knowledge;
+    }
+
+    public Attachments getAttachments() {
+        return attachments;
+    }
+
+    public Automation getAutomation() {
+        return automation;
     }
 
     public Runtime getRuntime() {
@@ -118,6 +133,48 @@ public class ClawAgentProperties {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public Map<String, Tool> getTools() { return tools; }
         public void setTools(Map<String, Tool> tools) { this.tools = tools == null ? new LinkedHashMap<>() : new LinkedHashMap<>(tools); }
+    }
+
+    public static class Knowledge {
+        private boolean enabled = true;
+        private String provider = "local";
+        private String filesPath = ".clawagent/knowledge/files";
+        private String vectorsPath = ".clawagent/knowledge/vectors";
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getProvider() { return provider; }
+        public void setProvider(String provider) { this.provider = provider; }
+        public String getFilesPath() { return filesPath; }
+        public void setFilesPath(String filesPath) { this.filesPath = filesPath; }
+        public String getVectorsPath() { return vectorsPath; }
+        public void setVectorsPath(String vectorsPath) { this.vectorsPath = vectorsPath; }
+    }
+
+    public static class Attachments {
+        private String localPath = ".clawagent/attachments";
+
+        public String getLocalPath() { return localPath; }
+        public void setLocalPath(String localPath) { this.localPath = localPath; }
+    }
+
+    public static class Automation {
+        private boolean enabled = true;
+        private int pollIntervalSeconds = 5;
+        private int dueBatchSize = 10;
+        private String defaultChannelId = "automation";
+        private String defaultUserId = "automation";
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public int getPollIntervalSeconds() { return pollIntervalSeconds; }
+        public void setPollIntervalSeconds(int pollIntervalSeconds) { this.pollIntervalSeconds = pollIntervalSeconds; }
+        public int getDueBatchSize() { return dueBatchSize; }
+        public void setDueBatchSize(int dueBatchSize) { this.dueBatchSize = dueBatchSize; }
+        public String getDefaultChannelId() { return defaultChannelId; }
+        public void setDefaultChannelId(String defaultChannelId) { this.defaultChannelId = defaultChannelId; }
+        public String getDefaultUserId() { return defaultUserId; }
+        public void setDefaultUserId(String defaultUserId) { this.defaultUserId = defaultUserId; }
     }
 
     public static class Runtime {

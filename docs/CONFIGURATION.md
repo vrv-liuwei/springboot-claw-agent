@@ -15,6 +15,33 @@ clawagent:
 
 如果不写配置，也会使用 `claw-agent-server/src/main/resources/application.yml` 中的默认值。
 
+## 本地覆盖配置
+
+服务启动时会通过 Spring Boot 标准 `spring.config.import` 额外读取本地覆盖 YAML：
+
+```yaml
+spring:
+  config:
+    import:
+      - optional:file:.clawagent/config/clawagent.yml
+      - optional:file:../.clawagent/config/clawagent.yml
+```
+
+这样从仓库根目录启动和从 `claw-agent-server` 子模块启动都能复用同一个仓库级 `.clawagent` 目录。
+
+React 管理台的“配置”页面会把模型配置保存到：
+
+```text
+.clawagent/config/clawagent.yml
+```
+
+注意：
+
+- 页面只保存本地覆盖 YAML，不直接改打包内置的 `application.yml`。
+- 模型客户端、Planner 等 Bean 不做热替换；保存后需要重启服务才会完全生效。
+- API Key 只保存环境变量名，例如 `DEEPSEEK_API_KEY`，不要把真实密钥写进 YAML。
+- 如果从子模块启动，后端会优先查找上级仓库里的 `.clawagent`，避免误写 `claw-agent-server/.clawagent`。
+
 ## 当前已生效配置
 
 ```yaml
@@ -54,6 +81,12 @@ clawagent:
     max-react-rounds: 15
     sanitization:
       enabled: true
+  automation:
+    enabled: true
+    poll-interval-seconds: 5
+    due-batch-size: 10
+    default-channel-id: automation
+    default-user-id: automation
   toolkit:
     enabled: true
     tools:
@@ -123,6 +156,11 @@ clawagent:
 - `clawagent.skills.path`：Skill 本地安装目录列表，启动时默认扫描并加载每个目录下的 Skill。
 - `clawagent.runtime.max-react-rounds`：ReAct Planner 单个任务允许的最大规划/工具执行轮次，防止错误循环无限消耗 token。
 - `clawagent.runtime.sanitization.enabled`：是否启用默认敏感数据脱敏拦截器，默认 `true`。
+- `clawagent.automation.enabled`：是否启用智能体定时任务调度器，默认 `true`。关闭后仍可保存配置，但不会自动触发。
+- `clawagent.automation.poll-interval-seconds`：调度器扫描到期任务的间隔，默认 `5` 秒。
+- `clawagent.automation.due-batch-size`：每次最多拉取多少个到期自动化任务，默认 `10`。
+- `clawagent.automation.default-channel-id`：自动化触发 Agent 请求时的默认 channel，默认 `automation`。
+- `clawagent.automation.default-user-id`：自动化触发 Agent 请求时的默认 user，默认 `automation`。
 - `clawagent.toolkit.enabled`：是否启用内置系统工具集合，默认 `true`。
 - `clawagent.toolkit.tools.<toolId>.enabled`：是否启用某个内置工具，未配置时默认启用。
 - `clawagent.toolkit.tools.<toolId>.env`：工具私有参数，具体含义由对应 `AgentTool` 自己解析。

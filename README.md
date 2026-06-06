@@ -153,6 +153,7 @@ Invoke-WebRequest `
 默认访问：
 
 - Web Console: `http://localhost:17890/console/index.html`
+- Admin Console: `http://localhost:17890/admin/index.html`
 - Health API: `http://localhost:17890/api/v1/health`
 - Assistant API: `http://localhost:17890/api/v1/assistant?query=北京天气和计算2+3*4`
 - Session API: `http://localhost:17890/api/v1/sessions`
@@ -437,6 +438,50 @@ Spring Boot 自动配置模块。
 
 业务应用引入这个 starter 后，可以把 ClawAgent 当成内部工具能力使用。
 
+### `claw-agent-admin`
+
+React + Vite 正式管理台源码模块。
+
+主要包含：
+
+- React 管理台源码：`src/App.tsx`、`src/api.ts`、`src/styles.css`。
+- 管理台构建配置：`vite.config.ts`。
+- 开发代理：本地 `npm run dev` 时把 `/api` 代理到 `http://localhost:17890`。
+- 构建产物输出：`claw-agent-server/src/main/resources/static/admin`，由 Spring Boot 直接通过 `/admin/index.html` 访问。
+
+当前管理台采用运维控制台布局，不复用原生 Web Console。已提供：
+
+- 总览指标：会话、工具、MCP、Skill、Token、异常任务。
+- 会话管理：历史会话列表，任务、消息、日志、Token 详情。
+- 工具能力：工具 ID、风险等级、描述。
+- MCP Server：传输方式、连接状态、Endpoint/Command、工具数。
+- Skills：Skill ID、启用状态、工具数、描述，并支持启用/禁用已安装 Skill。
+- Token 页面：当前会话 Token usage 原始聚合数据。
+- 配置页面：查看仓库级 `.clawagent` 配置根，保存模型配置到 `.clawagent/config/clawagent.yml`。保存后需要重启服务生效，API Key 只保存环境变量名。
+
+本地开发：
+
+```powershell
+cd D:\workspace\codex\springboot-claw-agent\claw-agent-admin
+npm install
+npm run dev
+```
+
+构建到 Spring Boot 静态目录：
+
+```powershell
+cd D:\workspace\codex\springboot-claw-agent\claw-agent-admin
+npm run build
+```
+
+构建后访问：
+
+```text
+http://localhost:17890/admin/index.html
+```
+
+原生聊天调试页面 `/console/index.html` 保留，用于快速测试任务流式交互。
+
 ### `claw-agent-server`
 
 独立运行版 Spring Boot 服务。
@@ -454,6 +499,7 @@ Spring Boot 自动配置模块。
   - MCP
   - Skill
 - 静态 Web Console：`/console/index.html`。
+- React Admin Console 构建产物：`/admin/index.html`。
 - 默认 `application.yml`。
 
 适合像 OpenClaw 一样本地直接启动和配置。
@@ -557,7 +603,11 @@ Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions?limit=20'
 Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}'
 Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/tasks?limit=20'
 Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/messages?limit=100'
+Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/token-usage?limit=1000'
+Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/tasks/{taskId}/token-usage'
 ```
+
+Token usage 聚合来自任务事件中的 `llm.call` 记录，返回 `callCount`、`promptTokens`、`completionTokens`、`totalTokens`，并按 `model` 和 `phase` 做分组。当前只统计 token，费用换算规则属于后续观测增强。
 
 生成并保存会话摘要：
 
@@ -879,6 +929,7 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成 Spring Boot starter 自动配置。
 - 已完成独立 server，默认端口 `17890`。
 - 已完成最小 Web Console。
+- 已新增 React + Vite 管理台源码模块 `claw-agent-admin`，构建后访问 `/admin/index.html`。
 - 已完成内置工具：天气、时间、WebFetch、WebSearch、Filesystem。
 - 已完成 DeepSeek / OpenAI 兼容真实模型调用。
 - 已完成 Spring AI ChatClient 可选适配，默认不强制绑定 Spring AI 依赖。
@@ -889,21 +940,27 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成基础 Session 表、SessionStore 和 Session API。
 - 已完成会话消息表和会话消息查询 API。
 - 已完成会话摘要生成 API。
+- 已完成会话/任务 Token usage 聚合查询 API。
 - 已完成通用 MCP 注册表、STDIO 连接、HTTP/streamableHttp 基础连接、SSE endpoint/message 连接、MCP tools/resources/prompts 管理、resource read、prompt get、MCP Server 管理 API 和本地配置保存。
 - 已完成 Skill 本地安装、启用、禁用、列表查询、本地 manifest 保存、工具自动注册和 document/http/script/java 执行器。
 - 已完成工具执行前置拦截点 `ToolExecutionGuard`，并提供默认高危工具审批校验。
 - 已完成 Runtime 拦截器 SPI `AgentRuntimeInterceptor`，默认提供敏感数据脱敏拦截器，可通过 Spring Bean 扩展。
 - 已完成 EmbeddingClient SPI 和 OpenAI 兼容 Embeddings 客户端。
 - 已完成内置 filesystem 工具：读取文本、列目录、搜索文件、文件信息、受控写入。
+- 已新增 React + Vite 管理台入口 `/admin/index.html`，原 `/console/index.html` 保留。
+- 已完成智能体定时任务与自动化基础能力：创建、编辑、启停、固定间隔、Cron、单次执行、立即运行、运行历史和管理台页面。
 
 ## 未完成能力
 
-- Markdown 长期记忆更复杂的去重、合并和质量评估策略。
+- 智能体定时任务增强：失败重试、退避策略、运行历史中的 Token/工具链路聚合仍需补充。
+- 短期记忆和长期记忆需要单独设计：当前会话上下文、任务摘要、工具观察、Markdown 长期记忆、质量治理和管理台页面。
+- React + Vite 正式管理台持续优化：后台新增的业务能力必须同步补充管理台页面；原 `/console/index.html` 暂时保留。
+- Shell/cmd/PowerShell 工具：第一阶段查询类命令不审批，删除/覆盖等破坏性操作必须用户确认；`claw-agent-worker` 隔离执行后续再做。
+- Skill 目录风格和加载逻辑调整：每个 Skill 独立保存到 `.clawagent/skills/<skillId>/`，完整加载 `manifest.json`、`SKILL.md`、`scripts/`、`assets/`、`references/`、`lib/` 等资源。
 - MCP 断线重连、超时恢复、会话关闭等健壮性增强。
 - MCP `autoApprove` 到正式审批策略的接入。
-- 通道 Channel、Auth、设备配对。
-- 完整通道级 ToolGuard、审批、限流、Prompt Injection Defense。
-- React + Vite 正式管理台。
+- Prompt Injection Defense、审批、限流、PermissionPolicy 等安全治理。
+- 通道 Channel、Auth、设备配对等治理项。
 - MySQL / PostgreSQL 持久化实现。
 - VectorStore 实现。
 - 分布式部署和 Redis 同步。

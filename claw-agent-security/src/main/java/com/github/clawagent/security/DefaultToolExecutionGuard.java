@@ -5,6 +5,7 @@ import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.ToolExecutionGuard;
 
+import java.util.Arrays;
 import java.util.Locale;
 
 /**
@@ -19,12 +20,41 @@ public class DefaultToolExecutionGuard implements ToolExecutionGuard {
             return;
         }
         String approval = task.metadata().get("approvedToolIds");
-        boolean explicitlyApproved = approval != null && approval.toLowerCase(Locale.ROOT).contains(call.toolId().toLowerCase(Locale.ROOT));
-        boolean allowAllHighRisk = "true".equalsIgnoreCase(task.metadata().get("allowHighRiskTools"));
+        // 控制台可以选择“允许所有高危工具”，也可以只传入本次显式批准的工具 ID。
+        boolean explicitlyApproved = containsApprovedTool(approval, call.toolId());
+        boolean allowAllHighRisk = isTruthy(task.metadata().get("allowHighRiskTools"));
         if (explicitlyApproved || allowAllHighRisk) {
             // 高危工具只有在请求元数据明确授权时才允许执行。
             return;
         }
         throw new IllegalStateException("高危工具未审批，已阻止执行：" + call.toolId());
+    }
+
+    private boolean isTruthy(String value) {
+        if (value == null) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return "true".equals(normalized)
+                || "1".equals(normalized)
+                || "yes".equals(normalized)
+                || "y".equals(normalized)
+                || "on".equals(normalized);
+    }
+
+    private boolean containsApprovedTool(String approval, String toolId) {
+        if (approval == null || approval.isBlank() || toolId == null || toolId.isBlank()) {
+            return false;
+        }
+        String expected = toolId.trim().toLowerCase(Locale.ROOT);
+        // approvedToolIds 可能来自 CSV、JSON 数组或空白分隔字符串，这里统一拆成精确 ID 再匹配。
+        String normalized = approval
+                .replace('[', ' ')
+                .replace(']', ' ')
+                .replace('"', ' ')
+                .replace('\'', ' ');
+        return Arrays.stream(normalized.split("[,;\\s]+"))
+                .map(item -> item.trim().toLowerCase(Locale.ROOT))
+                .anyMatch(expected::equals);
     }
 }

@@ -46,6 +46,10 @@ public class LlmResponseGenerator implements AgentResponseGenerator {
 
     protected String buildUserPrompt(AgentTask task, List<AgentStep> steps) {
         StringBuilder prompt = new StringBuilder();
+        String knowledge = LlmAgentPlanner.knowledgeContext(task);
+        if (!knowledge.isBlank()) {
+            prompt.append("知识库上下文：\n").append(knowledge).append("\n\n");
+        }
         String context = LlmAgentPlanner.sessionContext(task);
         if (!context.isBlank()) {
             prompt.append("近期会话上下文：\n").append(context).append("\n\n");
