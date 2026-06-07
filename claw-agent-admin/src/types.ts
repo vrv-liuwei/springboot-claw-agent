@@ -109,16 +109,42 @@ export type McpServerRegistration = {
   status?: string;
   connected?: boolean;
   enabled?: boolean;
+  registeredAt?: string;
   config?: {
     id?: string;
     name?: string;
+    transport?: string;
     type?: string;
     transportType?: string;
+    endpoint?: string;
     command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    headers?: Record<string, string>;
+    cwd?: string;
+    timeoutSeconds?: number;
+    autoApprove?: string[];
     url?: string;
     disabled?: boolean;
+    enabled?: boolean;
   };
+  message?: string;
   tools?: unknown[];
+};
+
+export type McpServerConfig = {
+  id?: string;
+  name?: string;
+  transport?: string;
+  endpoint?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  cwd?: string;
+  timeoutSeconds?: number;
+  autoApprove?: string[];
+  enabled?: boolean;
 };
 
 export type SkillRegistration = {
@@ -131,14 +157,35 @@ export type SkillRegistration = {
     version?: string;
     description?: string;
     enabled?: boolean;
+    entrypoint?: string;
     tools?: string[];
+    permissions?: string[];
+    metadata?: Record<string, unknown>;
   };
+  installedAt?: string;
+};
+
+export type SkillInstallRequest = {
+  manifest?: {
+    id?: string;
+    name?: string;
+    version?: string;
+    description?: string;
+    enabled?: boolean;
+    entrypoint?: string;
+    tools?: string[];
+    permissions?: string[];
+    metadata?: Record<string, unknown>;
+  };
+  content?: string;
+  resourceFiles?: Record<string, string>;
 };
 
 export type ModelSettings = {
   mode?: string;
   client?: string;
   defaultModel?: string;
+  memoryModel?: string;
   planner?: string;
 };
 
@@ -146,7 +193,7 @@ export type ModelConfigView = {
   provider?: string;
   baseUrl?: string;
   model?: string;
-  apiKeyEnv?: string;
+  apiKey?: string;
   apiKeyConfigured?: boolean;
   temperature?: number;
   timeoutSeconds?: number;
@@ -161,6 +208,8 @@ export type RuntimeConfigSnapshot = {
   message?: string;
   model?: ModelSettings;
   effectiveModel?: ModelConfigView;
+  embedding?: EmbeddingConfigView;
+  memoryExtraction?: MemoryExtractionConfigView;
   models?: Record<string, ModelConfigView>;
 };
 
@@ -168,13 +217,81 @@ export type ModelConfigUpdate = {
   mode?: string;
   client?: string;
   defaultModel?: string;
+  memoryModel?: string;
   planner?: string;
   provider?: string;
   baseUrl?: string;
   model?: string;
-  apiKeyEnv?: string;
+  apiKey?: string;
   temperature?: number;
   timeoutSeconds?: number;
+  embeddingProvider?: string;
+  embeddingBaseUrl?: string;
+  embeddingModel?: string;
+  embeddingApiKey?: string;
+  embeddingDimensions?: number;
+  embeddingTimeoutSeconds?: number;
+  memoryExtractionEnabled?: boolean;
+  memoryExtractionMode?: string;
+  memoryExtractionIntervalSeconds?: number;
+  memoryExtractionBatchSize?: number;
+};
+
+export type MemoryExtractionConfigView = {
+  enabled?: boolean;
+  mode?: string;
+  intervalSeconds?: number;
+  batchSize?: number;
+};
+
+export type EmbeddingConfigView = {
+  provider?: string;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  apiKeyConfigured?: boolean;
+  dimensions?: number;
+  timeoutSeconds?: number;
+};
+
+export type ModelConfigUpsertRequest = {
+  id: string;
+  provider?: string;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutSeconds?: number;
+};
+
+export type ModelApiTestRequest = {
+  provider?: string;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  prompt?: string;
+  temperature?: number;
+  timeoutSeconds?: number;
+};
+
+export type ModelApiTestResponse = {
+  success: boolean;
+  statusCode?: number;
+  message?: string;
+  rawError?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  elapsedMs?: number;
+};
+
+export type VectorStatusView = {
+  id: string;
+  name?: string;
+  status?: string;
+  chunkCount?: number;
+  vectorCount?: number;
+  vectorized?: boolean;
 };
 
 export type AutomationScheduleType = 'ONCE' | 'INTERVAL' | 'CRON';
@@ -279,6 +396,55 @@ export type KnowledgeSearchHit = {
 export type KnowledgeSearchResponse = {
   hits: KnowledgeSearchHit[];
 };
+
+export type MemoryItem = {
+  id: string;
+  userId?: string;
+  scopeType?: 'global' | 'channel' | 'session' | string;
+  scopeId?: string;
+  type?: string;
+  status?: 'pending' | 'active' | 'disabled' | 'archived' | string;
+  content?: string;
+  summary?: string;
+  sourceSessionId?: string;
+  sourceTaskId?: string;
+  importance?: number;
+  confidence?: number;
+  metadata?: Record<string, string>;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type MemorySearchHit = {
+  itemId?: string;
+  chunkId?: string;
+  userId?: string;
+  scopeType?: string;
+  scopeId?: string;
+  type?: string;
+  summary?: string;
+  content?: string;
+  score?: number;
+  metadata?: Record<string, string>;
+};
+
+export type MemoryHitLog = {
+  id: string;
+  userId?: string;
+  itemId?: string;
+  sessionId?: string;
+  taskId?: string;
+  query?: string;
+  score?: number;
+  reason?: string;
+  createdAt?: string;
+};
+
+export type MemorySearchResponse = {
+  hits: MemorySearchHit[];
+};
+
+export type MemoryUpsertRequest = Partial<Omit<MemoryItem, 'createdAt' | 'updatedAt'>>;
 
 export type AutomationUpsertRequest = {
   name?: string;

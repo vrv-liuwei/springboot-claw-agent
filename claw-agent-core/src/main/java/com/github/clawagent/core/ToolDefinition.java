@@ -30,6 +30,10 @@ public record ToolDefinition(String id, String name, String description, String 
         return new ToolDefinition(id, name, description, "low", inputSchema);
     }
 
+    public static ToolDefinition high(String id, String name, String description, Map<String, Object> inputSchema) {
+        return new ToolDefinition(id, name, description, "high", inputSchema);
+    }
+
     public static Map<String, Object> objectSchema(Map<String, Object> properties, boolean additionalProperties, java.util.List<String> required) {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");

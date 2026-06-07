@@ -47,25 +47,37 @@ import type {
   KnowledgeDocument,
   KnowledgeProviderView,
   KnowledgeSearchHit,
+  MemoryHitLog,
+  MemoryItem,
+  MemorySearchHit,
+  MemoryUpsertRequest,
+  McpServerConfig,
+  ModelApiTestResponse,
+  ModelConfigUpsertRequest,
   McpServerRegistration,
   ModelConfigUpdate,
   RuntimeConfigSnapshot,
+  SkillInstallRequest,
   SkillRegistration,
   SystemLogLine,
   SystemLogSource,
   TodoItem,
   TokenUsageSummary,
   ToolDefinition,
+  VectorStatusView,
 } from './types';
 
 const BRAND_LOGO_URL = '/admin/brand/clawagent-logo.svg';
 const AGENT_AVATAR_URL = '/admin/brand/clawagent-avatar.svg';
 const USER_AVATAR_URL = '/admin/brand/user-avatar.svg';
 
-type NavKey = 'chat' | 'overview' | 'sessions' | 'automations' | 'knowledge' | 'tools' | 'mcp' | 'skills' | 'config' | 'logs' | 'nodes';
+type NavKey = 'chat' | 'overview' | 'sessions' | 'automations' | 'knowledge' | 'memory' | 'skills' | 'config' | 'logs' | 'nodes';
 type DetailTab = 'tasks' | 'messages' | 'events' | 'todos' | 'tokens';
 type ToolStatus = 'running' | 'completed' | 'failed';
 type KnowledgeSearchMode = 'keyword' | 'vector' | 'hybrid';
+type MemorySearchMode = 'keyword' | 'vector' | 'hybrid';
+type ConfigTab = 'models' | 'embedding' | 'memory' | 'local';
+type SkillTab = 'tools' | 'mcp' | 'skills';
 
 type SystemLogFilter = {
   from: string;
@@ -237,9 +249,8 @@ const navGroups: Array<{ title: string; items: Array<{ key: NavKey; label: strin
     title: '能力',
     items: [
       { key: 'knowledge', label: '知识库', icon: Database },
-      { key: 'tools', label: '工具能力', icon: Wrench },
-      { key: 'mcp', label: 'MCP Server', icon: Plug },
-      { key: 'skills', label: 'Skills', icon: Zap },
+      { key: 'memory', label: '记忆', icon: ScrollText },
+      { key: 'skills', label: '技能', icon: Zap },
     ],
   },
   {
@@ -258,9 +269,8 @@ const pageMeta: Record<NavKey, { title: string; subtitle: string }> = {
   sessions: { title: '会话', subtitle: '查看历史会话、消息、任务、日志和 Token 使用量。' },
   automations: { title: '定时任务', subtitle: '管理智能体定时任务、周期自动化和手动触发记录。' },
   knowledge: { title: '知识库', subtitle: '管理本地文件入库、向量检索调试、下载和删除。' },
-  tools: { title: '工具能力', subtitle: '查看内置工具、Skill 工具和 MCP 工具定义。' },
-  mcp: { title: 'MCP Server', subtitle: '查看 MCP Server 注册、连接和工具暴露情况。' },
-  skills: { title: 'Skills', subtitle: '查看本地安装 Skill、启用状态和工具入口。' },
+  memory: { title: '记忆', subtitle: '维护长期记忆、候选审核、命中记录和检索调试。' },
+  skills: { title: '技能', subtitle: '统一查看系统工具、MCP Server 和本地 Skill。' },
   config: { title: '配置', subtitle: '运行配置与本地 .clawagent 目录状态。' },
   logs: { title: '日志', subtitle: '任务事件和运行日志入口。' },
   nodes: { title: '节点', subtitle: '未来用于展示 Worker、执行节点和隔离运行环境。' },
@@ -312,6 +322,26 @@ function riskClass(risk?: string) {
 function short(value?: string, max = 80) {
   if (!value) return '-';
   return value.length > max ? `${value.slice(0, max)}...` : value;
+}
+
+function maskSecretValue(value?: string) {
+  if (!value) return '-';
+  if (value.length <= 10) return '***';
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function maskSecretObject(value: unknown): unknown {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value, (key, current) => {
+    if (typeof current === 'string' && /authorization|api[_-]?key|token|secret|password/i.test(key)) {
+      return maskSecretValue(current);
+    }
+    return current;
+  }));
+}
+
+function prettyJson(value: unknown) {
+  return JSON.stringify(maskSecretObject(value), null, 2);
 }
 
 function statusText(status?: string) {
@@ -600,17 +630,30 @@ function parseSseEvent(chunk: string): SseEvent | null {
 function draftFromConfig(config?: RuntimeConfigSnapshot): ModelConfigUpdate {
   const model = config?.model || {};
   const effective = config?.effectiveModel || {};
+  const embedding = config?.embedding || {};
+  const memoryExtraction = config?.memoryExtraction || {};
   return {
     mode: model.mode || 'llm',
     client: model.client || 'openai-compatible',
     defaultModel: model.defaultModel || effective.model || '',
+    memoryModel: model.memoryModel || model.defaultModel || effective.model || '',
     planner: model.planner || 'react',
     provider: effective.provider || '',
     baseUrl: effective.baseUrl || '',
     model: effective.model || model.defaultModel || '',
-    apiKeyEnv: effective.apiKeyEnv || '',
+    apiKey: effective.apiKey || '',
     temperature: effective.temperature ?? 0.2,
     timeoutSeconds: effective.timeoutSeconds ?? 60,
+    embeddingProvider: embedding.provider || '',
+    embeddingBaseUrl: embedding.baseUrl || '',
+    embeddingModel: embedding.model || '',
+    embeddingApiKey: embedding.apiKey || '',
+    embeddingDimensions: embedding.dimensions ?? 0,
+    embeddingTimeoutSeconds: embedding.timeoutSeconds ?? 60,
+    memoryExtractionEnabled: memoryExtraction.enabled ?? true,
+    memoryExtractionMode: memoryExtraction.mode || 'after-task-async',
+    memoryExtractionIntervalSeconds: memoryExtraction.intervalSeconds ?? 60,
+    memoryExtractionBatchSize: memoryExtraction.batchSize ?? 100,
   };
 }
 
@@ -625,6 +668,39 @@ function defaultAutomationDraft(): AutomationUpsertRequest {
     channelId: 'automation',
     userId: 'automation',
     metadata: {},
+  };
+}
+
+function defaultMemoryDraft(): MemoryUpsertRequest {
+  return {
+    userId: 'console',
+    scopeType: 'session',
+    scopeId: '',
+    type: 'fact',
+    status: 'pending',
+    content: '',
+    summary: '',
+    importance: 0.5,
+    confidence: 0.7,
+    metadata: {},
+  };
+}
+
+function memoryDraftFromItem(item: MemoryItem): MemoryUpsertRequest {
+  return {
+    id: item.id,
+    userId: item.userId || 'console',
+    scopeType: item.scopeType || 'session',
+    scopeId: item.scopeId || '',
+    type: item.type || 'fact',
+    status: item.status || 'pending',
+    content: item.content || '',
+    summary: item.summary || '',
+    sourceSessionId: item.sourceSessionId || '',
+    sourceTaskId: item.sourceTaskId || '',
+    importance: item.importance ?? 0.5,
+    confidence: item.confidence ?? 0.7,
+    metadata: item.metadata || {},
   };
 }
 
@@ -675,7 +751,12 @@ export function App() {
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerRegistration[]>([]);
   const [skills, setSkills] = useState<SkillRegistration[]>([]);
+  const [mcpUpdating, setMcpUpdating] = useState<string>();
+  const [mcpImportJson, setMcpImportJson] = useState('');
+  const [mcpMessage, setMcpMessage] = useState<string>();
   const [skillUpdating, setSkillUpdating] = useState<string>();
+  const [skillInstallText, setSkillInstallText] = useState('');
+  const [skillMessage, setSkillMessage] = useState<string>();
   const [automations, setAutomations] = useState<AutomationDefinition[]>([]);
   const [selectedAutomationId, setSelectedAutomationId] = useState<string>();
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
@@ -687,6 +768,7 @@ export function App() {
   const [taskDetailTab, setTaskDetailTab] = useState<'result' | 'messages' | 'events' | 'tokens'>('result');
   const [knowledgeProviders, setKnowledgeProviders] = useState<KnowledgeProviderView[]>([]);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+  const [knowledgeVectorStatus, setKnowledgeVectorStatus] = useState<VectorStatusView[]>([]);
   const [selectedKnowledgeDocumentIds, setSelectedKnowledgeDocumentIds] = useState<string[]>([]);
   const [activeKnowledgeDocumentIds, setActiveKnowledgeDocumentIds] = useState<string[]>([]);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
@@ -694,10 +776,24 @@ export function App() {
   const [knowledgeSearchQuery, setKnowledgeSearchQuery] = useState('');
   const [knowledgeSearchMode, setKnowledgeSearchMode] = useState<KnowledgeSearchMode>('hybrid');
   const [knowledgeSearchHits, setKnowledgeSearchHits] = useState<KnowledgeSearchHit[]>([]);
+  const [memoryItems, setMemoryItems] = useState<MemoryItem[]>([]);
+  const [memoryVectorStatus, setMemoryVectorStatus] = useState<VectorStatusView[]>([]);
+  const [memoryCandidates, setMemoryCandidates] = useState<MemoryItem[]>([]);
+  const [memoryHits, setMemoryHits] = useState<MemoryHitLog[]>([]);
+  const [memorySearchHits, setMemorySearchHits] = useState<MemorySearchHit[]>([]);
+  const [memorySearchQuery, setMemorySearchQuery] = useState('');
+  const [memorySearchMode, setMemorySearchMode] = useState<MemorySearchMode>('hybrid');
+  const [memoryDraft, setMemoryDraft] = useState<MemoryUpsertRequest>(() => defaultMemoryDraft());
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string>();
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryMessage, setMemoryMessage] = useState<string>();
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigSnapshot>();
   const [modelDraft, setModelDraft] = useState<ModelConfigUpdate>(() => draftFromConfig());
   const [configSaving, setConfigSaving] = useState(false);
   const [configMessage, setConfigMessage] = useState<string>();
+  const [configTab, setConfigTab] = useState<ConfigTab>('models');
+  const [modelTestResult, setModelTestResult] = useState<ModelApiTestResponse>();
+  const [modelTesting, setModelTesting] = useState(false);
   const [systemLogFilter, setSystemLogFilter] = useState<SystemLogFilter>(() => defaultSystemLogFilter());
   const [systemLogs, setSystemLogs] = useState<SystemLogLine[]>([]);
   const [systemLogSources, setSystemLogSources] = useState<SystemLogSource[]>([]);
@@ -763,7 +859,22 @@ export function App() {
     setLoading(true);
     setError(undefined);
     try {
-      const [healthData, sessionData, toolData, mcpData, skillData, automationData, configData, providerData, knowledgeData] = await Promise.all([
+      const [
+        healthData,
+        sessionData,
+        toolData,
+        mcpData,
+        skillData,
+        automationData,
+        configData,
+        providerData,
+        knowledgeData,
+        knowledgeVectorData,
+        memoryData,
+        memoryVectorData,
+        candidateData,
+        memoryHitData,
+      ] = await Promise.all([
         api.health(),
         api.sessions(1000),
         api.tools(),
@@ -773,6 +884,11 @@ export function App() {
         api.runtimeConfig(),
         api.knowledgeProviders().catch(() => [] as KnowledgeProviderView[]),
         api.knowledgeDocuments('console').catch(() => [] as KnowledgeDocument[]),
+        api.knowledgeVectorStatus('console').catch(() => [] as VectorStatusView[]),
+        api.memoryItems({ userId: 'console', limit: 200 }).catch(() => [] as MemoryItem[]),
+        api.memoryVectorStatus('console').catch(() => [] as VectorStatusView[]),
+        api.memoryCandidates('console').catch(() => [] as MemoryItem[]),
+        api.memoryHits({ userId: 'console', limit: 100 }).catch(() => [] as MemoryHitLog[]),
       ]);
       setHealth(healthData);
       setSessions(sessionData);
@@ -784,8 +900,14 @@ export function App() {
       setSelectedAutomationId((current) => current || automationData[0]?.id);
       setKnowledgeProviders(providerData);
       setKnowledgeDocuments(knowledgeData);
+      setKnowledgeVectorStatus(knowledgeVectorData);
       setSelectedKnowledgeDocumentIds((current) => current.filter((id) => knowledgeData.some((document) => document.id === id)));
       setActiveKnowledgeDocumentIds((current) => current.filter((id) => knowledgeData.some((document) => document.id === id)));
+      setMemoryItems(memoryData);
+      setMemoryVectorStatus(memoryVectorData);
+      setMemoryCandidates(candidateData);
+      setMemoryHits(memoryHitData);
+      setSelectedMemoryId((current) => current && memoryData.some((item) => item.id === current) ? current : memoryData[0]?.id);
       setRuntimeConfig(configData);
       setModelDraft(draftFromConfig(configData));
       setSelectedSessionId((current) => current || sessionData[0]?.id);
@@ -813,13 +935,35 @@ export function App() {
     setKnowledgeLoading(true);
     setKnowledgeMessage(undefined);
     try {
-      setKnowledgeDocuments(await api.knowledgeDocuments('console'));
+      const [documents, vectorStatus] = await Promise.all([
+        api.knowledgeDocuments('console'),
+        api.knowledgeVectorStatus('console').catch(() => [] as VectorStatusView[]),
+      ]);
+      setKnowledgeDocuments(documents);
+      setKnowledgeVectorStatus(vectorStatus);
     } catch (err) {
       setKnowledgeMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setKnowledgeLoading(false);
     }
   }, []);
+
+  const refreshAfterChatTask = useCallback(async (sessionId: string, refreshKnowledge: boolean) => {
+    const requests: Promise<unknown>[] = [
+      loadTodos(sessionId),
+      api.sessions(1000)
+        .then((sessionData) => {
+          // 发送消息后只更新会话列表标题/时间，不再刷新整个后台控制台。
+          setSessions(sessionData);
+          setSelectedSessionId((current) => current || sessionData[0]?.id);
+        })
+        .catch(() => undefined),
+    ];
+    if (refreshKnowledge) {
+      requests.push(refreshKnowledgeDocuments().catch(() => undefined));
+    }
+    await Promise.all(requests);
+  }, [loadTodos, refreshKnowledgeDocuments]);
 
   const uploadKnowledgeDocuments = useCallback(async (files: FileList | File[]) => {
     const fileList = Array.from(files);
@@ -829,7 +973,12 @@ export function App() {
     try {
       const uploaded = await api.uploadKnowledgeDocuments(fileList, 'console');
       setKnowledgeMessage(`已入库 ${uploaded.length} 个文件。`);
-      setKnowledgeDocuments(await api.knowledgeDocuments('console'));
+      const [documents, vectorStatus] = await Promise.all([
+        api.knowledgeDocuments('console'),
+        api.knowledgeVectorStatus('console').catch(() => [] as VectorStatusView[]),
+      ]);
+      setKnowledgeDocuments(documents);
+      setKnowledgeVectorStatus(vectorStatus);
     } catch (err) {
       setKnowledgeMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -844,7 +993,12 @@ export function App() {
       await api.deleteKnowledgeDocument(documentId, 'console');
       setSelectedKnowledgeDocumentIds((current) => current.filter((id) => id !== documentId));
       setActiveKnowledgeDocumentIds((current) => current.filter((id) => id !== documentId));
-      setKnowledgeDocuments(await api.knowledgeDocuments('console'));
+      const [documents, vectorStatus] = await Promise.all([
+        api.knowledgeDocuments('console'),
+        api.knowledgeVectorStatus('console').catch(() => [] as VectorStatusView[]),
+      ]);
+      setKnowledgeDocuments(documents);
+      setKnowledgeVectorStatus(vectorStatus);
       setKnowledgeSearchHits((current) => current.filter((hit) => hit.documentId !== documentId));
     } catch (err) {
       setKnowledgeMessage(err instanceof Error ? err.message : String(err));
@@ -892,6 +1046,119 @@ export function App() {
     setSelectedKnowledgeDocumentIds(next);
     setActiveKnowledgeDocumentIds(next);
   }, []);
+
+  const refreshMemoryData = useCallback(async () => {
+    setMemoryLoading(true);
+    setMemoryMessage(undefined);
+    try {
+      const [items, vectorStatus, candidates, hits] = await Promise.all([
+        api.memoryItems({ userId: 'console', limit: 200 }),
+        api.memoryVectorStatus('console').catch(() => [] as VectorStatusView[]),
+        api.memoryCandidates('console'),
+        api.memoryHits({ userId: 'console', limit: 100 }),
+      ]);
+      setMemoryItems(items);
+      setMemoryVectorStatus(vectorStatus);
+      setMemoryCandidates(candidates);
+      setMemoryHits(hits);
+      setSelectedMemoryId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id);
+    } catch (err) {
+      setMemoryMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, []);
+
+  const saveMemoryItem = useCallback(async () => {
+    setMemoryLoading(true);
+    setMemoryMessage(undefined);
+    try {
+      const saved = memoryDraft.id
+        ? await api.updateMemoryItem(memoryDraft.id, memoryDraft)
+        : await api.createMemoryItem(memoryDraft);
+      setSelectedMemoryId(saved.id);
+      setMemoryDraft(memoryDraftFromItem(saved));
+      setMemoryMessage(memoryDraft.id ? '记忆已更新。' : '记忆已创建，默认候选状态，审核后才进入上下文。');
+      const [items, vectorStatus, candidates] = await Promise.all([
+        api.memoryItems({ userId: 'console', limit: 200 }),
+        api.memoryVectorStatus('console').catch(() => [] as VectorStatusView[]),
+        api.memoryCandidates('console'),
+      ]);
+      setMemoryItems(items);
+      setMemoryVectorStatus(vectorStatus);
+      setMemoryCandidates(candidates);
+    } catch (err) {
+      setMemoryMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, [memoryDraft]);
+
+  const selectMemoryItem = useCallback((item: MemoryItem) => {
+    setSelectedMemoryId(item.id);
+    setMemoryDraft(memoryDraftFromItem(item));
+  }, []);
+
+  const newMemoryItem = useCallback(() => {
+    setSelectedMemoryId(undefined);
+    setMemoryDraft(defaultMemoryDraft());
+    setMemoryMessage(undefined);
+  }, []);
+
+  const updateMemoryStatus = useCallback(async (itemId: string, action: 'enable' | 'disable' | 'archive' | 'accept' | 'reject') => {
+    setMemoryLoading(true);
+    setMemoryMessage(undefined);
+    try {
+      if (action === 'enable') await api.enableMemoryItem(itemId, 'console');
+      if (action === 'disable') await api.disableMemoryItem(itemId, 'console');
+      if (action === 'archive') await api.archiveMemoryItem(itemId, 'console');
+      if (action === 'accept') await api.acceptMemoryCandidate(itemId, 'console');
+      if (action === 'reject') await api.rejectMemoryCandidate(itemId, 'console');
+      await refreshMemoryData();
+    } catch (err) {
+      setMemoryMessage(err instanceof Error ? err.message : String(err));
+      setMemoryLoading(false);
+    }
+  }, [refreshMemoryData]);
+
+  const deleteMemoryItem = useCallback(async (itemId: string) => {
+    setMemoryLoading(true);
+    setMemoryMessage(undefined);
+    try {
+      await api.deleteMemoryItem(itemId, 'console');
+      setMemoryDraft(defaultMemoryDraft());
+      setMemorySearchHits((current) => current.filter((hit) => hit.itemId !== itemId));
+      await refreshMemoryData();
+    } catch (err) {
+      setMemoryMessage(err instanceof Error ? err.message : String(err));
+      setMemoryLoading(false);
+    }
+  }, [refreshMemoryData]);
+
+  const searchMemory = useCallback(async () => {
+    const query = memorySearchQuery.trim();
+    if (!query) {
+      setMemorySearchHits([]);
+      return;
+    }
+    setMemoryLoading(true);
+    setMemoryMessage(undefined);
+    try {
+      const result = await api.searchMemory({
+        userId: 'console',
+        query,
+        mode: memorySearchMode,
+        scopeTypes: ['global', 'channel', 'session'],
+        statuses: ['active'],
+        topK: 10,
+      });
+      setMemorySearchHits(result.hits || []);
+    } catch (err) {
+      setMemoryMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, [memorySearchMode, memorySearchQuery]);
 
   const loadSessionDetail = useCallback(async (sessionId: string) => {
     setError(undefined);
@@ -959,6 +1226,8 @@ export function App() {
       setSelectedSystemLog(undefined);
       setSystemLogMessage(`已加载 ${logData.length} 条日志。`);
     } catch (err) {
+      setSystemLogs([]);
+      setSelectedSystemLog(undefined);
       setSystemLogMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setSystemLogLoading(false);
@@ -1004,9 +1273,9 @@ export function App() {
 
   const startTodoPolling = useCallback((sessionId: string) => {
     if (todoPollerRef.current) window.clearInterval(todoPollerRef.current);
-    todoPollerRef.current = window.setInterval(() => {
-      void loadTodos(sessionId);
-    }, 1200);
+    todoPollerRef.current = undefined;
+    // SSE 已经推送步骤和工具事件，这里只在任务开始时刷新一次，避免执行期重复刷 /todos。
+    void loadTodos(sessionId);
   }, [loadTodos]);
 
   const stopTodoPolling = useCallback(async (sessionId?: string) => {
@@ -1131,7 +1400,8 @@ export function App() {
       if (!chunk) return;
       updateMessage(assistantId, (message) => ({ ...message, content: message.content + chunk, progress: '正在生成最终回复...' }));
     } else if (event.name === 'llm.completed') {
-      updateMessage(assistantId, { progress: '回复生成完成，正在收口...' });
+      // 模型正文已经流式输出完成，后端后续还会写库、提炼记忆并发送 result；这些收尾不需要继续占用聊天气泡进度条。
+      updateMessage(assistantId, { progress: '' });
     } else if (event.name === 'result') {
       updateMessage(assistantId, (message) => ({
         ...message,
@@ -1197,7 +1467,12 @@ export function App() {
         const parsed = await api.parseAttachments(submittedAttachments.map((attachment) => attachment.file), 'console', controller.signal);
         parsedAttachments = parsed.attachments || [];
         updateMessage(userMessage.id, { attachments: toChatAttachments(submittedAttachments, parsedAttachments) });
-        setKnowledgeDocuments(await api.knowledgeDocuments('console').catch(() => knowledgeDocuments));
+        const [documents, vectorStatus] = await Promise.all([
+          api.knowledgeDocuments('console').catch(() => knowledgeDocuments),
+          api.knowledgeVectorStatus('console').catch(() => knowledgeVectorStatus),
+        ]);
+        setKnowledgeDocuments(documents);
+        setKnowledgeVectorStatus(vectorStatus);
         updateMessage(assistant.id, { progress: '附件已入库，准备规划任务...' });
       }
       const attachmentKnowledgeDocumentIds = parsedAttachments
@@ -1252,7 +1527,7 @@ export function App() {
           updateMessage(assistant.id, { tokenUsage: usage });
         }
       }
-      await loadCore();
+      await refreshAfterChatTask(currentSessionId, parsedAttachments.length > 0);
     } catch (err) {
       if (controller.signal.aborted) {
         updateMessage(assistant.id, {
@@ -1280,7 +1555,7 @@ export function App() {
       runningTaskRef.current = undefined;
       await stopTodoPolling(currentSessionId);
     }
-  }, [activeKnowledgeDocumentIds, approvalMode, approvalSettings.allowHighRiskTools, approvalSettings.approvedToolIds, attachments, cancelRunningTask, clearAttachments, currentSessionId, handleStreamEvent, highRiskTools, input, knowledgeDocuments, loadCore, running, selectedKnowledgeDocumentIds, startTodoPolling, stopTodoPolling, updateMessage]);
+  }, [activeKnowledgeDocumentIds, approvalMode, approvalSettings.allowHighRiskTools, approvalSettings.approvedToolIds, attachments, cancelRunningTask, clearAttachments, currentSessionId, handleStreamEvent, highRiskTools, input, knowledgeDocuments, knowledgeVectorStatus, refreshAfterChatTask, running, selectedKnowledgeDocumentIds, startTodoPolling, stopTodoPolling, updateMessage]);
 
   const createNewSession = useCallback(async () => {
     const created = await api.createSessionId();
@@ -1313,8 +1588,120 @@ export function App() {
     }
   }, [modelDraft]);
 
+  const saveModelDefinition = useCallback(async (request: ModelConfigUpsertRequest) => {
+    setConfigSaving(true);
+    setConfigMessage(undefined);
+    try {
+      const saved = await api.saveModelDefinition(request);
+      setRuntimeConfig(saved);
+      setModelDraft(draftFromConfig(saved));
+      setConfigMessage(saved.message || '模型已保存到模型池。');
+    } catch (err) {
+      setConfigMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConfigSaving(false);
+    }
+  }, []);
+
+  const testModelConfig = useCallback(async (request: ModelConfigUpsertRequest) => {
+    setModelTesting(true);
+    setConfigMessage(undefined);
+    setModelTestResult(undefined);
+    try {
+      const result = await api.testModelApi({
+        provider: request.provider,
+        baseUrl: request.baseUrl,
+        model: request.model,
+        apiKey: request.apiKey,
+        temperature: request.temperature,
+        timeoutSeconds: request.timeoutSeconds,
+        prompt: '请用一句中文回复：模型连接正常。',
+      });
+      setModelTestResult(result);
+      setConfigMessage(result.success ? '模型在线测试通过。' : (result.message || '模型在线测试失败。'));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setModelTestResult({ success: false, message });
+      setConfigMessage(message);
+    } finally {
+      setModelTesting(false);
+    }
+  }, []);
+
+  const refreshMcpData = useCallback(async () => {
+    const [serverData, toolData] = await Promise.all([api.mcpServers(), api.tools()]);
+    setMcpServers(serverData);
+    setTools(toolData);
+  }, []);
+
+  const importMcpConfig = useCallback(async () => {
+    const json = mcpImportJson.trim();
+    if (!json) return;
+    setMcpUpdating('import');
+    setMcpMessage(undefined);
+    try {
+      const registrations = await api.importMcpServers(json);
+      const connected: string[] = [];
+      for (const registration of registrations) {
+        const id = registration.config?.id || registration.id;
+        if (!id) continue;
+        // 导入后立即连接，完成 MCP tools 的运行态注册，不要求用户重启服务。
+        await api.connectMcpServer(id);
+        connected.push(id);
+      }
+      await refreshMcpData();
+      setMcpMessage(connected.length ? `已导入并连接：${connected.join(', ')}` : '已导入 MCP 配置。');
+    } catch (err) {
+      setMcpMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMcpUpdating(undefined);
+    }
+  }, [mcpImportJson, refreshMcpData]);
+
+  const updateMcpConnection = useCallback(async (serverId: string, action: 'connect' | 'disconnect' | 'refresh') => {
+    setMcpUpdating(`${action}:${serverId}`);
+    setMcpMessage(undefined);
+    try {
+      if (action === 'connect') await api.connectMcpServer(serverId);
+      if (action === 'disconnect') await api.disconnectMcpServer(serverId);
+      if (action === 'refresh') await api.refreshMcpTools(serverId);
+      await refreshMcpData();
+      setMcpMessage(action === 'connect' ? 'MCP 已连接并动态加载工具。' : action === 'disconnect' ? 'MCP 已断开。' : 'MCP 工具已刷新。');
+    } catch (err) {
+      setMcpMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMcpUpdating(undefined);
+    }
+  }, [refreshMcpData]);
+
+  const installSkill = useCallback(async () => {
+    const text = skillInstallText.trim();
+    if (!text) return;
+    setSkillUpdating('install');
+    setSkillMessage(undefined);
+    try {
+      let request: SkillInstallRequest;
+      try {
+        request = JSON.parse(text) as SkillInstallRequest;
+      } catch {
+        // 粘贴 SKILL.md 时后端会自动转换成系统 Skill manifest。
+        request = { content: text };
+      }
+      await api.installSkill(request);
+      const [skillData, toolData] = await Promise.all([api.skills(), api.tools()]);
+      setSkills(skillData);
+      setTools(toolData);
+      setSkillMessage('Skill 已安装并动态加载。');
+    } catch (err) {
+      setSkillMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSkillUpdating(undefined);
+    }
+  }, [skillInstallText]);
+
   const toggleSkill = useCallback(async (skillId: string, enabled: boolean) => {
     setSkillUpdating(skillId);
+    setSkillMessage(undefined);
     try {
       if (enabled) {
         await api.disableSkill(skillId);
@@ -1324,8 +1711,9 @@ export function App() {
       const [skillData, toolData] = await Promise.all([api.skills(), api.tools()]);
       setSkills(skillData);
       setTools(toolData);
+      setSkillMessage(enabled ? 'Skill 已禁用，工具已卸载。' : 'Skill 已启用，工具已动态加载。');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setSkillMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setSkillUpdating(undefined);
     }
@@ -1625,8 +2013,8 @@ export function App() {
               <section className="stack">
                 <div className="metric-grid">
                   <Metric title="会话数" value={sessions.length} desc="已加载会话" onClick={() => setActive('sessions')} />
-                  <Metric title="工具数" value={tools.length} desc="本地 + MCP + Skill" onClick={() => setActive('tools')} />
-                  <Metric title="MCP 已连接" value={`${mcpConnected}/${mcpServers.length}`} desc="当前 JVM 运行态" onClick={() => setActive('mcp')} />
+                  <Metric title="工具数" value={tools.length} desc="本地 + MCP + Skill" onClick={() => setActive('skills')} />
+                  <Metric title="MCP 已连接" value={`${mcpConnected}/${mcpServers.length}`} desc="当前 JVM 运行态" onClick={() => setActive('skills')} />
                   <Metric title="启用 Skill" value={`${enabledSkills}/${skills.length}`} desc="本地安装目录" onClick={() => setActive('skills')} />
                   <Metric
                     title="会话 Token 总量"
@@ -1739,6 +2127,7 @@ export function App() {
               <KnowledgePage
                 providers={knowledgeProviders}
                 documents={knowledgeDocuments}
+                vectorStatus={knowledgeVectorStatus}
                 selectedIds={selectedKnowledgeDocumentIds}
                 loading={knowledgeLoading}
                 message={knowledgeMessage}
@@ -1755,28 +2144,63 @@ export function App() {
               />
             )}
 
-            {active === 'tools' && (
-              <Panel title="工具能力" action={<span className="muted">按风险等级分组查看</span>}>
-                <ToolTable tools={tools} />
-              </Panel>
-            )}
-
-            {active === 'mcp' && (
-              <Panel title="MCP Server">
-                <McpTable servers={mcpServers} />
-              </Panel>
+            {active === 'memory' && (
+              <MemoryPage
+                items={memoryItems}
+                vectorStatus={memoryVectorStatus}
+                candidates={memoryCandidates}
+                hits={memoryHits}
+                searchHits={memorySearchHits}
+                selectedId={selectedMemoryId}
+                draft={memoryDraft}
+                loading={memoryLoading}
+                message={memoryMessage}
+                searchQuery={memorySearchQuery}
+                searchMode={memorySearchMode}
+                onRefresh={() => void refreshMemoryData()}
+                onSelect={selectMemoryItem}
+                onNew={newMemoryItem}
+                onDraftChange={setMemoryDraft}
+                onSave={() => void saveMemoryItem()}
+                onDelete={(itemId) => void deleteMemoryItem(itemId)}
+                onStatus={(itemId, action) => void updateMemoryStatus(itemId, action)}
+                onSearchQueryChange={setMemorySearchQuery}
+                onSearchModeChange={setMemorySearchMode}
+                onSearch={() => void searchMemory()}
+              />
             )}
 
             {active === 'skills' && (
-              <Panel title="Skills">
-                <SkillTable skills={skills} updatingSkillId={skillUpdating} onToggle={toggleSkill} />
-              </Panel>
+              <SkillsPage
+                tools={tools}
+                mcpServers={mcpServers}
+                mcpImportJson={mcpImportJson}
+                mcpUpdating={mcpUpdating}
+                mcpMessage={mcpMessage}
+                skills={skills}
+                skillInstallText={skillInstallText}
+                skillUpdating={skillUpdating}
+                skillMessage={skillMessage}
+                onMcpImportJsonChange={setMcpImportJson}
+                onMcpImport={() => void importMcpConfig()}
+                onMcpRefresh={() => void refreshMcpData()}
+                onMcpConnection={(serverId, action) => void updateMcpConnection(serverId, action)}
+                onSkillInstallTextChange={setSkillInstallText}
+                onSkillInstall={() => void installSkill()}
+                onSkillToggle={toggleSkill}
+              />
             )}
 
             {active === 'config' && (
               <section className="stack">
-                <div className="two-col">
-                  <Panel title="本地配置目录">
+                <div className="settings-tab-row">
+                  <button className={configTab === 'models' ? 'active' : undefined} onClick={() => setConfigTab('models')}><Bot size={15} />模型 API</button>
+                  <button className={configTab === 'embedding' ? 'active' : undefined} onClick={() => setConfigTab('embedding')}><Database size={15} />向量模型</button>
+                  <button className={configTab === 'memory' ? 'active' : undefined} onClick={() => setConfigTab('memory')}><Clock size={15} />记忆处理</button>
+                  <button className={configTab === 'local' ? 'active' : undefined} onClick={() => setConfigTab('local')}><Settings size={15} />本地配置</button>
+                </div>
+                {configTab === 'local' && (
+                  <Panel title="本地配置目录" action={<span className="muted">页面只保存本地覆盖配置，模型客户端重启后生效。</span>}>
                     <div className="definition-list">
                       <div><span>工作目录</span><strong className="mono">{runtimeConfig?.cwd || '-'}</strong></div>
                       <div><span>配置根</span><strong className="mono">{runtimeConfig?.configRoot || '.clawagent'}</strong></div>
@@ -1784,7 +2208,35 @@ export function App() {
                       <div><span>说明</span><strong>页面只保存本地覆盖配置，模型客户端重启后生效。</strong></div>
                     </div>
                   </Panel>
+                )}
+                {configTab === 'models' && (
                   <ModelConfigPanel
+                    draft={modelDraft}
+                    config={runtimeConfig}
+                    saving={configSaving}
+                    testing={modelTesting}
+                    testResult={modelTestResult}
+                    message={configMessage}
+                    onChange={setModelDraft}
+                    onSave={saveModelConfig}
+                    onSaveModel={saveModelDefinition}
+                    onTestModel={testModelConfig}
+                  />
+                )}
+                {configTab === 'embedding' && (
+                  <EmbeddingConfigPanel
+                    draft={modelDraft}
+                    config={runtimeConfig}
+                    saving={configSaving}
+                    knowledgeVectorStatus={knowledgeVectorStatus}
+                    memoryVectorStatus={memoryVectorStatus}
+                    message={configMessage}
+                    onChange={setModelDraft}
+                    onSave={saveModelConfig}
+                  />
+                )}
+                {configTab === 'memory' && (
+                  <MemoryExtractionConfigPanel
                     draft={modelDraft}
                     config={runtimeConfig}
                     saving={configSaving}
@@ -1792,7 +2244,7 @@ export function App() {
                     onChange={setModelDraft}
                     onSave={saveModelConfig}
                   />
-                </div>
+                )}
               </section>
             )}
 
@@ -2345,14 +2797,18 @@ function ChatAttachmentList({ attachments }: { attachments?: ChatAttachment[] })
 
 function ToolCallLine({ call }: { call: ToolCallView }) {
   const Icon = call.status === 'completed' ? CheckCircle : call.status === 'failed' ? XCircle : Loader2;
+  const statusText = call.status === 'running' ? '正在调用' : call.status === 'completed' ? '调用成功' : '调用失败';
+  const detailText = call.status === 'failed' ? (call.error || call.message) : '';
   return (
     <div className={`tool-line ${call.status}`}>
-      <Icon size={15} />
-      <span>{call.status === 'running' ? '正在调用' : call.status === 'completed' ? '调用成功' : '调用失败'} {call.toolId || '未知工具'}</span>
-      {call.outputLength != null && call.outputLength > 0 && <em>返回 {call.outputLength} 字符</em>}
-      {call.elapsedMs != null && <em>{call.elapsedMs}ms</em>}
-      {call.todoTitle && <em>{call.todoTitle}</em>}
-      {call.error && <small>{call.error}</small>}
+      <div className="tool-line-head">
+        <Icon size={15} />
+        <span className="tool-line-title">{statusText} {call.toolId || '未知工具'}</span>
+        {call.outputLength != null && call.outputLength > 0 && <em className="tool-line-chip">返回 {call.outputLength} 字符</em>}
+        {call.elapsedMs != null && <em className="tool-line-chip">{call.elapsedMs}ms</em>}
+        {call.todoTitle && <em className="tool-line-chip">{call.todoTitle}</em>}
+      </div>
+      {detailText && <small className="tool-line-detail">{detailText}</small>}
     </div>
   );
 }
@@ -2701,6 +3157,7 @@ function systemLogFilterSummary(filter: SystemLogFilter) {
 function KnowledgePage({
   providers,
   documents,
+  vectorStatus,
   selectedIds,
   loading,
   message,
@@ -2717,6 +3174,7 @@ function KnowledgePage({
 }: {
   providers: KnowledgeProviderView[];
   documents: KnowledgeDocument[];
+  vectorStatus: VectorStatusView[];
   selectedIds: string[];
   loading: boolean;
   message?: string;
@@ -2732,8 +3190,8 @@ function KnowledgePage({
   onSearch: () => void;
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
-  const activeProvider = providers.find((provider) => provider.active || provider.default)?.id || providers[0]?.id || 'local';
   const readyCount = documents.filter((document) => document.status === 'READY').length;
+  const vectorizedCount = vectorStatus.filter((item) => item.vectorized).length;
   return (
     <section className="stack knowledge-page">
       <div className="knowledge-summary">
@@ -2754,8 +3212,8 @@ function KnowledgePage({
         </div>
         <div className="knowledge-stat provider">
           <Plug size={18} />
-          <span>Provider</span>
-          <strong>{activeProvider}</strong>
+          <span>已向量化</span>
+          <strong>{vectorizedCount}</strong>
         </div>
       </div>
 
@@ -2782,6 +3240,7 @@ function KnowledgePage({
           {message && <div className="knowledge-message">{message}</div>}
           <KnowledgeDocumentTable
             documents={documents}
+            vectorStatus={vectorStatus}
             selectedIds={selectedIds}
             loading={loading}
             onToggleSelected={onToggleSelected}
@@ -2832,17 +3291,20 @@ function KnowledgePage({
 
 function KnowledgeDocumentTable({
   documents,
+  vectorStatus,
   selectedIds,
   loading,
   onToggleSelected,
   onDelete,
 }: {
   documents: KnowledgeDocument[];
+  vectorStatus: VectorStatusView[];
   selectedIds: string[];
   loading: boolean;
   onToggleSelected: (documentId: string) => void;
   onDelete: (documentId: string) => void;
 }) {
+  const vectorById = new Map(vectorStatus.map((item) => [item.id, item]));
   if (!documents.length) return <Empty text="暂无入库文件，点击上传后会自动解析并写入本地知识库。" />;
   return (
     <div className="knowledge-table">
@@ -2852,6 +3314,7 @@ function KnowledgeDocumentTable({
             <th className="select-col">引用</th>
             <th>文件</th>
             <th>状态</th>
+            <th>向量</th>
             <th>Provider</th>
             <th>创建时间</th>
             <th>操作</th>
@@ -2860,6 +3323,7 @@ function KnowledgeDocumentTable({
         <tbody>
           {documents.map((document) => {
             const selected = selectedIds.includes(document.id);
+            const vector = vectorById.get(document.id);
             return (
               <tr className={selected ? 'selected-row' : undefined} key={document.id}>
                 <td className="select-col">
@@ -2882,6 +3346,11 @@ function KnowledgeDocumentTable({
                   </div>
                 </td>
                 <td><span className={`pill ${document.status === 'READY' ? 'success' : 'neutral'}`}>{document.status || '-'}</span></td>
+                <td>
+                  <span className={`pill ${vector?.vectorized ? 'success' : 'warning'}`}>
+                    {(vector?.vectorCount ?? 0)}/{(vector?.chunkCount ?? 0)}
+                  </span>
+                </td>
                 <td><span className="pill neutral">{document.provider || 'local'}</span></td>
                 <td>{formatDateTime(document.createdAt)}</td>
                 <td>
@@ -2901,6 +3370,313 @@ function KnowledgeDocumentTable({
       </Table>
     </div>
   );
+}
+
+function MemoryPage({
+  items,
+  vectorStatus,
+  candidates,
+  hits,
+  searchHits,
+  selectedId,
+  draft,
+  loading,
+  message,
+  searchQuery,
+  searchMode,
+  onRefresh,
+  onSelect,
+  onNew,
+  onDraftChange,
+  onSave,
+  onDelete,
+  onStatus,
+  onSearchQueryChange,
+  onSearchModeChange,
+  onSearch,
+}: {
+  items: MemoryItem[];
+  vectorStatus: VectorStatusView[];
+  candidates: MemoryItem[];
+  hits: MemoryHitLog[];
+  searchHits: MemorySearchHit[];
+  selectedId?: string;
+  draft: MemoryUpsertRequest;
+  loading: boolean;
+  message?: string;
+  searchQuery: string;
+  searchMode: MemorySearchMode;
+  onRefresh: () => void;
+  onSelect: (item: MemoryItem) => void;
+  onNew: () => void;
+  onDraftChange: (draft: MemoryUpsertRequest) => void;
+  onSave: () => void;
+  onDelete: (itemId: string) => void;
+  onStatus: (itemId: string, action: 'enable' | 'disable' | 'archive' | 'accept' | 'reject') => void;
+  onSearchQueryChange: (query: string) => void;
+  onSearchModeChange: (mode: MemorySearchMode) => void;
+  onSearch: () => void;
+}) {
+  const activeCount = items.filter((item) => item.status === 'active').length;
+  const vectorizedCount = vectorStatus.filter((item) => item.vectorized).length;
+  return (
+    <section className="stack memory-page">
+      <div className="knowledge-summary">
+        <div className="knowledge-stat"><ScrollText size={18} /><span>记忆</span><strong>{items.length}</strong></div>
+        <div className="knowledge-stat"><CheckCircle size={18} /><span>Active</span><strong>{activeCount}</strong></div>
+        <div className="knowledge-stat"><Clock size={18} /><span>候选</span><strong>{candidates.length}</strong></div>
+        <div className="knowledge-stat provider"><Search size={18} /><span>已向量化</span><strong>{vectorizedCount}</strong></div>
+      </div>
+      {message && <div className="knowledge-message">{message}</div>}
+
+      <div className="memory-layout">
+        <div className="stack">
+          <Panel title="长期记忆" action={<button onClick={onRefresh} disabled={loading}><RefreshCw size={15} />刷新</button>}>
+            <MemoryItemTable
+              items={items}
+              vectorStatus={vectorStatus}
+              selectedId={selectedId}
+              loading={loading}
+              onSelect={onSelect}
+              onDelete={onDelete}
+              onStatus={onStatus}
+            />
+          </Panel>
+          <Panel title="候选记忆">
+            <MemoryCandidateList candidates={candidates} loading={loading} onSelect={onSelect} onStatus={onStatus} />
+          </Panel>
+        </div>
+
+        <div className="stack">
+          <Panel title={draft.id ? `编辑记忆：${short(draft.id, 18)}` : '新建记忆'} action={<button onClick={onNew}>新建</button>}>
+            <MemoryEditor draft={draft} loading={loading} onChange={onDraftChange} onSave={onSave} />
+          </Panel>
+          <Panel title="检索调试">
+            <div className="knowledge-search">
+              <div className="form-field">
+                <span>Query</span>
+                <textarea value={searchQuery} onChange={(event) => onSearchQueryChange(event.target.value)} placeholder="输入要检索的偏好、事实或决策" />
+              </div>
+              <div className="knowledge-search-row">
+                <select value={searchMode} onChange={(event) => onSearchModeChange(event.target.value as MemorySearchMode)}>
+                  <option value="hybrid">混合检索</option>
+                  <option value="keyword">关键词</option>
+                  <option value="vector">向量</option>
+                </select>
+                <button className="knowledge-search-button" onClick={onSearch} disabled={loading || !searchQuery.trim()}>
+                  <Search size={15} />检索
+                </button>
+              </div>
+              <div className="knowledge-hit-list">
+                {searchHits.length === 0 ? <Empty text="暂无检索结果" /> : searchHits.map((hit, index) => (
+                  <article className="knowledge-hit" key={`${hit.chunkId || hit.itemId}-${index}`}>
+                    <div>
+                      <strong>{hit.summary || short(hit.content, 40) || hit.itemId}</strong>
+                      <span className={`pill ${memoryStatusClass('active')}`}>{hit.scopeType || '-'}</span>
+                      <span className="mono">score {typeof hit.score === 'number' ? hit.score.toFixed(4) : '-'}</span>
+                    </div>
+                    <p>{short(hit.content, 360)}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </Panel>
+          <Panel title="命中记录">
+            <MemoryHitTable hits={hits} />
+          </Panel>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MemoryItemTable({
+  items,
+  vectorStatus,
+  selectedId,
+  loading,
+  onSelect,
+  onDelete,
+  onStatus,
+}: {
+  items: MemoryItem[];
+  vectorStatus: VectorStatusView[];
+  selectedId?: string;
+  loading: boolean;
+  onSelect: (item: MemoryItem) => void;
+  onDelete: (itemId: string) => void;
+  onStatus: (itemId: string, action: 'enable' | 'disable' | 'archive') => void;
+}) {
+  const vectorById = new Map(vectorStatus.map((item) => [item.id, item]));
+  if (!items.length) return <Empty text="暂无长期记忆。可从候选审核，也可以手动新建。" />;
+  return (
+    <div className="memory-table">
+      <Table>
+        <thead>
+          <tr>
+            <th>摘要</th>
+            <th>Scope</th>
+            <th>状态</th>
+            <th>向量</th>
+            <th>更新时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => {
+            const vector = vectorById.get(item.id);
+            return (
+              <tr className={item.id === selectedId ? 'selected-row' : undefined} key={item.id} onClick={() => onSelect(item)}>
+                <td>
+                  <strong>{item.summary || short(item.content, 48)}</strong>
+                  <small className="muted block">{short(item.content, 120)}</small>
+                </td>
+                <td><span className="pill neutral">{item.scopeType || '-'}</span></td>
+                <td><span className={`pill ${memoryStatusClass(item.status)}`}>{item.status || '-'}</span></td>
+                <td>
+                  <span className={`pill ${vector?.vectorized ? 'success' : 'warning'}`}>
+                    {(vector?.vectorCount ?? 0)}/{(vector?.chunkCount ?? 0)}
+                  </span>
+                </td>
+                <td>{formatDateTime(item.updatedAt || item.createdAt)}</td>
+                <td>
+                  <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                    {item.status === 'active'
+                      ? <button className="tiny-button" disabled={loading} onClick={() => onStatus(item.id, 'disable')}>禁用</button>
+                      : <button className="tiny-button" disabled={loading} onClick={() => onStatus(item.id, 'enable')}>启用</button>}
+                    <button className="tiny-button" disabled={loading} onClick={() => onStatus(item.id, 'archive')}>归档</button>
+                    <button className="tiny-button danger-text" disabled={loading} onClick={() => onDelete(item.id)}><Trash2 size={14} />删除</button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </Table>
+    </div>
+  );
+}
+
+function MemoryCandidateList({
+  candidates,
+  loading,
+  onSelect,
+  onStatus,
+}: {
+  candidates: MemoryItem[];
+  loading: boolean;
+  onSelect: (item: MemoryItem) => void;
+  onStatus: (itemId: string, action: 'accept' | 'reject') => void;
+}) {
+  if (!candidates.length) return <Empty text="暂无候选记忆。task 结束后的提炼结果会先进入这里。" />;
+  return (
+    <div className="memory-candidate-list">
+      {candidates.map((item) => (
+        <article className="memory-candidate" key={item.id}>
+          <button className="link-button" onClick={() => onSelect(item)}>{item.summary || short(item.content, 50)}</button>
+          <p>{short(item.content, 180)}</p>
+          <div className="row-actions">
+            <span className="pill neutral">{item.scopeType || '-'}</span>
+            <button className="tiny-button" disabled={loading} onClick={() => onStatus(item.id, 'accept')}><Check size={14} />通过</button>
+            <button className="tiny-button danger-text" disabled={loading} onClick={() => onStatus(item.id, 'reject')}><X size={14} />拒绝</button>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function MemoryEditor({
+  draft,
+  loading,
+  onChange,
+  onSave,
+}: {
+  draft: MemoryUpsertRequest;
+  loading: boolean;
+  onChange: (draft: MemoryUpsertRequest) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="config-form memory-editor">
+      <div className="form-grid">
+        <label className="form-field">
+          <span>Scope</span>
+          <select value={draft.scopeType || 'session'} onChange={(event) => onChange({ ...draft, scopeType: event.target.value })}>
+            <option value="global">global</option>
+            <option value="channel">channel</option>
+            <option value="session">session</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Scope ID</span>
+          <input value={draft.scopeId || ''} onChange={(event) => onChange({ ...draft, scopeId: event.target.value })} placeholder="global 可留空" />
+        </label>
+        <label className="form-field">
+          <span>类型</span>
+          <input value={draft.type || ''} onChange={(event) => onChange({ ...draft, type: event.target.value })} placeholder="fact/preference/decision" />
+        </label>
+        <label className="form-field">
+          <span>状态</span>
+          <select value={draft.status || 'pending'} onChange={(event) => onChange({ ...draft, status: event.target.value })}>
+            <option value="pending">pending</option>
+            <option value="active">active</option>
+            <option value="disabled">disabled</option>
+            <option value="archived">archived</option>
+          </select>
+        </label>
+        <label className="form-field wide">
+          <span>摘要</span>
+          <input value={draft.summary || ''} onChange={(event) => onChange({ ...draft, summary: event.target.value })} placeholder="列表展示和上下文预览用" />
+        </label>
+        <label className="form-field wide">
+          <span>正文</span>
+          <textarea value={draft.content || ''} onChange={(event) => onChange({ ...draft, content: event.target.value })} placeholder="稳定事实、偏好、决策或经验" />
+        </label>
+      </div>
+      <div className="form-actions">
+        <button className="primary-button" disabled={loading || !String(draft.content || '').trim()} onClick={onSave}>
+          <Check size={15} />保存记忆
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MemoryHitTable({ hits }: { hits: MemoryHitLog[] }) {
+  if (!hits.length) return <Empty text="暂无命中记录。Runtime 注入长期记忆后会记录在这里。" />;
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <th>记忆ID</th>
+          <th>会话/任务</th>
+          <th>分数</th>
+          <th>时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {hits.map((hit) => (
+          <tr key={hit.id}>
+            <td className="mono">{short(hit.itemId, 18)}</td>
+            <td>
+              <span className="mono">{short(hit.sessionId, 14)}</span>
+              <small className="muted block">{short(hit.taskId, 18)}</small>
+            </td>
+            <td>{typeof hit.score === 'number' ? hit.score.toFixed(4) : '-'}</td>
+            <td>{formatDateTime(hit.createdAt)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+function memoryStatusClass(status?: string) {
+  if (status === 'active') return 'success';
+  if (status === 'pending') return 'warning';
+  if (status === 'disabled' || status === 'archived') return 'neutral';
+  return 'neutral';
 }
 
 function AutomationPage({
@@ -3512,6 +4288,178 @@ function EventTable({ events }: { events: AgentEvent[] }) {
   );
 }
 
+function SkillsPage({
+  tools,
+  mcpServers,
+  mcpImportJson,
+  mcpUpdating,
+  mcpMessage,
+  skills,
+  skillInstallText,
+  skillUpdating,
+  skillMessage,
+  onMcpImportJsonChange,
+  onMcpImport,
+  onMcpRefresh,
+  onMcpConnection,
+  onSkillInstallTextChange,
+  onSkillInstall,
+  onSkillToggle,
+}: {
+  tools: ToolDefinition[];
+  mcpServers: McpServerRegistration[];
+  mcpImportJson: string;
+  mcpUpdating?: string;
+  mcpMessage?: string;
+  skills: SkillRegistration[];
+  skillInstallText: string;
+  skillUpdating?: string;
+  skillMessage?: string;
+  onMcpImportJsonChange: (value: string) => void;
+  onMcpImport: () => void;
+  onMcpRefresh: () => void;
+  onMcpConnection: (serverId: string, action: 'connect' | 'disconnect' | 'refresh') => void;
+  onSkillInstallTextChange: (value: string) => void;
+  onSkillInstall: () => void;
+  onSkillToggle?: (skillId: string, enabled: boolean) => void;
+}) {
+  const [tab, setTab] = useState<SkillTab>('tools');
+  return (
+    <section className="stack">
+      <div className="settings-tab-row">
+        <button className={tab === 'tools' ? 'active' : undefined} onClick={() => setTab('tools')}><Wrench size={15} />系统工具</button>
+        <button className={tab === 'mcp' ? 'active' : undefined} onClick={() => setTab('mcp')}><Plug size={15} />MCP</button>
+        <button className={tab === 'skills' ? 'active' : undefined} onClick={() => setTab('skills')}><Zap size={15} />Skill</button>
+      </div>
+      {tab === 'tools' && (
+        <Panel title="系统工具" action={<span className="muted">只读查看，不支持页面修改</span>}>
+          <SystemToolManager tools={tools} />
+        </Panel>
+      )}
+      {tab === 'mcp' && (
+        <Panel title="MCP">
+          <McpManager
+            servers={mcpServers}
+            importJson={mcpImportJson}
+            updating={mcpUpdating}
+            message={mcpMessage}
+            onImportJsonChange={onMcpImportJsonChange}
+            onImport={onMcpImport}
+            onRefresh={onMcpRefresh}
+            onConnection={onMcpConnection}
+          />
+        </Panel>
+      )}
+      {tab === 'skills' && (
+        <Panel title="Skill">
+          <SkillManager
+            skills={skills}
+            installText={skillInstallText}
+            updatingSkillId={skillUpdating}
+            message={skillMessage}
+            onInstallTextChange={onSkillInstallTextChange}
+            onInstall={onSkillInstall}
+            onToggle={onSkillToggle}
+          />
+        </Panel>
+      )}
+    </section>
+  );
+}
+
+function SystemToolManager({ tools }: { tools: ToolDefinition[] }) {
+  const [query, setQuery] = useState('');
+  const [selectedTool, setSelectedTool] = useState<ToolDefinition | undefined>();
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleTools = tools.filter((tool) => {
+    if (!normalizedQuery) return true;
+    return [tool.id, tool.name, tool.description, tool.riskLevel]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+  });
+  const highRiskCount = tools.filter((tool) => riskClass(tool.riskLevel) !== 'success').length;
+  return (
+    <div className="stack">
+      <div className="switch-list-toolbar">
+        <div className="segmented-tabs">
+          <button className="active" type="button">All {tools.length}</button>
+          <button type="button" disabled>High Risk {highRiskCount}</button>
+        </div>
+        <span className="muted">{visibleTools.length} shown</span>
+      </div>
+      <input className="switch-list-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter system tools" />
+      <ToolList tools={visibleTools} onSelect={setSelectedTool} />
+      {selectedTool && <ToolDetailModal tool={selectedTool} onClose={() => setSelectedTool(undefined)} />}
+    </div>
+  );
+}
+
+function ToolList({ tools, onSelect }: { tools: ToolDefinition[]; onSelect: (tool: ToolDefinition) => void }) {
+  if (!tools.length) return <Empty text="暂无工具" />;
+  return (
+    <div className="switch-list">
+      {tools.map((tool) => {
+        const risk = riskClass(tool.riskLevel);
+        return (
+          <div
+            className="switch-card clickable-card"
+            key={tool.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(tool)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onSelect(tool);
+              }
+            }}
+          >
+            <span className={`switch-status-dot ${risk === 'danger' ? 'failed' : 'ready'}`} />
+            <div className="switch-card-main">
+              <div className="switch-card-title">
+                <strong>{tool.name || tool.id}</strong>
+                <span className="mono">{tool.id}</span>
+                <span className={`pill ${risk}`}>{tool.riskLevel || 'unknown'}</span>
+              </div>
+              <p>{short(tool.description, 180) || '暂无描述'}</p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ToolDetailModal({ tool, onClose }: { tool: ToolDefinition; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal-shell compact-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <h3>系统工具详情</h3>
+            <small className="muted mono">{tool.id}</small>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </div>
+        <div className="detail-modal-body">
+          <section className="detail-section">
+            <h4>基础信息</h4>
+            <div className="detail-grid">
+              <span>工具ID</span><strong className="mono">{tool.id}</strong>
+              <span>名称</span><strong>{tool.name || '-'}</strong>
+              <span>风险</span><strong><span className={`pill ${riskClass(tool.riskLevel)}`}>{tool.riskLevel || 'unknown'}</span></strong>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h4>描述</h4>
+            <p className="detail-text">{tool.description || '暂无描述'}</p>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ToolTable({ tools, compact = false }: { tools: ToolDefinition[]; compact?: boolean }) {
   if (!tools.length) return <Empty text="暂无工具" />;
   return (
@@ -3538,39 +4486,562 @@ function ToolTable({ tools, compact = false }: { tools: ToolDefinition[]; compac
   );
 }
 
-function McpTable({ servers }: { servers: McpServerRegistration[] }) {
+function McpManager({
+  servers,
+  importJson,
+  updating,
+  message,
+  onImportJsonChange,
+  onImport,
+  onRefresh,
+  onConnection,
+}: {
+  servers: McpServerRegistration[];
+  importJson: string;
+  updating?: string;
+  message?: string;
+  onImportJsonChange: (value: string) => void;
+  onImport: () => void;
+  onRefresh: () => void;
+  onConnection: (serverId: string, action: 'connect' | 'disconnect' | 'refresh') => void;
+}) {
+  const [selectedServer, setSelectedServer] = useState<McpServerRegistration | undefined>();
+  return (
+    <div className="stack">
+      <div className="management-editor">
+        <label className="form-field">
+          <span>导入 MCP JSON</span>
+          <textarea
+            value={importJson}
+            onChange={(event) => onImportJsonChange(event.target.value)}
+            placeholder='{"mcpServers":{"anysearch":{"type":"streamable-http","url":"https://api.anysearch.com/mcp","headers":{}}}}'
+          />
+        </label>
+        <div className="form-actions inline-actions">
+          <button type="button" disabled={updating === 'import' || !importJson.trim()} onClick={onImport}>
+            {updating === 'import' ? '导入中...' : '导入并连接'}
+          </button>
+          <button type="button" onClick={onRefresh}>刷新</button>
+        </div>
+        {message && <div className="config-message">{message}</div>}
+      </div>
+      <McpList servers={servers} updating={updating} onConnection={onConnection} onSelect={setSelectedServer} />
+      {selectedServer && <McpDetailModal server={selectedServer} onClose={() => setSelectedServer(undefined)} />}
+    </div>
+  );
+}
+
+function McpList({
+  servers,
+  updating,
+  onConnection,
+  onSelect,
+}: {
+  servers: McpServerRegistration[];
+  updating?: string;
+  onConnection?: (serverId: string, action: 'connect' | 'disconnect' | 'refresh') => void;
+  onSelect?: (server: McpServerRegistration) => void;
+}) {
   if (!servers.length) return <Empty text="暂无 MCP Server" />;
   return (
-    <Table>
-      <thead>
-        <tr>
-          <th>名称</th>
-          <th>传输</th>
-          <th>状态</th>
-          <th>Endpoint/Command</th>
-          <th>工具数</th>
-        </tr>
-      </thead>
-      <tbody>
-        {servers.map((server, index) => {
+    <div className="switch-list">
+      {servers.map((server, index) => {
           const config = server.config || {};
           const id = server.id || config.id || `mcp-${index}`;
+          const transport = config.transport || config.type || config.transportType || '-';
+          const endpointOrCommand = config.endpoint || config.url || config.command || '-';
+          const connected = server.connected || server.status === 'CONNECTED';
           return (
-            <tr key={id}>
-              <td>{server.name || config.name || id}</td>
-              <td>{config.type || config.transportType || '-'}</td>
-              <td><span className={`pill ${server.connected || server.status === 'CONNECTED' ? 'success' : 'neutral'}`}>{server.status || '-'}</span></td>
-              <td className="mono">{short(config.url || config.command, 80)}</td>
-              <td>{server.tools?.length ?? 0}</td>
-            </tr>
+            <div
+              className="switch-card clickable-card"
+              key={id}
+              title={server.message || undefined}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect?.(server)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelect?.(server);
+                }
+              }}
+            >
+              <span className={`switch-status-dot ${connected ? 'ready' : server.status === 'FAILED' ? 'failed' : 'disabled'}`} />
+              <div className="switch-card-main">
+                <div className="switch-card-title">
+                  <strong>{server.name || config.name || id}</strong>
+                  <span className={`pill ${connected ? 'success' : server.status === 'FAILED' ? 'danger' : 'neutral'}`}>{server.status || '-'}</span>
+                  <span className="pill neutral">{transport}</span>
+                  <span className="pill neutral">{server.tools?.length ?? 0} tools</span>
+                </div>
+                <p className="mono">{short(endpointOrCommand, 120)}</p>
+                {server.message && <small>{server.message}</small>}
+              </div>
+              <div className="switch-card-actions" onClick={(event) => event.stopPropagation()}>
+                <ToggleSwitch
+                  checked={connected}
+                  disabled={updating === `connect:${id}` || updating === `disconnect:${id}`}
+                  label={connected ? '断开 MCP' : '连接 MCP'}
+                  onChange={() => onConnection?.(id, connected ? 'disconnect' : 'connect')}
+                />
+                <button className="tiny-button" disabled={!connected || updating === `refresh:${id}`} onClick={() => onConnection?.(id, 'refresh')}>刷新工具</button>
+              </div>
+            </div>
           );
         })}
-      </tbody>
-    </Table>
+    </div>
+  );
+}
+
+function McpDetailModal({ server, onClose }: { server: McpServerRegistration; onClose: () => void }) {
+  const config = server.config || {};
+  const id = server.id || config.id || '-';
+  const transport = config.transport || config.type || config.transportType || '-';
+  const endpointOrCommand = config.endpoint || config.url || config.command || '-';
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal-shell compact-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <h3>MCP Server 详情</h3>
+            <small className="muted mono">{id}</small>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </div>
+        <div className="detail-modal-body">
+          <section className="detail-section">
+            <h4>基础信息</h4>
+            <div className="detail-grid">
+              <span>名称</span><strong>{server.name || config.name || id}</strong>
+              <span>状态</span><strong><span className={`pill ${server.status === 'CONNECTED' ? 'success' : server.status === 'FAILED' ? 'danger' : 'neutral'}`}>{server.status || '-'}</span></strong>
+              <span>传输</span><strong>{transport}</strong>
+              <span>工具数</span><strong>{server.tools?.length ?? 0}</strong>
+              <span>注册时间</span><strong>{formatDateTime(server.registeredAt)}</strong>
+              <span>说明</span><strong>{server.message || '-'}</strong>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h4>连接配置</h4>
+            <div className="detail-grid">
+              <span>Endpoint/Command</span><strong className="mono">{endpointOrCommand}</strong>
+              <span>工作目录</span><strong className="mono">{config.cwd || '-'}</strong>
+              <span>超时秒数</span><strong>{config.timeoutSeconds ?? '-'}</strong>
+              <span>启用状态</span><strong>{config.enabled === false || config.disabled ? '禁用' : '启用'}</strong>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h4>参数与授权</h4>
+            <pre className="json-block detail-json">{prettyJson({
+              args: config.args || [],
+              headers: config.headers || {},
+              env: config.env || {},
+              autoApprove: config.autoApprove || [],
+              tools: server.tools || [],
+            })}</pre>
+          </section>
+        </div>
+      </div>
+    </div>
   );
 }
 
 function ModelConfigPanel({
+  draft,
+  config,
+  saving,
+  testing,
+  testResult,
+  message,
+  onChange,
+  onSave,
+  onSaveModel,
+  onTestModel,
+}: {
+  draft: ModelConfigUpdate;
+  config?: RuntimeConfigSnapshot;
+  saving: boolean;
+  testing: boolean;
+  testResult?: ModelApiTestResponse;
+  message?: string;
+  onChange: (draft: ModelConfigUpdate) => void;
+  onSave: () => void;
+  onSaveModel: (request: ModelConfigUpsertRequest) => void;
+  onTestModel: (request: ModelConfigUpsertRequest) => void;
+}) {
+  const [showChatKey, setShowChatKey] = useState(false);
+  const [showNewModelDialog, setShowNewModelDialog] = useState(false);
+  const [newModel, setNewModel] = useState<ModelConfigUpsertRequest>({
+    id: '',
+    provider: '',
+    baseUrl: '',
+    model: '',
+    apiKey: '',
+    temperature: 0.2,
+    timeoutSeconds: 60,
+  });
+  const update = (patch: Partial<ModelConfigUpdate>) => onChange({ ...draft, ...patch });
+  const configuredModels = config?.models || {};
+  const modelProfiles = [
+    {
+      id: 'deepseek-v4-flash',
+      label: 'DeepSeek V4 Flash',
+      patch: {
+        client: 'openai-compatible',
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        temperature: 0.2,
+        timeoutSeconds: 60,
+      },
+    },
+    {
+      id: 'siliconflow-qwen3-8b',
+      label: 'SiliconFlow Qwen3-8B 免费',
+      patch: {
+        client: 'openai-compatible',
+        provider: 'siliconflow',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        model: 'Qwen/Qwen3-8B',
+        temperature: 0.2,
+        timeoutSeconds: 60,
+      },
+    },
+  ];
+  const modelOptions = [
+    ...modelProfiles.map((profile) => ({
+      ...profile,
+      // 同名模型以服务端配置为准，预设只负责提供展示名和默认兜底值。
+      patch: { ...profile.patch, ...(configuredModels[profile.id] || {}) },
+    })),
+    ...Object.entries(configuredModels)
+      .filter(([id]) => !modelProfiles.some((profile) => profile.id === id))
+      .map(([id, model]) => ({ id, label: `${id} (${model.model || 'custom'})`, patch: model })),
+  ];
+  const applyModelProfile = (profileId: string, target: 'chat' | 'memory') => {
+    const profile = modelOptions.find((item) => item.id === profileId);
+    if (!profile) return;
+    const patch = profile.patch as Partial<ModelConfigUpdate>;
+    update({
+      ...(target === 'chat'
+        ? {
+          defaultModel: profile.id,
+          client: 'openai-compatible',
+          provider: patch.provider || '',
+          baseUrl: patch.baseUrl || '',
+          model: patch.model || profile.id,
+          apiKey: patch.apiKey || '',
+          temperature: patch.temperature ?? draft.temperature,
+          timeoutSeconds: patch.timeoutSeconds ?? draft.timeoutSeconds,
+        }
+        : { memoryModel: profile.id }),
+    });
+  };
+  const testCurrentModel = () => onTestModel({
+    id: draft.defaultModel || draft.model || 'current',
+    provider: draft.provider,
+    baseUrl: draft.baseUrl,
+    model: draft.model,
+    apiKey: draft.apiKey || config?.effectiveModel?.apiKey || '',
+    temperature: draft.temperature,
+    timeoutSeconds: draft.timeoutSeconds,
+  });
+  return (
+    <Panel
+      title="模型 API"
+      action={
+        <div className="inline-actions">
+          <button type="button" onClick={() => setShowNewModelDialog(true)}><Plus size={14} />添加模型</button>
+          <span className={`pill ${config?.restartRequired ? 'warning' : 'neutral'}`}>{config?.restartRequired ? '重启生效' : '当前配置'}</span>
+        </div>
+      }
+    >
+      <form
+        className="config-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave();
+        }}
+      >
+        <div className="model-config-grid two">
+          <section className="model-config-card">
+            <div className="model-config-card-head">
+              <strong>聊天模型</strong>
+              <span className="pill neutral">{draft.model || draft.defaultModel || '-'}</span>
+            </div>
+            <label className="form-field">
+              <span>模型</span>
+              <select value={draft.defaultModel || ''} onChange={(event) => applyModelProfile(event.target.value, 'chat')}>
+                <option value="">请选择聊天模型</option>
+                {modelOptions.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+              </select>
+            </label>
+            <label className="form-field">
+              <span>API Key</span>
+              <div className="secret-input-row">
+                <input type={showChatKey ? 'text' : 'password'} value={draft.apiKey || ''} onChange={(event) => update({ apiKey: event.target.value })} placeholder="请输入 API Key" />
+                <button type="button" onClick={() => setShowChatKey((current) => !current)}>{showChatKey ? '隐藏' : '查看'}</button>
+              </div>
+            </label>
+            <details className="advanced-config">
+              <summary>高级参数</summary>
+              <div className="form-grid">
+                <label className="form-field">
+                  <span>Provider</span>
+                  <input value={draft.provider || ''} onChange={(event) => update({ provider: event.target.value })} />
+                </label>
+                <label className="form-field">
+                  <span>Base URL</span>
+                  <input value={draft.baseUrl || ''} onChange={(event) => update({ baseUrl: event.target.value })} />
+                </label>
+                <label className="form-field">
+                  <span>真实模型名</span>
+                  <input value={draft.model || ''} onChange={(event) => update({ model: event.target.value })} />
+                </label>
+                <label className="form-field">
+                  <span>Temperature</span>
+                  <input type="number" min="0" max="2" step="0.1" value={draft.temperature ?? 0.2} onChange={(event) => update({ temperature: Number(event.target.value) })} />
+                </label>
+                <label className="form-field">
+                  <span>超时秒数</span>
+                  <input type="number" min="1" step="1" value={draft.timeoutSeconds ?? 60} onChange={(event) => update({ timeoutSeconds: Number(event.target.value) })} />
+                </label>
+              </div>
+            </details>
+            <div className="inline-actions">
+              <button type="button" disabled={testing || !draft.baseUrl || !draft.model || !(draft.apiKey || config?.effectiveModel?.apiKey)} onClick={testCurrentModel}>
+                {testing ? '测试中...' : '在线测试'}
+              </button>
+            </div>
+          </section>
+          <section className="model-config-card">
+            <div className="model-config-card-head">
+              <strong>记忆模型</strong>
+              <span className="pill neutral">{draft.memoryModel || '复用聊天模型'}</span>
+            </div>
+            <label className="form-field">
+              <span>模型</span>
+              <select value={draft.memoryModel || draft.defaultModel || ''} onChange={(event) => applyModelProfile(event.target.value, 'memory')}>
+                <option value="">复用聊天模型</option>
+                {modelOptions.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+              </select>
+            </label>
+            <p className="muted compact-text">用于判断哪些内容值得进入长期记忆。通常可以选择便宜模型。</p>
+          </section>
+        </div>
+        <details className="advanced-config">
+          <summary>运行参数</summary>
+          <div className="form-grid">
+            <label className="form-field">
+              <span>运行模式</span>
+              <select value={draft.mode || 'llm'} onChange={(event) => update({ mode: event.target.value })}>
+                <option value="llm">llm</option>
+                <option value="rule">rule</option>
+              </select>
+            </label>
+            <label className="form-field">
+              <span>Planner</span>
+              <select value={draft.planner || 'react'} onChange={(event) => update({ planner: event.target.value })}>
+                <option value="react">react</option>
+                <option value="llm">llm</option>
+                <option value="rule">rule</option>
+              </select>
+            </label>
+            <label className="form-field">
+              <span>模型客户端</span>
+              <select value={draft.client || 'openai-compatible'} onChange={(event) => update({ client: event.target.value })}>
+                <option value="openai-compatible">openai-compatible</option>
+                <option value="spring-ai">spring-ai</option>
+              </select>
+            </label>
+          </div>
+        </details>
+        <div className="config-note">
+          Chat API Key 保存到本地配置；当前状态：
+          <strong>{config?.effectiveModel?.apiKeyConfigured ? '已配置' : '未检测到'}</strong>
+        </div>
+        <div className="config-note">
+          保存路径：<strong className="mono">{config?.configPath || '.clawagent/config/clawagent.yml'}</strong>
+        </div>
+        {testResult && (
+          <div className={`config-message ${testResult.success ? 'success-message' : ''}`}>
+            <strong>{testResult.success ? '测试通过' : '测试失败'}</strong>
+            <span> · HTTP {testResult.statusCode ?? 0} · {testResult.elapsedMs ?? 0}ms · Prompt {testResult.promptTokens ?? 0} / Completion {testResult.completionTokens ?? 0} / Total {testResult.totalTokens ?? 0}</span>
+            <p>{testResult.message || '-'}</p>
+            {testResult.rawError && <pre className="inline-error-block">{testResult.rawError}</pre>}
+          </div>
+        )}
+        {message && <div className="config-message">{message}</div>}
+        <div className="form-actions">
+          <button className="send-button" type="submit" disabled={saving}>{saving ? '保存中...' : '保存模型配置'}</button>
+        </div>
+      </form>
+      {showNewModelDialog && (
+        <div className="modal-backdrop" onClick={() => setShowNewModelDialog(false)}>
+          <div className="modal-shell compact-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>添加模型</h3>
+              <button className="tiny-button" type="button" onClick={() => setShowNewModelDialog(false)}><X size={14} />关闭</button>
+            </div>
+            <div className="config-form">
+              <div className="form-grid">
+                <label className="form-field">
+                  <span>模型 ID</span>
+                  <input value={newModel.id} onChange={(event) => setNewModel({ ...newModel, id: event.target.value })} placeholder="例如 siliconflow-qwen3-32b" />
+                </label>
+                <label className="form-field">
+                  <span>Provider</span>
+                  <input value={newModel.provider || ''} onChange={(event) => setNewModel({ ...newModel, provider: event.target.value })} placeholder="siliconflow" />
+                </label>
+                <label className="form-field">
+                  <span>Base URL</span>
+                  <input value={newModel.baseUrl || ''} onChange={(event) => setNewModel({ ...newModel, baseUrl: event.target.value })} placeholder="https://api.siliconflow.cn/v1" />
+                </label>
+                <label className="form-field">
+                  <span>真实模型名</span>
+                  <input value={newModel.model || ''} onChange={(event) => setNewModel({ ...newModel, model: event.target.value })} placeholder="Qwen/..." />
+                </label>
+                <label className="form-field wide">
+                  <span>API Key</span>
+                  <input type="password" value={newModel.apiKey || ''} onChange={(event) => setNewModel({ ...newModel, apiKey: event.target.value })} placeholder="不填则复用当前聊天模型 Key" />
+                </label>
+              </div>
+              <div className="form-actions inline-actions">
+                <button type="button" disabled={testing || !newModel.baseUrl || !newModel.model || !(newModel.apiKey || draft.apiKey)} onClick={() => onTestModel({ ...newModel, apiKey: newModel.apiKey || draft.apiKey || '' })}>测试</button>
+                <button className="send-button" type="button" disabled={saving || !newModel.id.trim()} onClick={() => {
+                  onSaveModel({ ...newModel, apiKey: newModel.apiKey || draft.apiKey || '' });
+                  setShowNewModelDialog(false);
+                }}>保存模型</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function EmbeddingConfigPanel({
+  draft,
+  config,
+  saving,
+  knowledgeVectorStatus,
+  memoryVectorStatus,
+  message,
+  onChange,
+  onSave,
+}: {
+  draft: ModelConfigUpdate;
+  config?: RuntimeConfigSnapshot;
+  saving: boolean;
+  knowledgeVectorStatus: VectorStatusView[];
+  memoryVectorStatus: VectorStatusView[];
+  message?: string;
+  onChange: (draft: ModelConfigUpdate) => void;
+  onSave: () => void;
+}) {
+  const [showEmbeddingKey, setShowEmbeddingKey] = useState(false);
+  const update = (patch: Partial<ModelConfigUpdate>) => onChange({ ...draft, ...patch });
+  const embeddingProfiles = [
+    {
+      id: 'siliconflow-bge-m3',
+      label: 'SiliconFlow BGE-M3 免费',
+      patch: {
+        embeddingProvider: 'siliconflow',
+        embeddingBaseUrl: 'https://api.siliconflow.cn/v1',
+        embeddingModel: 'BAAI/bge-m3',
+        embeddingDimensions: 0,
+        embeddingTimeoutSeconds: 60,
+      },
+    },
+  ];
+  const applyEmbeddingProfile = (profileId: string) => {
+    const profile = embeddingProfiles.find((item) => item.id === profileId);
+    if (profile) update({ ...profile.patch, embeddingApiKey: draft.embeddingApiKey || config?.embedding?.apiKey || '' });
+  };
+  const knowledgeReady = knowledgeVectorStatus.filter((item) => item.vectorized).length;
+  const memoryReady = memoryVectorStatus.filter((item) => item.vectorized).length;
+  return (
+    <Panel
+      title="向量模型"
+      action={<span className={`pill ${config?.embedding?.apiKeyConfigured ? 'success' : 'warning'}`}>{config?.embedding?.apiKeyConfigured ? '已配置' : '未配置'}</span>}
+    >
+      <form
+        className="config-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave();
+        }}
+      >
+        <div className="model-config-grid two">
+          <section className="model-config-card">
+            <div className="model-config-card-head">
+              <strong>Embedding API</strong>
+              <span className="pill neutral">{draft.embeddingModel || '-'}</span>
+            </div>
+            <label className="form-field">
+              <span>模型</span>
+              <select value={draft.embeddingModel ? 'siliconflow-bge-m3' : ''} onChange={(event) => applyEmbeddingProfile(event.target.value)}>
+                <option value="">请选择向量模型</option>
+                {embeddingProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+              </select>
+            </label>
+            <label className="form-field">
+              <span>API Key</span>
+              <div className="secret-input-row">
+                <input type={showEmbeddingKey ? 'text' : 'password'} value={draft.embeddingApiKey || ''} onChange={(event) => update({ embeddingApiKey: event.target.value })} placeholder="请输入 Embedding API Key" />
+                <button type="button" onClick={() => setShowEmbeddingKey((current) => !current)}>{showEmbeddingKey ? '隐藏' : '查看'}</button>
+              </div>
+            </label>
+            <div className="form-grid">
+              <label className="form-field">
+                <span>Provider</span>
+                <input value={draft.embeddingProvider || ''} onChange={(event) => update({ embeddingProvider: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>Base URL</span>
+                <input value={draft.embeddingBaseUrl || ''} onChange={(event) => update({ embeddingBaseUrl: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>真实模型名</span>
+                <input value={draft.embeddingModel || ''} onChange={(event) => update({ embeddingModel: event.target.value })} />
+              </label>
+              <label className="form-field">
+                <span>维度</span>
+                <input type="number" min="0" step="1" value={draft.embeddingDimensions ?? 0} onChange={(event) => update({ embeddingDimensions: Number(event.target.value) })} />
+              </label>
+              <label className="form-field">
+                <span>超时秒数</span>
+                <input type="number" min="1" step="1" value={draft.embeddingTimeoutSeconds ?? 60} onChange={(event) => update({ embeddingTimeoutSeconds: Number(event.target.value) })} />
+              </label>
+            </div>
+          </section>
+          <section className="model-config-card">
+            <div className="model-config-card-head">
+              <strong>向量化状态</strong>
+              <span className="pill neutral">chunk/vector</span>
+            </div>
+            <div className="vector-status-summary">
+              <div><span>知识库</span><strong>{knowledgeReady}/{knowledgeVectorStatus.length}</strong></div>
+              <div><span>记忆</span><strong>{memoryReady}/{memoryVectorStatus.length}</strong></div>
+            </div>
+            <VectorStatusList title="知识库文档" items={knowledgeVectorStatus} />
+            <VectorStatusList title="长期记忆" items={memoryVectorStatus} />
+          </section>
+        </div>
+        <div className="config-note">
+          Embedding API Key 保存到本地配置；当前状态：
+          <strong>{config?.embedding?.apiKeyConfigured ? '已配置' : '未检测到'}</strong>
+        </div>
+        {message && <div className="config-message">{message}</div>}
+        <div className="form-actions">
+          <button className="send-button" type="submit" disabled={saving}>{saving ? '保存中...' : '保存向量模型配置'}</button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
+function MemoryExtractionConfigPanel({
   draft,
   config,
   saving,
@@ -3586,10 +5057,12 @@ function ModelConfigPanel({
   onSave: () => void;
 }) {
   const update = (patch: Partial<ModelConfigUpdate>) => onChange({ ...draft, ...patch });
+  const extraction = config?.memoryExtraction || {};
+  const isBatchMode = draft.memoryExtractionMode === 'batch';
   return (
     <Panel
-      title="模型配置"
-      action={<span className={`pill ${config?.restartRequired ? 'warning' : 'neutral'}`}>{config?.restartRequired ? '重启生效' : '当前配置'}</span>}
+      title="记忆处理"
+      action={<span className={`pill ${draft.memoryExtractionEnabled === false ? 'warning' : 'success'}`}>{draft.memoryExtractionEnabled === false ? '已关闭' : '已启用'}</span>}
     >
       <form
         className="config-form"
@@ -3598,135 +5071,297 @@ function ModelConfigPanel({
           onSave();
         }}
       >
-        <div className="form-grid">
-          <label className="form-field">
-            <span>运行模式</span>
-            <select value={draft.mode || 'llm'} onChange={(event) => update({ mode: event.target.value })}>
-              <option value="llm">llm</option>
-              <option value="rule">rule</option>
-            </select>
-          </label>
-          <label className="form-field">
-            <span>Planner</span>
-            <select value={draft.planner || 'react'} onChange={(event) => update({ planner: event.target.value })}>
-              <option value="react">react</option>
-              <option value="llm">llm</option>
-              <option value="rule">rule</option>
-            </select>
-          </label>
-          <label className="form-field">
-            <span>模型客户端</span>
-            <select value={draft.client || 'openai-compatible'} onChange={(event) => update({ client: event.target.value })}>
-              <option value="openai-compatible">openai-compatible</option>
-              <option value="spring-ai">spring-ai</option>
-            </select>
-          </label>
-          <label className="form-field">
-            <span>默认模型 ID</span>
-            <input value={draft.defaultModel || ''} onChange={(event) => update({ defaultModel: event.target.value })} placeholder="deepseek-v4-flash" />
-          </label>
-          <label className="form-field">
-            <span>Provider</span>
-            <input value={draft.provider || ''} onChange={(event) => update({ provider: event.target.value })} placeholder="deepseek/openai/..." />
-          </label>
-          <label className="form-field">
-            <span>Base URL</span>
-            <input value={draft.baseUrl || ''} onChange={(event) => update({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
-          </label>
-          <label className="form-field">
-            <span>模型名称</span>
-            <input value={draft.model || ''} onChange={(event) => update({ model: event.target.value })} placeholder="provider model name" />
-          </label>
-          <label className="form-field">
-            <span>API Key 环境变量</span>
-            <input value={draft.apiKeyEnv || ''} onChange={(event) => update({ apiKeyEnv: event.target.value })} placeholder="DEEPSEEK_API_KEY" />
-          </label>
-          <label className="form-field">
-            <span>Temperature</span>
-            <input
-              type="number"
-              min="0"
-              max="2"
-              step="0.1"
-              value={draft.temperature ?? 0.2}
-              onChange={(event) => update({ temperature: Number(event.target.value) })}
-            />
-          </label>
-          <label className="form-field">
-            <span>超时秒数</span>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={draft.timeoutSeconds ?? 60}
-              onChange={(event) => update({ timeoutSeconds: Number(event.target.value) })}
-            />
-          </label>
-        </div>
-        <div className="config-note">
-          API Key 只保存环境变量名；当前变量状态：
-          <strong>{config?.effectiveModel?.apiKeyConfigured ? '已配置' : '未检测到'}</strong>
-        </div>
-        <div className="config-note">
-          保存路径：<strong className="mono">{config?.configPath || '.clawagent/config/clawagent.yml'}</strong>
+        <div className="model-config-grid two">
+          <section className="model-config-card">
+            <div className="model-config-card-head">
+              <strong>触发方式</strong>
+              <span className="pill neutral">候选记忆</span>
+            </div>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={draft.memoryExtractionEnabled ?? true}
+                onChange={(event) => update({ memoryExtractionEnabled: event.target.checked })}
+              />
+              <span>启用候选记忆提炼</span>
+            </label>
+            <div className="radio-card-group">
+              <label className={`radio-card ${draft.memoryExtractionMode !== 'batch' ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="memoryExtractionMode"
+                  checked={draft.memoryExtractionMode !== 'batch'}
+                  onChange={() => update({ memoryExtractionMode: 'after-task-async' })}
+                />
+                <span>
+                  <strong>任务异步处理</strong>
+                  <small>每轮任务结束后立即放到后台处理。</small>
+                </span>
+              </label>
+              <label className={`radio-card ${draft.memoryExtractionMode === 'batch' ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="memoryExtractionMode"
+                  checked={draft.memoryExtractionMode === 'batch'}
+                  onChange={() => update({ memoryExtractionMode: 'batch' })}
+                />
+                <span>
+                  <strong>定时增量处理</strong>
+                  <small>按定时间隔或累计条数触发批处理。</small>
+                </span>
+              </label>
+            </div>
+            <p className="muted compact-text">这是二选一策略。聊天主链路只负责入队，后台再调用记忆模型判断是否生成 pending 记忆。</p>
+          </section>
+          <section className="model-config-card">
+            <div className="model-config-card-head">
+              <strong>{isBatchMode ? '批处理参数' : '当前策略'}</strong>
+              <span className="pill neutral">{isBatchMode ? `${draft.memoryExtractionBatchSize ?? extraction.batchSize ?? 100} 条/批` : '无参数'}</span>
+            </div>
+            {isBatchMode ? (
+              <>
+                <div className="form-grid">
+                  <label className="form-field">
+                    <span>定时间隔秒数</span>
+                    <input type="number" min="1" step="1" value={draft.memoryExtractionIntervalSeconds ?? 60} onChange={(event) => update({ memoryExtractionIntervalSeconds: Number(event.target.value) })} />
+                  </label>
+                  <label className="form-field">
+                    <span>批次大小</span>
+                    <input type="number" min="1" step="1" value={draft.memoryExtractionBatchSize ?? 100} onChange={(event) => update({ memoryExtractionBatchSize: Number(event.target.value) })} />
+                  </label>
+                </div>
+                <p className="muted compact-text">达到批次大小会立即触发后台消费；定时任务负责处理未满批次的增量内容。</p>
+              </>
+            ) : (
+              <div className="strategy-summary">
+                <strong>任务完成后立即进入后台队列</strong>
+                <p>当前策略没有业务参数。每轮任务结束后只做快速入队，后台线程随后处理候选记忆，不阻塞聊天回复。</p>
+              </div>
+            )}
+          </section>
         </div>
         {message && <div className="config-message">{message}</div>}
         <div className="form-actions">
-          <button className="send-button" type="submit" disabled={saving}>{saving ? '保存中...' : '保存模型配置'}</button>
+          <button className="send-button" type="submit" disabled={saving}>{saving ? '保存中...' : '保存记忆配置'}</button>
         </div>
       </form>
     </Panel>
   );
 }
 
-function SkillTable({
+function VectorStatusList({ title, items }: { title: string; items: VectorStatusView[] }) {
+  return (
+    <div className="vector-status-list">
+      <strong>{title}</strong>
+      {items.length === 0 ? (
+        <small className="muted">暂无数据</small>
+      ) : items.slice(0, 8).map((item) => (
+        <div key={item.id}>
+          <span title={item.name || item.id}>{short(item.name || item.id, 28)}</span>
+          <em className={`pill ${item.vectorized ? 'success' : 'warning'}`}>{item.vectorCount ?? 0}/{item.chunkCount ?? 0}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SkillManager({
+  skills,
+  installText,
+  updatingSkillId,
+  message,
+  onInstallTextChange,
+  onInstall,
+  onToggle,
+}: {
+  skills: SkillRegistration[];
+  installText: string;
+  updatingSkillId?: string;
+  message?: string;
+  onInstallTextChange: (value: string) => void;
+  onInstall: () => void;
+  onToggle?: (skillId: string, enabled: boolean) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<'all' | 'ready' | 'disabled'>('all');
+  const [selectedSkill, setSelectedSkill] = useState<SkillRegistration | undefined>();
+  const readyCount = skills.filter((skill) => skill.manifest?.enabled).length;
+  const disabledCount = skills.length - readyCount;
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleSkills = skills.filter((skill) => {
+    const manifest = skill.manifest || {};
+    const enabled = Boolean(manifest.enabled);
+    if (filter === 'ready' && !enabled) return false;
+    if (filter === 'disabled' && enabled) return false;
+    if (!normalizedQuery) return true;
+    return [
+      manifest.id,
+      manifest.name,
+      manifest.description,
+      skill.installedPath,
+    ].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedQuery));
+  });
+  return (
+    <div className="stack">
+      <div className="management-editor">
+        <label className="form-field">
+          <span>安装 Skill</span>
+          <textarea
+            value={installText}
+            onChange={(event) => onInstallTextChange(event.target.value)}
+            placeholder="粘贴 SKILL.md 内容，或粘贴 { manifest, content, resourceFiles } JSON 包"
+          />
+        </label>
+        <div className="form-actions inline-actions">
+          <button type="button" disabled={updatingSkillId === 'install' || !installText.trim()} onClick={onInstall}>
+            {updatingSkillId === 'install' ? '安装中...' : '安装并加载'}
+          </button>
+        </div>
+        {message && <div className="config-message">{message}</div>}
+      </div>
+      <div className="switch-list-toolbar">
+        <div className="segmented-tabs">
+          <button className={filter === 'all' ? 'active' : undefined} onClick={() => setFilter('all')}>All {skills.length}</button>
+          <button className={filter === 'ready' ? 'active' : undefined} onClick={() => setFilter('ready')}>Ready {readyCount}</button>
+          <button className={filter === 'disabled' ? 'active' : undefined} onClick={() => setFilter('disabled')}>Disabled {disabledCount}</button>
+        </div>
+        <span className="muted">{visibleSkills.length} shown</span>
+      </div>
+      <input className="switch-list-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter installed skills" />
+      <SkillList skills={visibleSkills} updatingSkillId={updatingSkillId} onToggle={onToggle} onSelect={setSelectedSkill} />
+      {selectedSkill && <SkillDetailModal skill={selectedSkill} onClose={() => setSelectedSkill(undefined)} />}
+    </div>
+  );
+}
+
+function SkillList({
   skills,
   updatingSkillId,
   onToggle,
+  onSelect,
 }: {
   skills: SkillRegistration[];
   updatingSkillId?: string;
   onToggle?: (skillId: string, enabled: boolean) => void;
+  onSelect?: (skill: SkillRegistration) => void;
 }) {
   if (!skills.length) return <Empty text="暂无 Skill" />;
   return (
-    <Table>
-      <thead>
-        <tr>
-          <th>Skill ID</th>
-          <th>名称</th>
-          <th>版本</th>
-          <th>状态</th>
-          <th>工具</th>
-          <th>描述</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {skills.map((skill, index) => {
+    <div className="switch-list">
+      {skills.map((skill, index) => {
           const manifest = skill.manifest || {};
           const id = manifest.id || `skill-${index}`;
           const enabled = Boolean(manifest.enabled);
           return (
-            <tr key={id}>
-              <td className="mono">{id}</td>
-              <td>{manifest.name || '-'}</td>
-              <td>{manifest.version || '-'}</td>
-              <td><span className={`pill ${enabled ? 'success' : 'neutral'}`}>{skill.status || (enabled ? 'enabled' : 'disabled')}</span></td>
-              <td>{manifest.tools?.length ?? 0}</td>
-              <td>{short(manifest.description, 120)}</td>
-              <td>
-                {onToggle && (
-                  <button className="tiny-button" disabled={updatingSkillId === id} onClick={() => onToggle(id, enabled)}>
-                    {updatingSkillId === id ? '处理中' : enabled ? '禁用' : '启用'}
-                  </button>
-                )}
-              </td>
-            </tr>
+            <div
+              className="switch-card clickable-card"
+              key={id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect?.(skill)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelect?.(skill);
+                }
+              }}
+            >
+              <span className={`switch-status-dot ${enabled ? 'ready' : 'disabled'}`} />
+              <div className="switch-card-main">
+                <div className="switch-card-title">
+                  <strong>{manifest.name || id}</strong>
+                  <span className="mono">{id}</span>
+                  <span className={`pill ${enabled ? 'success' : 'neutral'}`}>{skill.status || (enabled ? 'enabled' : 'disabled')}</span>
+                  <span className="pill neutral">{manifest.tools?.length ?? 0} tools</span>
+                </div>
+                <p>{short(manifest.description, 160) || '暂无描述'}</p>
+                <small className="mono">{skill.installedPath || '-'}</small>
+              </div>
+              {onToggle && (
+                <div className="switch-card-actions" onClick={(event) => event.stopPropagation()}>
+                  <ToggleSwitch
+                    checked={enabled}
+                    disabled={updatingSkillId === id}
+                    label={enabled ? '禁用 Skill' : '启用 Skill'}
+                    onChange={() => onToggle(id, enabled)}
+                  />
+                </div>
+              )}
+            </div>
           );
         })}
-      </tbody>
-    </Table>
+    </div>
+  );
+}
+
+function SkillDetailModal({ skill, onClose }: { skill: SkillRegistration; onClose: () => void }) {
+  const manifest = skill.manifest || {};
+  const id = manifest.id || '-';
+  const enabled = Boolean(manifest.enabled);
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal-shell compact-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <h3>Skill 详情</h3>
+            <small className="muted mono">{id}</small>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </div>
+        <div className="detail-modal-body">
+          <section className="detail-section">
+            <h4>基础信息</h4>
+            <div className="detail-grid">
+              <span>名称</span><strong>{manifest.name || id}</strong>
+              <span>版本</span><strong>{manifest.version || '-'}</strong>
+              <span>状态</span><strong><span className={`pill ${enabled ? 'success' : 'neutral'}`}>{skill.status || (enabled ? 'enabled' : 'disabled')}</span></strong>
+              <span>启用状态</span><strong>{enabled ? '启用' : '禁用'}</strong>
+              <span>安装时间</span><strong>{formatDateTime(skill.installedAt)}</strong>
+              <span>入口文件</span><strong className="mono">{manifest.entrypoint || '-'}</strong>
+              <span>安装目录</span><strong className="mono">{skill.installedPath || '-'}</strong>
+              <span>说明</span><strong>{skill.message || '-'}</strong>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h4>描述</h4>
+            <p className="detail-text">{manifest.description || '暂无描述'}</p>
+          </section>
+          <section className="detail-section">
+            <h4>工具与权限</h4>
+            <pre className="json-block detail-json">{prettyJson({
+              tools: manifest.tools || [],
+              permissions: manifest.permissions || [],
+              metadata: manifest.metadata || {},
+            })}</pre>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ToggleSwitch({
+  checked,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={checked}
+      className={`toggle-switch ${checked ? 'on' : ''}`}
+      disabled={disabled}
+      onClick={onChange}
+    >
+      <span />
+    </button>
   );
 }
 

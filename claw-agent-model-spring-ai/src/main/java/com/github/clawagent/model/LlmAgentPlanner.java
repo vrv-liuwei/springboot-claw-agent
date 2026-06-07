@@ -78,6 +78,11 @@ public class LlmAgentPlanner implements AgentPlanner {
         return context == null ? "" : context.trim();
     }
 
+    static String memoryContext(AgentTask task) {
+        String context = task.metadata().getOrDefault("runtime.memoryContext", "");
+        return context == null ? "" : context.trim();
+    }
+
     static String knowledgeContext(AgentTask task) {
         String context = task.metadata().getOrDefault("knowledge.context", "");
         return context == null ? "" : context.trim();
@@ -88,6 +93,10 @@ public class LlmAgentPlanner implements AgentPlanner {
         String knowledge = knowledgeContext(task);
         if (!knowledge.isBlank()) {
             prompt.append("知识库上下文：\n").append(knowledge).append("\n\n");
+        }
+        String memory = memoryContext(task);
+        if (!memory.isBlank()) {
+            prompt.append("记忆上下文：\n").append(memory).append("\n\n");
         }
         String context = sessionContext(task);
         if (!context.isBlank()) {

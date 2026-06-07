@@ -28,7 +28,11 @@ import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.LlmCallTrace;
 import com.github.clawagent.spi.LlmTraceContext;
+import com.github.clawagent.spi.MemoryCandidateProcessor;
+import com.github.clawagent.spi.MemoryContextBuilder;
+import com.github.clawagent.spi.MemoryExtractor;
 import com.github.clawagent.spi.MemoryPromoter;
+import com.github.clawagent.spi.MemoryProvider;
 import com.github.clawagent.spi.ChatStreamCallback;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
@@ -56,6 +60,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * DefaultAgentRuntime 是 M1 的核心执行链路。
@@ -63,6 +69,10 @@ import java.util.concurrent.Future;
  */
 public class DefaultAgentRuntime implements AgentRuntime {
     private static final Logger log = LoggerFactory.getLogger(DefaultAgentRuntime.class);
+    /** 从模型 responseJson 中恢复 usage，避免 runtime 模块为了兜底解析额外依赖 Jackson。 */
+    private static final Pattern PROMPT_TOKENS_PATTERN = Pattern.compile("\"prompt_tokens\"\\s*:\\s*(\\d+)");
+    private static final Pattern COMPLETION_TOKENS_PATTERN = Pattern.compile("\"completion_tokens\"\\s*:\\s*(\\d+)");
+    private static final Pattern TOTAL_TOKENS_PATTERN = Pattern.compile("\"total_tokens\"\\s*:\\s*(\\d+)");
     /** 默认 ReAct 最大轮次，避免模型反复规划导致请求长时间不返回。 */
     private static final int DEFAULT_MAX_REACT_ROUNDS = 20;
     /** 传给模型的最近会话消息数量，避免短句追问丢失上下文。 */
@@ -71,6 +81,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private static final int SESSION_CONTEXT_CHAR_LIMIT = 10_000;
     /** Runtime 注入给 Planner/ResponseGenerator 的会话上下文 metadata key。 */
     private static final String SESSION_CONTEXT_METADATA_KEY = "runtime.sessionContext";
+    /** Runtime 注入给 Planner/ResponseGenerator 的统一记忆上下文 metadata key。 */
+    private static final String MEMORY_CONTEXT_METADATA_KEY = "runtime.memoryContext";
     /** JDK17 下平台线程仍然较重，先限制单轮只读工具并发数，避免一次 ReAct 打满服务器线程。 */
     private static final int MAX_PARALLEL_TOOL_CALLS = 8;
 
@@ -82,6 +94,9 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final SessionMessageStore messageStore;
     private final SessionSummarizer sessionSummarizer;
     private final List<MemoryPromoter> memoryPromoters;
+    private final MemoryContextBuilder memoryContextBuilder;
+    /** 候选记忆处理器。Runtime 只提交任务，实际提炼由异步/定时批处理器完成。 */
+    private final MemoryCandidateProcessor memoryCandidateProcessor;
     private final AgentEventStore eventStore;
     private final TodoStore todoStore;
     private final List<ToolExecutionGuard> toolGuards;
@@ -97,22 +112,50 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final ThreadLocal<TodoItem> activeTodo = new ThreadLocal<>();
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks) {
-        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, null, toolGuards, callbacks, DEFAULT_MAX_REACT_ROUNDS);
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, null, List.of(), null, eventStore, null, toolGuards, callbacks,
+                DEFAULT_MAX_REACT_ROUNDS, List.of(new SensitiveDataInterceptor(SanitizationOptions.defaults())));
     }
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks) {
-        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, DEFAULT_MAX_REACT_ROUNDS);
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, null, List.of(), null, eventStore, todoStore, toolGuards, callbacks,
+                DEFAULT_MAX_REACT_ROUNDS, List.of(new SensitiveDataInterceptor(SanitizationOptions.defaults())));
     }
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds) {
-        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, maxReactRounds, List.of(new SensitiveDataInterceptor(SanitizationOptions.defaults())));
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, null, List.of(), null, eventStore, todoStore, toolGuards, callbacks,
+                maxReactRounds, List.of(new SensitiveDataInterceptor(SanitizationOptions.defaults())));
     }
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, SanitizationOptions sanitizationOptions) {
-        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer, memoryPromoters, eventStore, todoStore, toolGuards, callbacks, maxReactRounds, List.of(new SensitiveDataInterceptor(sanitizationOptions)));
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, null, List.of(), null, eventStore, todoStore, toolGuards, callbacks,
+                maxReactRounds, List.of(new SensitiveDataInterceptor(sanitizationOptions)));
     }
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, null, List.of(), null, eventStore, todoStore, toolGuards, callbacks,
+                maxReactRounds, runtimeInterceptors);
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, MemoryContextBuilder memoryContextBuilder, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, memoryContextBuilder, List.of(), null, eventStore, todoStore, toolGuards, callbacks,
+                maxReactRounds, runtimeInterceptors);
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, MemoryContextBuilder memoryContextBuilder, List<MemoryExtractor> memoryExtractors, MemoryProvider memoryProvider, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, memoryContextBuilder,
+                defaultMemoryCandidateProcessor(sessionStore, messageStore, eventStore, memoryExtractors, memoryProvider),
+                eventStore, todoStore, toolGuards, callbacks,
+                maxReactRounds, runtimeInterceptors);
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, MemoryContextBuilder memoryContextBuilder, MemoryCandidateProcessor memoryCandidateProcessor, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors) {
         this.planner = planner;
         this.responseGenerator = responseGenerator;
         this.toolRegistry = toolRegistry;
@@ -121,6 +164,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
         this.messageStore = messageStore;
         this.sessionSummarizer = sessionSummarizer;
         this.memoryPromoters = memoryPromoters == null ? List.of() : List.copyOf(memoryPromoters);
+        this.memoryContextBuilder = memoryContextBuilder;
+        this.memoryCandidateProcessor = memoryCandidateProcessor;
         this.eventStore = eventStore;
         this.todoStore = todoStore;
         this.toolGuards = toolGuards == null ? List.of() : List.copyOf(toolGuards);
@@ -132,6 +177,24 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 .filter(interceptor -> interceptor != null)
                 .sorted(Comparator.comparingInt(AgentRuntimeInterceptor::order))
                 .toList();
+    }
+
+    private static MemoryCandidateProcessor defaultMemoryCandidateProcessor(SessionStore sessionStore,
+                                                                            SessionMessageStore messageStore,
+                                                                            AgentEventStore eventStore,
+                                                                            List<MemoryExtractor> memoryExtractors,
+                                                                            MemoryProvider memoryProvider) {
+        if (memoryProvider == null || memoryExtractors == null || memoryExtractors.isEmpty()) {
+            return null;
+        }
+        // 兼容直接使用旧构造器的场景：仍然提炼候选记忆，但默认走异步队列，不阻塞任务完成。
+        return new DefaultMemoryCandidateProcessor(
+                sessionStore,
+                messageStore,
+                eventStore,
+                memoryExtractors,
+                memoryProvider,
+                MemoryCandidateProcessingOptions.defaults());
     }
 
     @Override
@@ -210,6 +273,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                     "status", task.status().name(),
                     "answer", answer,
                     "stepCount", String.valueOf(steps.size())));
+            enqueueMemoryCandidates(task, answer);
             emit("task.completed", task.id(), answer);
             log.info("agent task completed status={} stepCount={} output={}", task.status(), steps.size(), preview(answer));
             log.debug("agent final answer taskId={} answer={}", task.id(), preview(answer));
@@ -768,6 +832,14 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
     }
 
+    private void enqueueMemoryCandidates(AgentTask task, String answer) {
+        if (memoryCandidateProcessor == null) {
+            return;
+        }
+        // 这里必须只做快速入队，不能在 Runtime 主线程直接调用记忆模型。
+        memoryCandidateProcessor.onTaskCompleted(task, answer);
+    }
+
     private AgentSession ensureSession(AgentRequest request) {
         if (request.sessionId() != null && !request.sessionId().isBlank()) {
             return sessionStore.findSession(request.sessionId())
@@ -855,6 +927,16 @@ public class DefaultAgentRuntime implements AgentRuntime {
 
     private void attachSessionContext(AgentTask task) {
         List<AgentMessage> messages = messageStore.findMessages(task.sessionId(), SESSION_CONTEXT_MESSAGE_LIMIT);
+        AgentSession session = sessionStore.findSession(task.sessionId()).orElse(null);
+        if (memoryContextBuilder != null && session != null) {
+            List<TodoItem> todos = todoStore == null ? List.of() : todoStore.listTodoItems(task.sessionId(), "", 50);
+            var snapshot = memoryContextBuilder.build(task, session, messages, todos);
+            if (snapshot != null && snapshot.context() != null && !snapshot.context().isBlank()) {
+                // 统一记忆上下文包含短期会话、Todo 状态和长期记忆命中，后续模型只读取这一份。
+                task.metadata().put(MEMORY_CONTEXT_METADATA_KEY, preview(snapshot.context(), SESSION_CONTEXT_CHAR_LIMIT));
+                task.metadata().put("runtime.memoryHitCount", String.valueOf(snapshot.hits() == null ? 0 : snapshot.hits().size()));
+            }
+        }
         if (messages.isEmpty()) {
             return;
         }
@@ -917,6 +999,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
             int prompt = parseInt(details.get("promptTokens"));
             int completion = parseInt(details.get("completionTokens"));
             int total = parseInt(details.get("totalTokens"));
+            if ((prompt == 0 && completion == 0 && total == 0) && details.containsKey("responseJson")) {
+                TokenUsageNumbers recovered = recoverTokenUsage(details.get("responseJson"));
+                prompt = recovered.promptTokens();
+                completion = recovered.completionTokens();
+                total = recovered.totalTokens();
+            }
             callCount++;
             promptTokens += prompt;
             completionTokens += completion;
@@ -929,6 +1017,38 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
 
         return new TokenUsageSummary(scopeType, scopeId, callCount, promptTokens, completionTokens, totalTokens, byModel, byPhase);
+    }
+
+    /**
+     * 从模型原始响应中恢复 token 用量。
+     * 早期脱敏规则会把 promptTokens 这类字段误判为密钥并写成 ***，但 responseJson 里通常还保留 usage。
+     */
+    private TokenUsageNumbers recoverTokenUsage(String responseJson) {
+        if (responseJson == null || responseJson.isBlank()) {
+            return new TokenUsageNumbers(0, 0, 0);
+        }
+        return new TokenUsageNumbers(
+                findJsonInt(PROMPT_TOKENS_PATTERN, responseJson),
+                findJsonInt(COMPLETION_TOKENS_PATTERN, responseJson),
+                findJsonInt(TOTAL_TOKENS_PATTERN, responseJson));
+    }
+
+    /**
+     * 从 JSON 字符串中读取指定数字字段；只用于 token usage 兜底，不承担通用 JSON 解析职责。
+     */
+    private int findJsonInt(Pattern pattern, String json) {
+        Matcher matcher = pattern.matcher(json);
+        return matcher.find() ? parseInt(matcher.group(1)) : 0;
+    }
+
+    /**
+     * token 用量三元组。
+     *
+     * @param promptTokens prompt token 数。
+     * @param completionTokens completion token 数。
+     * @param totalTokens 总 token 数。
+     */
+    private record TokenUsageNumbers(int promptTokens, int completionTokens, int totalTokens) {
     }
 
     private void saveEvent(AgentTask task, String level, String type, String message, Map<String, String> details) {

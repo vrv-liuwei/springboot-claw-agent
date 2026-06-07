@@ -17,7 +17,6 @@
         <module>claw-agent-spi</module>
         <module>claw-agent-runtime</module>
         <module>claw-agent-memory</module>
-        <module>claw-agent-memory-markdown</module>
         <module>claw-agent-persistence-sqlite</module>
         <module>claw-agent-model-spring-ai</module>
         <module>claw-agent-mcp</module>

@@ -2,7 +2,7 @@
 
 `springboot-claw-agent` 是 `clawagent` 的 Java Harness Agent 框架工程。目标是提供一套可独立运行、可嵌入业务系统、可审计、可恢复、可扩展的企业级 Agent Runtime。
 
-当前版本已完成 M1、M2 主线能力和 M3 的 MCP/Skill/toolkit 主链路：可以编译、启动独立 Spring Boot 服务，使用 SQLite3 保存会话、消息、任务、步骤和事件，使用 Markdown 目录作为长期记忆源数据，并通过 OpenAI 兼容接口接入真实大模型，同时提供最小 Web Console 和 REST API。
+当前版本已完成 M1、M2 主线能力和 M3 的 MCP/Skill/toolkit 主链路：可以编译、启动独立 Spring Boot 服务，使用 SQLite3 保存会话、消息、任务、步骤、事件和本地记忆，长期记忆支持 SQLite FTS5 + JVector + RRF 混合检索，并通过 OpenAI 兼容接口接入真实大模型，同时提供 Web Console、管理台和 REST API。
 
 ## 快速启动
 
@@ -164,7 +164,8 @@ Invoke-WebRequest `
 ```text
 .clawagent/
   clawagent.db        # SQLite3 会话、消息、任务、步骤、事件数据
-  memory/           # Markdown 长期记忆
+  memory/           # 本地记忆兼容文件
+  memory/vectors/   # JVector 长期记忆向量索引
   mcp/mcp.json      # 标准 mcpServers 配置，服务重启后自动加载注册信息
   skills/           # Skill 本地安装目录，每个 Skill 一个子目录
 ```
@@ -331,21 +332,16 @@ SQLite3 持久化模块，当前默认单机存储实现。
 
 ### `claw-agent-memory`
 
-记忆能力的父级/占位模块。
-
-当前模块本身不放具体代码，作为后续 Memory SPI、VectorStore、EmbeddingClient 等能力的聚合位置。实际已落地的 Markdown 记忆在 `claw-agent-memory-markdown`。
-
-### `claw-agent-memory-markdown`
-
-Markdown 长期记忆模块。
+正式本地记忆模块，是当前唯一记忆实现模块。
 
 主要包含：
 
-- `.clawagent/memory` 目录初始化。
-- Markdown 文件读取。
-- 轻量关键词检索。
-
-当前它更像“可读的本地长期知识目录”。自动记忆提升、会话摘要写入、向量索引还未接入。
+- `MemoryProvider` 的本地实现 `LocalMemoryProvider`。
+- SQLite 表：`memory_item`、`memory_chunk`、`memory_chunk_fts`、`memory_vector`、`memory_hit_log`。
+- SQLite FTS5 BM25 + JVector + RRF hybrid search。
+- `userId/scope/status` 隔离过滤，只有 `active` 记忆进入模型上下文。
+- Markdown 兼容层：保留本地可读文件，便于后续迁移和人工排查。
+- Runtime 候选记忆提炼：默认只生成 `pending`，需要管理台审核后才会启用。
 
 ### `claw-agent-model-spring-ai`
 
@@ -953,16 +949,16 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 ## 未完成能力
 
 - 智能体定时任务增强：失败重试、退避策略、运行历史中的 Token/工具链路聚合仍需补充。
-- 短期记忆和长期记忆需要单独设计：当前会话上下文、任务摘要、工具观察、Markdown 长期记忆、质量治理和管理台页面。
+- 记忆质量治理需要继续增强：当前已支持长期记忆本地入库、FTS5/JVector/RRF 检索、命中记录、候选审核和管理台页面；去重、冲突处理、过期策略仍需增强。
 - React + Vite 正式管理台持续优化：后台新增的业务能力必须同步补充管理台页面；原 `/console/index.html` 暂时保留。
 - Shell/cmd/PowerShell 工具：第一阶段查询类命令不审批，删除/覆盖等破坏性操作必须用户确认；`claw-agent-worker` 隔离执行后续再做。
 - Skill 目录风格和加载逻辑调整：每个 Skill 独立保存到 `.clawagent/skills/<skillId>/`，完整加载 `manifest.json`、`SKILL.md`、`scripts/`、`assets/`、`references/`、`lib/` 等资源。
-- MCP 断线重连、超时恢复、会话关闭等健壮性增强。
-- MCP `autoApprove` 到正式审批策略的接入。
+- MCP 健壮性继续增强：当前已有 timeout、启动隔离和运行态按需重连；更复杂的断线检测和会话级关闭策略后续补充。
+- MCP `autoApprove` 已接入工具风险等级，通道级审批策略仍在 M4 扩展。
 - Prompt Injection Defense、审批、限流、PermissionPolicy 等安全治理。
 - 通道 Channel、Auth、设备配对等治理项。
 - MySQL / PostgreSQL 持久化实现。
-- VectorStore 实现。
+- 企业级 VectorStore Provider 实现。
 - 分布式部署和 Redis 同步。
 
 ## 配置说明

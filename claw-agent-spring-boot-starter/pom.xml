@@ -23,7 +23,7 @@
         </dependency>
         <dependency>
             <groupId>com.github.clawagent</groupId>
-            <artifactId>claw-agent-memory-markdown</artifactId>
+            <artifactId>claw-agent-memory</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

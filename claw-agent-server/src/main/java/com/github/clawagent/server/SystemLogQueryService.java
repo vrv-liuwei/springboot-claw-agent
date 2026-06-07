@@ -5,7 +5,10 @@ import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.CharsetDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -116,9 +119,7 @@ public class SystemLogQueryService {
 
     private void readSource(LogSource source, SystemLogQuery query, ArrayDeque<SystemLogLine> matches, int limit) throws IOException {
         // try-with-resources 确保 .gz 解压流在本次查询结束后释放，不保留解压后的内存数据。
-        try (BufferedReader reader = source.compressed()
-                ? new BufferedReader(new InputStreamReader(new GZIPInputStream(Files.newInputStream(source.path())), StandardCharsets.UTF_8))
-                : Files.newBufferedReader(source.path(), StandardCharsets.UTF_8)) {
+        try (BufferedReader reader = openReader(source)) {
             PendingLog pending = null;
             String line;
             while ((line = reader.readLine()) != null) {
@@ -132,6 +133,18 @@ public class SystemLogQueryService {
             }
             appendIfMatched(pending, query, matches, limit);
         }
+    }
+
+    private BufferedReader openReader(LogSource source) throws IOException {
+        InputStream input = source.compressed()
+                ? new GZIPInputStream(Files.newInputStream(source.path()))
+                : Files.newInputStream(source.path());
+        CharsetDecoder decoder = StandardCharsets.UTF_8
+                .newDecoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE);
+        // 日志文件可能混入非 UTF-8 字节或写入中的半截字符；替换坏字节，保证查询接口不被单行日志拖垮。
+        return new BufferedReader(new InputStreamReader(input, decoder));
     }
 
     private void appendIfMatched(PendingLog pending, SystemLogQuery query, ArrayDeque<SystemLogLine> matches, int limit) {

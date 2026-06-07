@@ -97,9 +97,35 @@ public class ClawAgentProperties {
     public static class Memory {
         private final Markdown markdown = new Markdown();
         private final Vector vector = new Vector();
+        private final Extraction extraction = new Extraction();
 
         public Markdown getMarkdown() { return markdown; }
         public Vector getVector() { return vector; }
+        public Extraction getExtraction() { return extraction; }
+    }
+
+    /**
+     * 候选记忆提炼配置。
+     * 这些参数只控制“任务完成后是否调用记忆模型提炼候选”，不影响长期记忆检索。
+     */
+    public static class Extraction {
+        /** 是否启用候选记忆提炼。关闭后不会再调用记忆模型生成 pending 记忆。 */
+        private boolean enabled = true;
+        /** 处理策略：after-task-async=每轮任务后异步处理；batch=定时或累计条数批处理。 */
+        private String mode = "after-task-async";
+        /** 定时批处理间隔秒数。 */
+        private long intervalSeconds = 60;
+        /** 单次后台批处理最多处理多少条任务。 */
+        private int batchSize = 100;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getMode() { return mode; }
+        public void setMode(String mode) { this.mode = mode; }
+        public long getIntervalSeconds() { return intervalSeconds; }
+        public void setIntervalSeconds(long intervalSeconds) { this.intervalSeconds = intervalSeconds; }
+        public int getBatchSize() { return batchSize; }
+        public void setBatchSize(int batchSize) { this.batchSize = batchSize; }
     }
 
     public static class Mcp {
@@ -237,12 +263,15 @@ public class ClawAgentProperties {
     public static class Vector {
         private boolean enabled = false;
         private String provider = "none";
+        private String path = ".clawagent/memory/vectors";
         private final Embedding embedding = new Embedding();
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public String getProvider() { return provider; }
         public void setProvider(String provider) { this.provider = provider; }
+        public String getPath() { return path; }
+        public void setPath(String path) { this.path = path; }
         public Embedding getEmbedding() { return embedding; }
     }
 
@@ -275,6 +304,7 @@ public class ClawAgentProperties {
         private String mode = "llm";
         private String client = "openai-compatible";
         private String defaultModel = "deepseek-v4-flash";
+        private String memoryModel = "";
         private String planner = "single";
 
         public String getMode() { return mode; }
@@ -283,6 +313,8 @@ public class ClawAgentProperties {
         public void setClient(String client) { this.client = client; }
         public String getDefault() { return defaultModel; }
         public void setDefault(String defaultModel) { this.defaultModel = defaultModel; }
+        public String getMemoryModel() { return memoryModel; }
+        public void setMemoryModel(String memoryModel) { this.memoryModel = memoryModel; }
         public String getPlanner() { return planner; }
         public void setPlanner(String planner) { this.planner = planner; }
     }

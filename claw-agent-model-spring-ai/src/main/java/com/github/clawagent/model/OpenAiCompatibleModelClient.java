@@ -62,6 +62,8 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             payload.put("model", options.model());
             payload.put("temperature", options.temperature());
             payload.put("stream", true);
+            // 支持 OpenAI 兼容流式 usage 的服务会在最后一个 chunk 返回 token 统计。
+            payload.put("stream_options", Map.of("include_usage", true));
             payload.put("messages", messages.stream().map(message -> Map.of(
                     "role", message.role(),
                     "content", message.content()
@@ -81,12 +83,18 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                addTrace(options, response.statusCode(), elapsedMs, requestJson, response.body(), "");
-                throw new IllegalStateException("模型流式调用失败，HTTP " + response.statusCode() + "：" + response.body());
+                response = retryStreamWithoutUsageIfUnsupported(payload, options, response);
+                elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+                requestJson = objectMapper.writeValueAsString(payload);
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    addTrace(options, response.statusCode(), elapsedMs, requestJson, response.body(), "");
+                    throw new IllegalStateException("模型流式调用失败，HTTP " + response.statusCode() + "：" + response.body());
+                }
             }
-            String content = parseStreamResponse(response.body(), callback);
+            StreamParseResult parsed = parseStreamResponse(response.body(), callback);
+            String content = parsed.content();
             callback.onComplete(content);
-            addTrace(options, response.statusCode(), elapsedMs, requestJson, response.body(), content);
+            addTrace(options, response.statusCode(), elapsedMs, requestJson, response.body(), content, parsed.promptTokens(), parsed.completionTokens(), parsed.totalTokens());
             log.info("model chat stream finished model={} statusCode={} elapsedMs={} answerLength={}",
                     options.model(), response.statusCode(), elapsedMs, content.length());
             return content;
@@ -309,6 +317,18 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
         } catch (Exception ignored) {
             // 错误响应可能不是标准 JSON usage，trace 仍保留请求和响应原文。
         }
+        addTrace(options, statusCode, elapsedMs, requestJson, responseJson, content, promptTokens, completionTokens, totalTokens);
+    }
+
+    private void addTrace(ChatOptions options,
+                          int statusCode,
+                          long elapsedMs,
+                          String requestJson,
+                          String responseJson,
+                          String content,
+                          int promptTokens,
+                          int completionTokens,
+                          int totalTokens) {
         LlmTraceContext.add(new LlmCallTrace(
                 options.model(),
                 baseUrl,
@@ -327,8 +347,32 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
         return normalized.length() <= 300 ? normalized : normalized.substring(0, 300) + "...";
     }
 
-    private String parseStreamResponse(String body, ChatStreamCallback callback) throws IOException {
+    private HttpResponse<String> retryStreamWithoutUsageIfUnsupported(Map<String, Object> payload,
+                                                                      ChatOptions options,
+                                                                      HttpResponse<String> firstResponse) throws IOException, InterruptedException {
+        String body = firstResponse.body() == null ? "" : firstResponse.body();
+        if (!body.toLowerCase().contains("stream_options")) {
+            return firstResponse;
+        }
+        payload.remove("stream_options");
+        String requestJson = objectMapper.writeValueAsString(payload);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/chat/completions"))
+                .timeout(Duration.ofSeconds(options.timeoutSeconds()))
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .header("Authorization", "Bearer " + apiKey)
+                .POST(HttpRequest.BodyPublishers.ofString(requestJson))
+                .build();
+        log.warn("model chat stream retry without stream_options model={} baseUrl={}", options.model(), baseUrl);
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private StreamParseResult parseStreamResponse(String body, ChatStreamCallback callback) throws IOException {
         StringBuilder answer = new StringBuilder();
+        int promptTokens = 0;
+        int completionTokens = 0;
+        int totalTokens = 0;
         try (BufferedReader reader = new BufferedReader(new StringReader(body))) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -354,8 +398,25 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
                     answer.append(chunk);
                     callback.onDelta(chunk);
                 }
+                JsonNode usage = root.path("usage");
+                if (!usage.isMissingNode() && !usage.isNull()) {
+                    promptTokens = usage.path("prompt_tokens").asInt(promptTokens);
+                    completionTokens = usage.path("completion_tokens").asInt(completionTokens);
+                    totalTokens = usage.path("total_tokens").asInt(totalTokens);
+                }
             }
         }
-        return answer.toString();
+        return new StreamParseResult(answer.toString(), promptTokens, completionTokens, totalTokens);
+    }
+
+    /**
+     * 流式响应解析结果。
+     *
+     * @param content 完整回复正文。
+     * @param promptTokens prompt token 数。
+     * @param completionTokens completion token 数。
+     * @param totalTokens 总 token 数。
+     */
+    private record StreamParseResult(String content, int promptTokens, int completionTokens, int totalTokens) {
     }
 }

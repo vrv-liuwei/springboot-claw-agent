@@ -39,13 +39,13 @@ clawagent:
       enabled: true
       path: ${clawagent.path.base}/memory
     vector:
-      enabled: false
-      provider: none
+      enabled: true
+      provider: jvector
       embedding:
-        provider: none
-        model: ""
-        base-url: ""
-        api-key-env: CLAWAGENT_EMBEDDING_API_KEY
+        provider: siliconflow
+        model: BAAI/bge-m3
+        base-url: https://api.siliconflow.cn/v1
+        api-key: ${SILICONFLOW_API_KEY:}
         dimensions: 0
         timeout-seconds: 60
   mcp:
@@ -93,8 +93,8 @@ clawagent:
         enabled: true
         env:
           PROVIDER: bocha
-          BOCHA_API_KEY: ${BOCHA_API_KEY:}
           BOCHA_ENDPOINT: https://api.bochaai.com/v1/web-search
+          BOCHA_API_KEY: ${BOCHA_API_KEY:}
           BOCHA_COUNT: "5"
           BOCHA_FRESHNESS: noLimit
           BOCHA_SUMMARY: "true"
@@ -103,7 +103,7 @@ clawagent:
       execute:
         enabled: true
         env:
-          ALLOWED_ROOTS: "${clawagent.path.base}/workspace/codex"
+          ALLOWED_ROOTS: "${clawagent.path.base},${clawagent.path.base}/workspace/codex"
           TIMEOUT_MS: "30000"
           MAX_OUTPUT_CHARS: "20000"
       todo:
@@ -112,8 +112,8 @@ clawagent:
       filesystem:
         enabled: true
         env:
-          READONLY: "true"
-          ALLOWED_ROOTS: "D:/workspace/codex"
+          READONLY: "false"
+          ALLOWED_ROOTS: "${clawagent.path.base},${clawagent.path.base}/workspace/codex"
           BLOCKED_PATTERNS: "**/.git/**,**/*.key,**/*.pem,**/.env"
           MAX_READ_BYTES: "1048576"
           MAX_SEARCH_RESULTS: "100"
@@ -121,11 +121,19 @@ clawagent:
     mode: llm
     planner: react
     default: deepseek-v4-flash
+    memory-model: siliconflow-qwen3-8b
   models:
     deepseek-v4-flash:
       provider: deepseek
       base-url: https://api.deepseek.com
       model: deepseek-v4-flash
-      api-key: ${DEEPSEEK_API_KEY}
+      api-key: ${DEEPSEEK_API_KEY:}
+      temperature: 0.2
+      timeout-seconds: 60
+    siliconflow-qwen3-8b:
+      provider: siliconflow
+      base-url: https://api.siliconflow.cn/v1
+      model: Qwen/Qwen3-8B
+      api-key: ${SILICONFLOW_API_KEY:}
       temperature: 0.2
       timeout-seconds: 60

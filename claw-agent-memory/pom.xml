@@ -10,4 +10,40 @@
     </parent>
     <artifactId>claw-agent-memory</artifactId>
     <name>claw-agent-memory</name>
+    <dependencies>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>${sqlite.jdbc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.jbellis</groupId>
+            <artifactId>jvector</artifactId>
+            <version>${jvector.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

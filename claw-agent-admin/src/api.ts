@@ -11,15 +11,25 @@ import type {
   KnowledgeDocument,
   KnowledgeProviderView,
   KnowledgeSearchResponse,
+  MemoryHitLog,
+  MemoryItem,
+  MemorySearchResponse,
+  MemoryUpsertRequest,
+  McpServerConfig,
   McpServerRegistration,
+  ModelApiTestRequest,
+  ModelApiTestResponse,
+  ModelConfigUpsertRequest,
   ModelConfigUpdate,
   RuntimeConfigSnapshot,
+  SkillInstallRequest,
   SkillRegistration,
   SystemLogLine,
   SystemLogSource,
   TodoItem,
   TokenUsageSummary,
   ToolDefinition,
+  VectorStatusView,
 } from './types';
 
 type RequestOptions = {
@@ -78,6 +88,8 @@ export const api = {
   knowledgeProviders: () => requestJson<KnowledgeProviderView[]>('/api/v1/knowledge/providers'),
   knowledgeDocuments: (userId = 'console', limit = 100) =>
     requestJson<KnowledgeDocument[]>(`/api/v1/knowledge/documents?userId=${encodeURIComponent(userId)}&limit=${limit}`),
+  knowledgeVectorStatus: (userId = 'console') =>
+    requestJson<VectorStatusView[]>(`/api/v1/knowledge/vector-status?userId=${encodeURIComponent(userId)}`),
   uploadKnowledgeDocuments: (files: File[], userId = 'console', signal?: AbortSignal) => {
     const form = new FormData();
     files.forEach((file) => form.append('files', file));
@@ -108,6 +120,51 @@ export const api = {
     mode?: 'keyword' | 'vector' | 'hybrid';
     topK?: number;
   }) => requestJson<KnowledgeSearchResponse>('/api/v1/knowledge/search', { method: 'POST', body }),
+  memoryProvider: () => requestJson<{ id: string; capabilities?: Record<string, unknown> }>('/api/v1/memory/provider'),
+  memoryVectorStatus: (userId = 'console') =>
+    requestJson<VectorStatusView[]>(`/api/v1/memory/vector-status?userId=${encodeURIComponent(userId)}`),
+  memoryItems: (params: { userId?: string; scopeType?: string; status?: string; limit?: number } = {}) => {
+    const search = new URLSearchParams({ userId: params.userId || 'console', limit: String(params.limit || 100) });
+    if (params.scopeType) search.set('scopeType', params.scopeType);
+    if (params.status) search.set('status', params.status);
+    return requestJson<MemoryItem[]>(`/api/v1/memory/items?${search.toString()}`);
+  },
+  createMemoryItem: (body: MemoryUpsertRequest) =>
+    requestJson<MemoryItem>('/api/v1/memory/items', { method: 'POST', body }),
+  updateMemoryItem: (itemId: string, body: MemoryUpsertRequest) =>
+    requestJson<MemoryItem>(`/api/v1/memory/items/${encodeURIComponent(itemId)}`, { method: 'PUT', body }),
+  deleteMemoryItem: (itemId: string, userId = 'console') =>
+    requestJson<{ deleted: boolean; itemId: string }>(
+      `/api/v1/memory/items/${encodeURIComponent(itemId)}?userId=${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    ),
+  enableMemoryItem: (itemId: string, userId = 'console') =>
+    requestJson<MemoryItem>(`/api/v1/memory/items/${encodeURIComponent(itemId)}/enable?userId=${encodeURIComponent(userId)}`, { method: 'POST' }),
+  disableMemoryItem: (itemId: string, userId = 'console') =>
+    requestJson<MemoryItem>(`/api/v1/memory/items/${encodeURIComponent(itemId)}/disable?userId=${encodeURIComponent(userId)}`, { method: 'POST' }),
+  archiveMemoryItem: (itemId: string, userId = 'console') =>
+    requestJson<MemoryItem>(`/api/v1/memory/items/${encodeURIComponent(itemId)}/archive?userId=${encodeURIComponent(userId)}`, { method: 'POST' }),
+  memoryCandidates: (userId = 'console', limit = 100) =>
+    requestJson<MemoryItem[]>(`/api/v1/memory/candidates?userId=${encodeURIComponent(userId)}&limit=${limit}`),
+  acceptMemoryCandidate: (itemId: string, userId = 'console') =>
+    requestJson<MemoryItem>(`/api/v1/memory/candidates/${encodeURIComponent(itemId)}/accept?userId=${encodeURIComponent(userId)}`, { method: 'POST' }),
+  rejectMemoryCandidate: (itemId: string, userId = 'console') =>
+    requestJson<MemoryItem>(`/api/v1/memory/candidates/${encodeURIComponent(itemId)}/reject?userId=${encodeURIComponent(userId)}`, { method: 'POST' }),
+  searchMemory: (body: {
+    userId?: string;
+    query: string;
+    scopeTypes?: string[];
+    scopeId?: string;
+    statuses?: string[];
+    mode?: 'keyword' | 'vector' | 'hybrid';
+    topK?: number;
+  }) => requestJson<MemorySearchResponse>('/api/v1/memory/search', { method: 'POST', body }),
+  memoryHits: (params: { userId?: string; sessionId?: string; taskId?: string; limit?: number } = {}) => {
+    const search = new URLSearchParams({ userId: params.userId || 'console', limit: String(params.limit || 100) });
+    if (params.sessionId) search.set('sessionId', params.sessionId);
+    if (params.taskId) search.set('taskId', params.taskId);
+    return requestJson<MemoryHitLog[]>(`/api/v1/memory/hits?${search.toString()}`);
+  },
   attachmentDownloadUrl: (attachmentId: string) =>
     `/api/v1/attachments/${encodeURIComponent(attachmentId)}/download`,
   attachmentViewUrl: (attachmentId: string) =>
@@ -162,7 +219,21 @@ export const api = {
   logSources: () => requestJson<SystemLogSource[]>('/api/v1/logs/sources'),
   tools: () => requestJson<ToolDefinition[]>('/api/v1/tools'),
   mcpServers: () => requestJson<McpServerRegistration[]>('/api/v1/mcp/servers'),
+  importMcpServers: (json: string) =>
+    requestJson<McpServerRegistration[]>('/api/v1/mcp/import', { method: 'POST', body: { json } }),
+  registerMcpServer: (body: McpServerConfig) =>
+    requestJson<McpServerRegistration>('/api/v1/mcp/servers', { method: 'POST', body }),
+  testMcpServer: (body: McpServerConfig) =>
+    requestJson<McpServerRegistration>('/api/v1/mcp/servers/test', { method: 'POST', body }),
+  connectMcpServer: (serverId: string) =>
+    requestJson<McpServerRegistration>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/connect`, { method: 'POST' }),
+  disconnectMcpServer: (serverId: string) =>
+    requestJson<McpServerRegistration>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/disconnect`, { method: 'POST' }),
+  refreshMcpTools: (serverId: string) =>
+    requestJson<unknown[]>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/refresh-tools`, { method: 'POST' }),
   skills: () => requestJson<SkillRegistration[]>('/api/v1/skills'),
+  installSkill: (body: SkillInstallRequest) =>
+    requestJson<SkillRegistration>('/api/v1/skills', { method: 'POST', body }),
   enableSkill: (skillId: string) =>
     requestJson<SkillRegistration>(`/api/v1/skills/${encodeURIComponent(skillId)}/enable`, { method: 'POST' }),
   disableSkill: (skillId: string) =>
@@ -187,4 +258,8 @@ export const api = {
   runtimeConfig: () => requestJson<RuntimeConfigSnapshot>('/api/v1/config/runtime'),
   saveModelConfig: (body: ModelConfigUpdate) =>
     requestJson<RuntimeConfigSnapshot>('/api/v1/config/model', { method: 'PUT', body }),
+  saveModelDefinition: (body: ModelConfigUpsertRequest) =>
+    requestJson<RuntimeConfigSnapshot>('/api/v1/config/models', { method: 'POST', body }),
+  testModelApi: (body: ModelApiTestRequest) =>
+    requestJson<ModelApiTestResponse>('/api/v1/config/model/test', { method: 'POST', body }),
 };

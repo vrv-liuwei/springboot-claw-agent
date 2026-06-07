@@ -22,15 +22,25 @@ public class McpAgentTool implements AgentTool {
     private final McpToolDescriptor descriptor;
     /** 已连接的 MCP Client，用于真正发起 tools/call。 */
     private final McpClient client;
+    /** 是否命中 MCP 配置里的 autoApprove；未命中时默认按高危工具进入审批链路。 */
+    private final boolean autoApproved;
 
     public McpAgentTool(McpToolDescriptor descriptor, McpClient client) {
+        this(descriptor, client, false);
+    }
+
+    public McpAgentTool(McpToolDescriptor descriptor, McpClient client, boolean autoApproved) {
         this.descriptor = descriptor;
         this.client = client;
+        this.autoApproved = autoApproved;
     }
 
     @Override
     public ToolDefinition definition() {
-        return ToolDefinition.low(descriptor.agentToolId(), descriptor.name(), descriptor.description(), descriptor.inputSchema());
+        // MCP 来自外部服务，默认走高危审批；只有配置 autoApprove 的工具才降为 low。
+        return autoApproved
+                ? ToolDefinition.low(descriptor.agentToolId(), descriptor.name(), descriptor.description(), descriptor.inputSchema())
+                : ToolDefinition.high(descriptor.agentToolId(), descriptor.name(), descriptor.description(), descriptor.inputSchema());
     }
 
     @Override

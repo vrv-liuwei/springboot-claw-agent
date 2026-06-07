@@ -1,4 +1,4 @@
-package com.github.clawagent.memory.markdown;
+package com.github.clawagent.memory;
 
 import com.github.clawagent.core.AgentMessage;
 import com.github.clawagent.core.AgentSession;
@@ -13,12 +13,18 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * MarkdownMemoryRepository 把 Markdown 作为长期记忆源数据读取。
- * 当前实现只做轻量关键词检索；后续 VectorStore 可以基于同一批 Markdown 重建语义索引。
+ * Markdown 记忆兼容仓库。
+ * <p>
+ * 新记忆索引由 LocalMemoryProvider 负责；这里保留旧的 Markdown 摘要读写能力，避免历史目录失效。
+ * </p>
  */
 public class MarkdownMemoryRepository {
+    /** Markdown 记忆根目录。 */
     private final Path memoryPath;
 
+    /**
+     * @param memoryPath Markdown 记忆根目录。
+     */
     public MarkdownMemoryRepository(Path memoryPath) {
         this.memoryPath = memoryPath;
     }
@@ -27,6 +33,9 @@ public class MarkdownMemoryRepository {
         return memoryPath;
     }
 
+    /**
+     * 初始化 Markdown 记忆目录。
+     */
     public void initialize() {
         try {
             Files.createDirectories(memoryPath);
@@ -39,6 +48,13 @@ public class MarkdownMemoryRepository {
         }
     }
 
+    /**
+     * 轻量关键词检索旧 Markdown 记忆。
+     *
+     * @param keyword 关键词。
+     * @param limit 最大返回条数。
+     * @return Markdown 记忆文件。
+     */
     public List<MarkdownMemoryEntry> search(String keyword, int limit) {
         initialize();
         String normalized = keyword == null ? "" : keyword.trim().toLowerCase();
@@ -55,6 +71,13 @@ public class MarkdownMemoryRepository {
         }
     }
 
+    /**
+     * 保存会话摘要 Markdown 文件。
+     *
+     * @param session 会话。
+     * @param messages 会话消息。
+     * @return 保存后的文件路径。
+     */
     public Path saveSessionSummary(AgentSession session, List<AgentMessage> messages) {
         initialize();
         try {
@@ -94,7 +117,7 @@ public class MarkdownMemoryRepository {
         int start = Math.max(0, messages.size() - 10);
         for (int i = start; i < messages.size(); i++) {
             AgentMessage message = messages.get(i);
-            // 只保存最近消息的短摘要，避免把完整会话原文写入长期记忆。
+            // 旧 Markdown 兼容文件只保存短摘要，避免把完整会话原文长期写入磁盘。
             builder.append("- **").append(message.role()).append("**: ")
                     .append(preview(message.content(), 300))
                     .append("\n");
@@ -109,10 +132,7 @@ public class MarkdownMemoryRepository {
     }
 
     private String escapeFrontMatter(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.replace("\r", " ").replace("\n", " ");
+        return value == null ? "" : value.replace("\r", " ").replace("\n", " ");
     }
 
     private String preview(String text, int limit) {

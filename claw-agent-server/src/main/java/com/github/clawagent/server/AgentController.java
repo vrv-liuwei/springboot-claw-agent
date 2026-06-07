@@ -1,5 +1,7 @@
 package com.github.clawagent.server;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.clawagent.core.AgentRequest;
 import com.github.clawagent.core.AgentEvent;
 import com.github.clawagent.core.AgentMessage;
@@ -14,6 +16,11 @@ import com.github.clawagent.core.AutomationStatus;
 import com.github.clawagent.core.AttachmentParseResult;
 import com.github.clawagent.core.KnowledgeDocument;
 import com.github.clawagent.core.KnowledgeSearchResult;
+import com.github.clawagent.core.MemoryHitLog;
+import com.github.clawagent.core.MemoryItem;
+import com.github.clawagent.core.MemorySearchHit;
+import com.github.clawagent.core.MemorySearchRequest;
+import com.github.clawagent.core.MemoryUpsertRequest;
 import com.github.clawagent.core.SessionCreateRequest;
 import com.github.clawagent.core.StoredFile;
 import com.github.clawagent.core.TodoItem;
@@ -39,6 +46,7 @@ import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.AgentToolRegistry;
 import com.github.clawagent.spi.AutomationStore;
 import com.github.clawagent.spi.FileStorageProvider;
+import com.github.clawagent.spi.MemoryProvider;
 import com.github.clawagent.spi.TodoStore;
 import com.github.clawagent.spring.ClawAgentProperties;
 import com.github.clawagent.spring.automation.AutomationSchedulerService;
@@ -67,6 +75,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -95,8 +112,13 @@ public class AgentController {
     private final AttachmentService attachmentService;
     private final FileStorageProvider fileStorageProvider;
     private final KnowledgeService knowledgeService;
+    private final MemoryProvider memoryProvider;
     private final SystemLogQueryService systemLogQueryService;
     private final ClawAgentProperties properties;
+    /** Controller 内部 JSON 工具，只用于模型在线测试和轻量状态接口。 */
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 在线测试模型 API 的短连接客户端，不参与正式 Runtime 调用链路。 */
+    private final HttpClient configTestHttpClient = HttpClient.newHttpClient();
     /** 流式任务后台执行池；避免阻塞 Spring MVC 请求线程。 */
     private final ExecutorService streamExecutor = Executors.newCachedThreadPool();
 
@@ -110,6 +132,7 @@ public class AgentController {
                            AttachmentService attachmentService,
                            FileStorageProvider fileStorageProvider,
                            KnowledgeService knowledgeService,
+                           MemoryProvider memoryProvider,
                            SystemLogQueryService systemLogQueryService,
                            ClawAgentProperties properties) {
         this.runtime = runtime;
@@ -122,6 +145,7 @@ public class AgentController {
         this.attachmentService = attachmentService;
         this.fileStorageProvider = fileStorageProvider;
         this.knowledgeService = knowledgeService;
+        this.memoryProvider = memoryProvider;
         this.systemLogQueryService = systemLogQueryService;
         this.properties = properties;
     }
@@ -269,6 +293,126 @@ public class AgentController {
                 firstNonBlank(safePayload.mode(), "hybrid"),
                 safePayload.topK() == null ? 8 : safePayload.topK());
         return new KnowledgeSearchResponse(hits);
+    }
+
+    @GetMapping("/memory/provider")
+    public Map<String, Object> memoryProvider() {
+        return Map.of(
+                "id", memoryProvider.id(),
+                "capabilities", memoryProvider.capabilities());
+    }
+
+    @GetMapping("/memory/items")
+    public List<MemoryItem> memoryItems(
+            @RequestParam(name = "userId", defaultValue = "console") String userId,
+            @RequestParam(name = "scopeType", required = false) String scopeType,
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "limit", defaultValue = "100") int limit) {
+        // 列表接口始终带 userId，避免管理台看到其他用户的记忆。
+        return memoryProvider.list(userId, scopeType, status, Math.min(Math.max(limit, 1), 500));
+    }
+
+    @GetMapping("/memory/items/{itemId}")
+    public MemoryItem memoryItem(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return memoryProvider.find(userId, itemId)
+                .orElseThrow(() -> new IllegalArgumentException("记忆不存在或无权访问：" + itemId));
+    }
+
+    @PostMapping("/memory/items")
+    public MemoryItem createMemoryItem(@RequestBody MemoryUpsertRequest request) {
+        return memoryProvider.save(toMemoryItem(request, null));
+    }
+
+    @PutMapping("/memory/items/{itemId}")
+    public MemoryItem updateMemoryItem(
+            @PathVariable("itemId") String itemId,
+            @RequestBody MemoryUpsertRequest request) {
+        return memoryProvider.save(toMemoryItem(request, itemId));
+    }
+
+    @PostMapping("/memory/items/{itemId}/enable")
+    public MemoryItem enableMemoryItem(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return memoryProvider.updateStatus(userId, itemId, "active");
+    }
+
+    @PostMapping("/memory/items/{itemId}/disable")
+    public MemoryItem disableMemoryItem(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return memoryProvider.updateStatus(userId, itemId, "disabled");
+    }
+
+    @PostMapping("/memory/items/{itemId}/archive")
+    public MemoryItem archiveMemoryItem(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return memoryProvider.updateStatus(userId, itemId, "archived");
+    }
+
+    @DeleteMapping("/memory/items/{itemId}")
+    public Map<String, Object> deleteMemoryItem(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        memoryProvider.delete(userId, itemId);
+        return Map.of("deleted", true, "itemId", itemId);
+    }
+
+    @GetMapping("/memory/candidates")
+    public List<MemoryItem> memoryCandidates(
+            @RequestParam(name = "userId", defaultValue = "console") String userId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit) {
+        // pending 候选只在管理台审核，不进入模型上下文。
+        return memoryProvider.list(userId, null, "pending", Math.min(Math.max(limit, 1), 500));
+    }
+
+    @PostMapping("/memory/candidates/{itemId}/accept")
+    public MemoryItem acceptMemoryCandidate(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return memoryProvider.updateStatus(userId, itemId, "active");
+    }
+
+    @PostMapping("/memory/candidates/{itemId}/reject")
+    public MemoryItem rejectMemoryCandidate(
+            @PathVariable("itemId") String itemId,
+            @RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return memoryProvider.updateStatus(userId, itemId, "archived");
+    }
+
+    @PostMapping("/memory/search")
+    public MemorySearchResponse searchMemory(@RequestBody MemorySearchPayload payload) {
+        MemorySearchPayload safePayload = payload == null
+                ? new MemorySearchPayload(null, null, List.of(), null, List.of(), null, null)
+                : payload;
+        List<String> scopes = safePayload.scopeTypes() == null || safePayload.scopeTypes().isEmpty()
+                ? List.of("global", "channel", "session")
+                : safePayload.scopeTypes();
+        List<String> statuses = safePayload.statuses() == null || safePayload.statuses().isEmpty()
+                ? List.of("active")
+                : safePayload.statuses();
+        // 检索接口只传轻量条件，具体 BM25/JVector/RRF 融合由 provider 负责。
+        List<MemorySearchHit> hits = memoryProvider.search(new MemorySearchRequest(
+                firstNonBlank(safePayload.userId(), "console"),
+                safePayload.query(),
+                scopes,
+                safePayload.scopeId(),
+                statuses,
+                firstNonBlank(safePayload.mode(), "hybrid"),
+                safePayload.topK() == null ? 8 : safePayload.topK()));
+        return new MemorySearchResponse(hits);
+    }
+
+    @GetMapping("/memory/hits")
+    public List<MemoryHitLog> memoryHits(
+            @RequestParam(name = "userId", defaultValue = "console") String userId,
+            @RequestParam(name = "sessionId", required = false) String sessionId,
+            @RequestParam(name = "taskId", required = false) String taskId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit) {
+        return memoryProvider.hits(userId, sessionId, taskId, Math.min(Math.max(limit, 1), 500));
     }
 
     @PostMapping("/tasks")
@@ -543,15 +687,107 @@ public class AgentController {
     @PutMapping("/config/model")
     public RuntimeConfigSnapshot saveModelConfig(@RequestBody ModelConfigUpdate update) {
         applyModelConfigUpdate(update);
-        Path configPath = runtimeConfigPath();
-        try {
-            Files.createDirectories(configPath.getParent());
-            Files.writeString(configPath, renderModelConfigYaml(), StandardCharsets.UTF_8);
-        } catch (Exception ex) {
-            throw new IllegalStateException("保存模型配置失败：" + ex.getMessage(), ex);
-        }
-        log.warn("model config saved configPath={} restartRequired=true", configPath);
+        writeRuntimeConfigFile();
         return buildRuntimeConfigSnapshot("模型配置已保存到本地 YAML，重启服务后生效。", true, false);
+    }
+
+    @PostMapping("/config/models")
+    public RuntimeConfigSnapshot upsertModelConfig(@RequestBody ModelConfigUpsertRequest request) {
+        if (request == null || request.id() == null || request.id().isBlank()) {
+            throw new IllegalArgumentException("模型 ID 不能为空");
+        }
+        ClawAgentProperties.ModelConfig config = ensureModelConfig(request.id().trim());
+        // 这里仅修改模型池，不改变当前聊天模型；用户可在模型配置里显式选择默认模型。
+        config.setProvider(firstNonBlank(request.provider(), config.getProvider()));
+        config.setBaseUrl(firstNonBlank(request.baseUrl(), config.getBaseUrl()));
+        config.setModel(firstNonBlank(request.model(), firstNonBlank(config.getModel(), request.id())));
+        config.setApiKey(firstNonBlank(request.apiKey(), config.getApiKey()));
+        if (request.temperature() != null) {
+            config.setTemperature(request.temperature());
+        }
+        if (request.timeoutSeconds() != null) {
+            config.setTimeoutSeconds(request.timeoutSeconds());
+        }
+        writeRuntimeConfigFile();
+        return buildRuntimeConfigSnapshot("模型已加入本地模型池，重启服务后可用于正式调用。", true, false);
+    }
+
+    @PostMapping("/config/model/test")
+    public ModelApiTestResponse testModelApi(@RequestBody ModelApiTestRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("测试请求不能为空");
+        }
+        long started = System.nanoTime();
+        try {
+            String baseUrl = firstNonBlank(request.baseUrl(), "");
+            String model = firstNonBlank(request.model(), "");
+            String apiKey = resolveInlineApiKey(firstNonBlank(request.apiKey(), ""));
+            if (baseUrl.isBlank() || model.isBlank()) {
+                throw new IllegalArgumentException("Base URL 和模型名称不能为空");
+            }
+            if (apiKey.isBlank()) {
+                throw new IllegalArgumentException("API Key 不能为空，或环境变量占位符未解析到值");
+            }
+            Map<String, Object> payload = Map.of(
+                    "model", model,
+                    "messages", List.of(Map.of("role", "user", "content", firstNonBlank(request.prompt(), "请回复：模型连接正常。"))),
+                    "temperature", request.temperature() == null ? 0.2 : request.temperature()
+            );
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(trimTrailingSlash(baseUrl) + "/chat/completions"))
+                    .timeout(Duration.ofSeconds(request.timeoutSeconds() == null ? 30 : Math.max(1, request.timeoutSeconds())))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = configTestHttpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return new ModelApiTestResponse(false, response.statusCode(), "模型 API 返回错误，HTTP " + response.statusCode(), preview(response.body(), 800), 0, 0, 0, elapsedMs);
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            String content = root.path("choices").path(0).path("message").path("content").asText("");
+            JsonNode usage = root.path("usage");
+            return new ModelApiTestResponse(
+                    true,
+                    response.statusCode(),
+                    firstNonBlank(content, "模型连接正常，但响应没有 message.content。"),
+                    "",
+                    usage.path("prompt_tokens").asInt(0),
+                    usage.path("completion_tokens").asInt(0),
+                    usage.path("total_tokens").asInt(0),
+                    elapsedMs
+            );
+        } catch (Exception ex) {
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            return new ModelApiTestResponse(false, 0, "模型测试失败：" + ex.getMessage(), "", 0, 0, 0, elapsedMs);
+        }
+    }
+
+    @GetMapping("/knowledge/vector-status")
+    public List<VectorStatusView> knowledgeVectorStatus(@RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return queryVectorStatus(
+                "knowledge_document",
+                "knowledge_chunk",
+                "knowledge_vector",
+                "document_id",
+                "id",
+                "name",
+                "status",
+                userId);
+    }
+
+    @GetMapping("/memory/vector-status")
+    public List<VectorStatusView> memoryVectorStatus(@RequestParam(name = "userId", defaultValue = "console") String userId) {
+        return queryVectorStatus(
+                "memory_item",
+                "memory_chunk",
+                "memory_vector",
+                "item_id",
+                "id",
+                "summary",
+                "status",
+                userId);
     }
 
     @GetMapping("/tasks/{taskId}")
@@ -714,6 +950,8 @@ public class AgentController {
             String message,
             ModelSettings model,
             ModelConfigView effectiveModel,
+            EmbeddingConfigView embedding,
+            MemoryExtractionConfigView memoryExtraction,
             Map<String, ModelConfigView> models
     ) {
     }
@@ -722,6 +960,7 @@ public class AgentController {
             String mode,
             String client,
             String defaultModel,
+            String memoryModel,
             String planner
     ) {
     }
@@ -730,10 +969,37 @@ public class AgentController {
             String provider,
             String baseUrl,
             String model,
-            String apiKeyEnv,
+            String apiKey,
             boolean apiKeyConfigured,
             double temperature,
             int timeoutSeconds
+    ) {
+    }
+
+    public record EmbeddingConfigView(
+            String provider,
+            String baseUrl,
+            String model,
+            String apiKey,
+            boolean apiKeyConfigured,
+            int dimensions,
+            int timeoutSeconds
+    ) {
+    }
+
+    /**
+     * 候选记忆提炼配置视图。
+     *
+     * @param enabled 是否启用候选记忆提炼。
+     * @param mode 处理策略：after-task-async 或 batch。
+     * @param intervalSeconds 定时批处理间隔秒数。
+     * @param batchSize 单次后台批处理数量。
+     */
+    public record MemoryExtractionConfigView(
+            boolean enabled,
+            String mode,
+            long intervalSeconds,
+            int batchSize
     ) {
     }
 
@@ -741,13 +1007,112 @@ public class AgentController {
             String mode,
             String client,
             String defaultModel,
+            String memoryModel,
             String planner,
             String provider,
             String baseUrl,
             String model,
-            String apiKeyEnv,
+            String apiKey,
+            Double temperature,
+            Integer timeoutSeconds,
+            String embeddingProvider,
+            String embeddingBaseUrl,
+            String embeddingModel,
+            String embeddingApiKey,
+            Integer embeddingDimensions,
+            Integer embeddingTimeoutSeconds,
+            Boolean memoryExtractionEnabled,
+            String memoryExtractionMode,
+            Long memoryExtractionIntervalSeconds,
+            Integer memoryExtractionBatchSize
+    ) {
+    }
+
+    /**
+     * 新增或更新模型池中的一个模型。
+     *
+     * @param id 模型配置 ID，用于 default-model 或 memory-model 引用。
+     * @param provider 模型供应商标识，例如 deepseek、siliconflow。
+     * @param baseUrl OpenAI-compatible API 根地址。
+     * @param model 供应商真实模型名。
+     * @param apiKey API Key 明文；只写入本地覆盖配置，不写日志。
+     * @param temperature 采样温度。
+     * @param timeoutSeconds 请求超时秒数。
+     */
+    public record ModelConfigUpsertRequest(
+            String id,
+            String provider,
+            String baseUrl,
+            String model,
+            String apiKey,
             Double temperature,
             Integer timeoutSeconds
+    ) {
+    }
+
+    /**
+     * 模型在线测试请求。
+     *
+     * @param provider 模型供应商标识，仅用于页面展示，测试请求按 baseUrl 调用。
+     * @param baseUrl OpenAI-compatible API 根地址。
+     * @param model 供应商真实模型名。
+     * @param apiKey API Key 明文；只用于本次测试，不持久化。
+     * @param prompt 测试提示词。
+     * @param temperature 采样温度。
+     * @param timeoutSeconds 请求超时秒数。
+     */
+    public record ModelApiTestRequest(
+            String provider,
+            String baseUrl,
+            String model,
+            String apiKey,
+            String prompt,
+            Double temperature,
+            Integer timeoutSeconds
+    ) {
+    }
+
+    /**
+     * 模型在线测试响应。
+     *
+     * @param success 是否测试成功。
+     * @param statusCode HTTP 状态码；网络异常时为 0。
+     * @param message 模型返回摘要或错误说明。
+     * @param rawError 错误响应片段，避免页面展示超长原文。
+     * @param promptTokens 请求 token 数；供应商未返回时为 0。
+     * @param completionTokens 回复 token 数；供应商未返回时为 0。
+     * @param totalTokens 总 token 数；供应商未返回时为 0。
+     * @param elapsedMs 请求耗时毫秒。
+     */
+    public record ModelApiTestResponse(
+            boolean success,
+            int statusCode,
+            String message,
+            String rawError,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens,
+            long elapsedMs
+    ) {
+    }
+
+    /**
+     * 向量化状态视图。
+     *
+     * @param id 文档 ID 或记忆 ID。
+     * @param name 文档名称或记忆摘要。
+     * @param status 原始业务状态。
+     * @param chunkCount 已解析出的 chunk 数。
+     * @param vectorCount 已写入向量表的 chunk 数。
+     * @param vectorized 是否所有 chunk 都已有向量。
+     */
+    public record VectorStatusView(
+            String id,
+            String name,
+            String status,
+            int chunkCount,
+            int vectorCount,
+            boolean vectorized
     ) {
     }
 
@@ -805,6 +1170,73 @@ public class AgentController {
     ) {
     }
 
+    /**
+     * 记忆检索 HTTP 请求。
+     *
+     * @param userId 当前用户 ID，所有记忆检索必须按用户隔离。
+     * @param query 检索关键词或自然语言问题。
+     * @param scopeTypes 允许检索的范围，默认 global/channel/session。
+     * @param scopeId 指定范围 ID，例如 channelId 或 sessionId。
+     * @param statuses 允许检索的状态；模型上下文默认只使用 active。
+     * @param mode 检索模式：keyword、vector、hybrid。
+     * @param topK 返回命中数量上限。
+     */
+    public record MemorySearchPayload(
+            String userId,
+            String query,
+            List<String> scopeTypes,
+            String scopeId,
+            List<String> statuses,
+            String mode,
+            Integer topK
+    ) {
+    }
+
+    /**
+     * 记忆检索 HTTP 响应。
+     *
+     * @param hits 记忆检索命中的片段列表。
+     */
+    public record MemorySearchResponse(
+            List<MemorySearchHit> hits
+    ) {
+    }
+
+    private MemoryItem toMemoryItem(MemoryUpsertRequest request, String forcedId) {
+        if (request == null) {
+            throw new IllegalArgumentException("记忆请求不能为空");
+        }
+        String content = firstNonBlank(request.content(), "");
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("记忆正文不能为空");
+        }
+        String scopeType = firstNonBlank(request.scopeType(), "session").toLowerCase();
+        if ("task".equals(scopeType) || "workspace".equals(scopeType)) {
+            // task 只是本轮运行上下文，workspace 是预留能力，不能被写成长期记忆。
+            throw new IllegalArgumentException("当前版本不支持长期记忆 scope：" + scopeType);
+        }
+        if (!List.of("global", "channel", "session").contains(scopeType)) {
+            throw new IllegalArgumentException("不支持的记忆 scope：" + scopeType);
+        }
+        Instant now = Instant.now();
+        return new MemoryItem(
+                firstNonBlank(forcedId, firstNonBlank(request.id(), UUID.randomUUID().toString())),
+                firstNonBlank(request.userId(), "console"),
+                scopeType,
+                firstNonBlank(request.scopeId(), ""),
+                firstNonBlank(request.type(), "fact"),
+                firstNonBlank(request.status(), "pending"),
+                content,
+                firstNonBlank(request.summary(), preview(content, 120)),
+                firstNonBlank(request.sourceSessionId(), ""),
+                firstNonBlank(request.sourceTaskId(), ""),
+                request.importance() == null ? 0.5 : request.importance(),
+                request.confidence() == null ? 0.7 : request.confidence(),
+                request.metadata() == null ? Map.of() : request.metadata(),
+                now,
+                now);
+    }
+
     private RuntimeConfigSnapshot buildRuntimeConfigSnapshot(String message, boolean restartRequired, boolean applied) {
         Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
         Path configRoot = runtimeConfigRoot();
@@ -823,6 +1255,7 @@ public class AgentController {
                 properties.getModel().getMode(),
                 properties.getModel().getClient(),
                 defaultModel,
+                properties.getModel().getMemoryModel(),
                 properties.getModel().getPlanner()
         );
         return new RuntimeConfigSnapshot(
@@ -834,6 +1267,8 @@ public class AgentController {
                 message,
                 modelSettings,
                 toModelConfigView(effective),
+                toEmbeddingConfigView(properties.getMemory().getVector().getEmbedding()),
+                toMemoryExtractionConfigView(properties.getMemory().getExtraction()),
                 modelViews
         );
     }
@@ -847,18 +1282,64 @@ public class AgentController {
         properties.getModel().setMode(firstNonBlank(update.mode(), properties.getModel().getMode()));
         properties.getModel().setClient(firstNonBlank(update.client(), properties.getModel().getClient()));
         properties.getModel().setDefault(defaultModel);
+        properties.getModel().setMemoryModel(firstNonBlank(update.memoryModel(), properties.getModel().getMemoryModel()));
         properties.getModel().setPlanner(firstNonBlank(update.planner(), properties.getModel().getPlanner()));
 
         ClawAgentProperties.ModelConfig config = ensureModelConfig(defaultModel);
         config.setProvider(firstNonBlank(update.provider(), config.getProvider()));
         config.setBaseUrl(firstNonBlank(update.baseUrl(), config.getBaseUrl()));
         config.setModel(firstNonBlank(update.model(), firstNonBlank(config.getModel(), defaultModel)));
-        config.setApiKeyEnv(firstNonBlank(update.apiKeyEnv(), config.getApiKeyEnv()));
+        config.setApiKey(firstNonBlank(update.apiKey(), config.getApiKey()));
         if (update.temperature() != null) {
             config.setTemperature(update.temperature());
         }
         if (update.timeoutSeconds() != null) {
             config.setTimeoutSeconds(update.timeoutSeconds());
+        }
+        String memoryModel = properties.getModel().getMemoryModel();
+        if (memoryModel != null && !memoryModel.isBlank() && !memoryModel.equals(defaultModel)) {
+            ClawAgentProperties.ModelConfig memoryConfig = ensureModelConfig(memoryModel);
+            if ("siliconflow-qwen3-8b".equals(memoryModel)) {
+                memoryConfig.setProvider("siliconflow");
+                memoryConfig.setBaseUrl("https://api.siliconflow.cn/v1");
+                memoryConfig.setModel("Qwen/Qwen3-8B");
+                memoryConfig.setApiKey(firstNonBlank(memoryConfig.getApiKey(), config.getApiKey()));
+                memoryConfig.setTemperature(0.2);
+                memoryConfig.setTimeoutSeconds(60);
+            } else {
+                // 自定义记忆模型未单独编辑时，先复用聊天模型连接，保证保存后有可用配置。
+                memoryConfig.setProvider(firstNonBlank(memoryConfig.getProvider(), config.getProvider()));
+                memoryConfig.setBaseUrl(firstNonBlank(memoryConfig.getBaseUrl(), config.getBaseUrl()));
+                memoryConfig.setModel(firstNonBlank(memoryConfig.getModel(), memoryModel));
+                memoryConfig.setApiKey(firstNonBlank(memoryConfig.getApiKey(), config.getApiKey()));
+                memoryConfig.setTemperature(memoryConfig.getTemperature());
+                memoryConfig.setTimeoutSeconds(memoryConfig.getTimeoutSeconds());
+            }
+        }
+
+        ClawAgentProperties.Embedding embedding = properties.getMemory().getVector().getEmbedding();
+        embedding.setProvider(firstNonBlank(update.embeddingProvider(), embedding.getProvider()));
+        embedding.setBaseUrl(firstNonBlank(update.embeddingBaseUrl(), embedding.getBaseUrl()));
+        embedding.setModel(firstNonBlank(update.embeddingModel(), embedding.getModel()));
+        embedding.setApiKey(firstNonBlank(update.embeddingApiKey(), embedding.getApiKey()));
+        if (update.embeddingDimensions() != null) {
+            embedding.setDimensions(update.embeddingDimensions());
+        }
+        if (update.embeddingTimeoutSeconds() != null) {
+            embedding.setTimeoutSeconds(update.embeddingTimeoutSeconds());
+        }
+        ClawAgentProperties.Extraction extraction = properties.getMemory().getExtraction();
+        if (update.memoryExtractionEnabled() != null) {
+            extraction.setEnabled(update.memoryExtractionEnabled());
+        }
+        if (update.memoryExtractionMode() != null && !update.memoryExtractionMode().isBlank()) {
+            extraction.setMode(update.memoryExtractionMode());
+        }
+        if (update.memoryExtractionIntervalSeconds() != null) {
+            extraction.setIntervalSeconds(update.memoryExtractionIntervalSeconds());
+        }
+        if (update.memoryExtractionBatchSize() != null) {
+            extraction.setBatchSize(update.memoryExtractionBatchSize());
         }
     }
 
@@ -879,16 +1360,52 @@ public class AgentController {
                 config.getProvider(),
                 config.getBaseUrl(),
                 config.getModel(),
-                apiKeyEnv,
+                apiKey,
                 apiKeyConfigured,
                 config.getTemperature(),
                 config.getTimeoutSeconds()
         );
     }
 
+    private EmbeddingConfigView toEmbeddingConfigView(ClawAgentProperties.Embedding config) {
+        String apiKey = config.getApiKey();
+        String apiKeyEnv = config.getApiKeyEnv();
+        boolean apiKeyConfigured = (apiKey != null && !apiKey.isBlank())
+                || (apiKeyEnv != null && !apiKeyEnv.isBlank() && System.getenv(apiKeyEnv) != null);
+        return new EmbeddingConfigView(
+                config.getProvider(),
+                config.getBaseUrl(),
+                config.getModel(),
+                apiKey,
+                apiKeyConfigured,
+                config.getDimensions(),
+                config.getTimeoutSeconds()
+        );
+    }
+
+    private MemoryExtractionConfigView toMemoryExtractionConfigView(ClawAgentProperties.Extraction config) {
+        return new MemoryExtractionConfigView(
+                config.isEnabled(),
+                config.getMode(),
+                config.getIntervalSeconds(),
+                config.getBatchSize()
+        );
+    }
+
+    private void writeRuntimeConfigFile() {
+        Path configPath = runtimeConfigPath();
+        try {
+            Files.createDirectories(configPath.getParent());
+            Files.writeString(configPath, renderModelConfigYaml(), StandardCharsets.UTF_8);
+        } catch (Exception ex) {
+            throw new IllegalStateException("保存模型配置失败：" + ex.getMessage(), ex);
+        }
+        log.warn("model config saved configPath={} restartRequired=true", configPath);
+    }
+
     private String renderModelConfigYaml() {
         String defaultModel = properties.getModel().getDefault();
-        ClawAgentProperties.ModelConfig config = ensureModelConfig(defaultModel);
+        ensureModelConfig(defaultModel);
         StringBuilder yaml = new StringBuilder();
         yaml.append("# ClawAgent local runtime override.\n");
         yaml.append("# This file is generated by admin console. Model client changes require service restart.\n");
@@ -897,16 +1414,104 @@ public class AgentController {
         yaml.append("    mode: ").append(yamlScalar(properties.getModel().getMode())).append('\n');
         yaml.append("    client: ").append(yamlScalar(properties.getModel().getClient())).append('\n');
         yaml.append("    default-model: ").append(yamlScalar(defaultModel)).append('\n');
+        if (properties.getModel().getMemoryModel() != null && !properties.getModel().getMemoryModel().isBlank()) {
+            yaml.append("    memory-model: ").append(yamlScalar(properties.getModel().getMemoryModel())).append('\n');
+        }
         yaml.append("    planner: ").append(yamlScalar(properties.getModel().getPlanner())).append('\n');
         yaml.append("  models:\n");
-        yaml.append("    ").append(yamlKey(defaultModel)).append(":\n");
-        yaml.append("      provider: ").append(yamlScalar(config.getProvider())).append('\n');
-        yaml.append("      base-url: ").append(yamlScalar(config.getBaseUrl())).append('\n');
-        yaml.append("      model: ").append(yamlScalar(config.getModel())).append('\n');
-        yaml.append("      api-key-env: ").append(yamlScalar(config.getApiKeyEnv())).append('\n');
-        yaml.append("      temperature: ").append(config.getTemperature()).append('\n');
-        yaml.append("      timeout-seconds: ").append(config.getTimeoutSeconds()).append('\n');
+        for (Map.Entry<String, ClawAgentProperties.ModelConfig> entry : properties.getModels().entrySet()) {
+            ClawAgentProperties.ModelConfig modelConfig = entry.getValue();
+            yaml.append("    ").append(yamlKey(entry.getKey())).append(":\n");
+            yaml.append("      provider: ").append(yamlScalar(modelConfig.getProvider())).append('\n');
+            yaml.append("      base-url: ").append(yamlScalar(modelConfig.getBaseUrl())).append('\n');
+            yaml.append("      model: ").append(yamlScalar(modelConfig.getModel())).append('\n');
+            yaml.append("      api-key: ").append(yamlScalar(modelConfig.getApiKey())).append('\n');
+            yaml.append("      temperature: ").append(modelConfig.getTemperature()).append('\n');
+            yaml.append("      timeout-seconds: ").append(modelConfig.getTimeoutSeconds()).append('\n');
+        }
+        ClawAgentProperties.Embedding embedding = properties.getMemory().getVector().getEmbedding();
+        yaml.append("  memory:\n");
+        ClawAgentProperties.Extraction extraction = properties.getMemory().getExtraction();
+        yaml.append("    extraction:\n");
+        yaml.append("      enabled: ").append(extraction.isEnabled()).append('\n');
+        yaml.append("      mode: ").append(yamlScalar(extraction.getMode())).append('\n');
+        yaml.append("      interval-seconds: ").append(extraction.getIntervalSeconds()).append('\n');
+        yaml.append("      batch-size: ").append(extraction.getBatchSize()).append('\n');
+        yaml.append("    vector:\n");
+        yaml.append("      enabled: true\n");
+        yaml.append("      provider: jvector\n");
+        yaml.append("      embedding:\n");
+        yaml.append("        provider: ").append(yamlScalar(embedding.getProvider())).append('\n');
+        yaml.append("        base-url: ").append(yamlScalar(embedding.getBaseUrl())).append('\n');
+        yaml.append("        model: ").append(yamlScalar(embedding.getModel())).append('\n');
+        yaml.append("        api-key: ").append(yamlScalar(embedding.getApiKey())).append('\n');
+        yaml.append("        dimensions: ").append(embedding.getDimensions()).append('\n');
+        yaml.append("        timeout-seconds: ").append(embedding.getTimeoutSeconds()).append('\n');
         return yaml.toString();
+    }
+
+    private List<VectorStatusView> queryVectorStatus(
+            String ownerTable,
+            String chunkTable,
+            String vectorTable,
+            String ownerForeignKey,
+            String ownerIdColumn,
+            String ownerNameColumn,
+            String ownerStatusColumn,
+            String userId) {
+        Path databasePath = runtimeConfigRoot().resolve("clawagent.db");
+        if (!Files.exists(databasePath)) {
+            return List.of();
+        }
+        String sql = "select o." + ownerIdColumn + " as id, o." + ownerNameColumn + " as name, o." + ownerStatusColumn + " as status, " +
+                "count(distinct c.id) as chunk_count, count(distinct v.chunk_id) as vector_count " +
+                "from " + ownerTable + " o " +
+                "left join " + chunkTable + " c on c." + ownerForeignKey + " = o." + ownerIdColumn + " and c.user_id = o.user_id " +
+                "left join " + vectorTable + " v on v.chunk_id = c.id and v.user_id = o.user_id " +
+                "where o.user_id = ? " +
+                "group by o." + ownerIdColumn + ", o." + ownerNameColumn + ", o." + ownerStatusColumn + " " +
+                "order by o." + ownerIdColumn + " desc";
+        List<VectorStatusView> rows = new ArrayList<>();
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + databasePath);
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, firstNonBlank(userId, "console"));
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) {
+                    int chunkCount = rs.getInt("chunk_count");
+                    int vectorCount = rs.getInt("vector_count");
+                    // chunk 为 0 说明尚未解析成功，不能算已向量化；vector 必须覆盖所有 chunk。
+                    boolean vectorized = chunkCount > 0 && vectorCount >= chunkCount;
+                    rows.add(new VectorStatusView(
+                            rs.getString("id"),
+                            rs.getString("name"),
+                            rs.getString("status"),
+                            chunkCount,
+                            vectorCount,
+                            vectorized
+                    ));
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("vector status query skipped table={} reason={}", ownerTable, ex.getMessage());
+        }
+        return rows;
+    }
+
+    private String trimTrailingSlash(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+
+    private String resolveInlineApiKey(String value) {
+        String key = value == null ? "" : value.trim();
+        if (key.startsWith("${") && key.endsWith("}") && key.length() > 3) {
+            // 页面可能保存 Spring 占位符；在线测试没有走 Spring Binder，需要在这里解析当前进程环境变量。
+            return firstNonBlank(System.getenv(key.substring(2, key.length() - 1)), "");
+        }
+        return key;
     }
 
     private Path runtimeConfigPath() {
@@ -1044,11 +1649,15 @@ public class AgentController {
     }
 
     private String preview(String text) {
+        return preview(text, 120);
+    }
+
+    private String preview(String text, int limit) {
         if (text == null) {
             return "";
         }
         String normalized = text.replaceAll("\\s+", " ").trim();
-        return normalized.length() <= 120 ? normalized : normalized.substring(0, 120) + "...";
+        return normalized.length() <= limit ? normalized : normalized.substring(0, limit) + "...";
     }
 
     private void sendSse(SseEmitter emitter, String eventName, Object data) {

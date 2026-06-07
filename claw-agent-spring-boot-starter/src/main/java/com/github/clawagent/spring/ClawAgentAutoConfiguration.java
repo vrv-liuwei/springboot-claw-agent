@@ -24,8 +24,12 @@ import com.github.clawagent.knowledge.LocalFileStorageProvider;
 import com.github.clawagent.knowledge.LocalKnowledgeProvider;
 import com.github.clawagent.mcp.FileMcpRegistry;
 import com.github.clawagent.mcp.McpRegistry;
-import com.github.clawagent.memory.markdown.MarkdownMemoryPromoter;
-import com.github.clawagent.memory.markdown.MarkdownMemoryRepository;
+import com.github.clawagent.memory.DefaultMemoryContextBuilder;
+import com.github.clawagent.memory.DefaultMemoryExtractor;
+import com.github.clawagent.memory.LlmMemoryIntentClassifier;
+import com.github.clawagent.memory.LocalMemoryProvider;
+import com.github.clawagent.memory.MarkdownMemoryPromoter;
+import com.github.clawagent.memory.MarkdownMemoryRepository;
 import com.github.clawagent.model.LlmAgentPlanner;
 import com.github.clawagent.model.LlmSessionSummarizer;
 import com.github.clawagent.model.OpenAiCompatibleEmbeddingClient;
@@ -37,12 +41,14 @@ import com.github.clawagent.model.ToolCallingAgentPlanner;
 import com.github.clawagent.persistence.sqlite.SqliteTaskStore;
 import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.runtime.DefaultAgentRuntime;
+import com.github.clawagent.runtime.DefaultMemoryCandidateProcessor;
 import com.github.clawagent.runtime.InMemoryAgentEventStore;
 import com.github.clawagent.runtime.InMemoryAutomationStore;
 import com.github.clawagent.runtime.InMemorySessionMessageStore;
 import com.github.clawagent.runtime.InMemorySessionStore;
 import com.github.clawagent.runtime.InMemoryTaskStore;
 import com.github.clawagent.runtime.InMemoryTodoStore;
+import com.github.clawagent.runtime.MemoryCandidateProcessingOptions;
 import com.github.clawagent.runtime.RuleBasedPlanner;
 import com.github.clawagent.runtime.SanitizationOptions;
 import com.github.clawagent.runtime.SensitiveDataInterceptor;
@@ -65,7 +71,12 @@ import com.github.clawagent.spi.EmbeddingClient;
 import com.github.clawagent.spi.EmbeddingOptions;
 import com.github.clawagent.spi.FileStorageProvider;
 import com.github.clawagent.spi.KnowledgeProvider;
+import com.github.clawagent.spi.MemoryCandidateProcessor;
 import com.github.clawagent.spi.MemoryPromoter;
+import com.github.clawagent.spi.MemoryContextBuilder;
+import com.github.clawagent.spi.MemoryExtractor;
+import com.github.clawagent.spi.MemoryIntentClassifier;
+import com.github.clawagent.spi.MemoryProvider;
 import com.github.clawagent.spi.ModelClient;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
@@ -140,6 +151,51 @@ public class ClawAgentAutoConfiguration {
     @ConditionalOnMissingBean
     public KnowledgeService knowledgeService(ClawAgentProperties properties, List<KnowledgeProvider> providers) {
         return new KnowledgeService(providers, properties.getKnowledge().getProvider());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MemoryProvider localMemoryProvider(
+            ClawAgentProperties properties,
+            EmbeddingClient embeddingClient,
+            EmbeddingOptions embeddingOptions) {
+        return new LocalMemoryProvider(
+                resolveRuntimePath(properties.getPersistence().getSqlite().getPath()),
+                resolveRuntimePath(properties.getMemory().getMarkdown().getPath()),
+                resolveRuntimePath(properties.getMemory().getVector().getPath()),
+                embeddingClient,
+                embeddingOptions);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MemoryContextBuilder memoryContextBuilder(List<MemoryProvider> providers) {
+        return new DefaultMemoryContextBuilder(providers);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MemoryIntentClassifier memoryIntentClassifier(ClawAgentProperties properties,
+                                                         ModelClient modelClient,
+                                                         ChatOptions chatOptions,
+                                                         ApplicationContext applicationContext) {
+        ClawAgentProperties.ModelConfig memoryConfig = memoryModelConfig(properties);
+        if (memoryConfig == null) {
+            // 未配置独立记忆模型时复用聊天模型，保持旧配置可直接运行。
+            return new LlmMemoryIntentClassifier(modelClient, chatOptions);
+        }
+        ChatOptions memoryOptions = new ChatOptions(
+                memoryConfig.getModel(),
+                memoryConfig.getTemperature(),
+                memoryConfig.getTimeoutSeconds());
+        return new LlmMemoryIntentClassifier(createModelClient(properties, memoryConfig, applicationContext), memoryOptions);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MemoryExtractor memoryExtractor(MemoryIntentClassifier memoryIntentClassifier) {
+        // 默认提炼器只消费分类器结果，并只生成 pending 候选。
+        return new DefaultMemoryExtractor(memoryIntentClassifier);
     }
 
     @Bean
@@ -342,6 +398,25 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public MemoryCandidateProcessor memoryCandidateProcessor(
+            @Qualifier("sessionStore") SessionStore sessionStore,
+            @Qualifier("sessionMessageStore") SessionMessageStore messageStore,
+            @Qualifier("agentEventStore") AgentEventStore eventStore,
+            List<MemoryExtractor> memoryExtractors,
+            MemoryProvider memoryProvider,
+            ClawAgentProperties properties) {
+        ClawAgentProperties.Extraction extraction = properties.getMemory().getExtraction();
+        // 候选记忆提炼改为后台批处理，避免聊天完成后同步等待记忆模型。
+        MemoryCandidateProcessingOptions options = new MemoryCandidateProcessingOptions(
+                extraction.isEnabled(),
+                extraction.getMode(),
+                extraction.getIntervalSeconds(),
+                extraction.getBatchSize());
+        return new DefaultMemoryCandidateProcessor(sessionStore, messageStore, eventStore, memoryExtractors, memoryProvider, options);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public AgentRuntime agentRuntime(
             AgentPlanner planner,
             AgentResponseGenerator responseGenerator,
@@ -351,6 +426,8 @@ public class ClawAgentAutoConfiguration {
             @Qualifier("sessionMessageStore") SessionMessageStore messageStore,
             SessionSummarizer sessionSummarizer,
             List<MemoryPromoter> memoryPromoters,
+            MemoryContextBuilder memoryContextBuilder,
+            MemoryCandidateProcessor memoryCandidateProcessor,
             @Qualifier("agentEventStore") AgentEventStore eventStore,
             TodoStore todoStore,
             List<ToolExecutionGuard> toolGuards,
@@ -366,6 +443,8 @@ public class ClawAgentAutoConfiguration {
                 messageStore,
                 sessionSummarizer,
                 memoryPromoters,
+                memoryContextBuilder,
+                memoryCandidateProcessor,
                 eventStore,
                 todoStore,
                 toolGuards,
@@ -391,6 +470,31 @@ public class ClawAgentAutoConfiguration {
                     config.setModel(defaultModelId);
                     return config;
                 });
+    }
+
+    private ClawAgentProperties.ModelConfig memoryModelConfig(ClawAgentProperties properties) {
+        String memoryModelId = properties.getModel().getMemoryModel();
+        if (memoryModelId == null || memoryModelId.isBlank()
+                || memoryModelId.equals(properties.getModel().getDefault())) {
+            return null;
+        }
+        return Optional.ofNullable(properties.getModels().get(memoryModelId))
+                .orElseGet(() -> {
+                    ClawAgentProperties.ModelConfig config = new ClawAgentProperties.ModelConfig();
+                    config.setModel(memoryModelId);
+                    return config;
+                });
+    }
+
+    private ModelClient createModelClient(ClawAgentProperties properties,
+                                          ClawAgentProperties.ModelConfig config,
+                                          ApplicationContext applicationContext) {
+        if ("spring-ai".equalsIgnoreCase(properties.getModel().getClient())) {
+            Object builder = findSpringAiChatClientBuilder(applicationContext);
+            // Spring AI 模式下仍由业务应用提供模型 Builder；memory-model 只切换 ChatOptions.model。
+            return new SpringAiChatClientModelClient(builder);
+        }
+        return new OpenAiCompatibleModelClient(config.getBaseUrl(), resolveApiKey(config));
     }
 
     private String resolveApiKey(ClawAgentProperties.ModelConfig config) {

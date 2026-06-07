@@ -1,4 +1,4 @@
-package com.github.clawagent.memory.markdown;
+package com.github.clawagent.memory;
 
 import com.github.clawagent.core.AgentMessage;
 import com.github.clawagent.core.AgentSession;
@@ -10,14 +10,20 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Markdown 长期记忆提升器。
- * 会话摘要生成后，将摘要和最近消息短摘保存为 Markdown 文件。
+ * Markdown 会话摘要提升器。
+ * <p>
+ * 该类保留旧 Markdown 记忆能力，但模块统一迁到 claw-agent-memory。
+ * </p>
  */
 public class MarkdownMemoryPromoter implements MemoryPromoter {
     private static final Logger log = LoggerFactory.getLogger(MarkdownMemoryPromoter.class);
 
+    /** Markdown 兼容仓库。 */
     private final MarkdownMemoryRepository repository;
 
+    /**
+     * @param repository Markdown 兼容仓库。
+     */
     public MarkdownMemoryPromoter(MarkdownMemoryRepository repository) {
         this.repository = repository;
     }

@@ -175,12 +175,36 @@ public class FileMcpRegistry implements McpRegistry {
         List<McpToolDescriptor> descriptors = client.listTools();
         tools.put(serverId, descriptors);
         toolRegistry.unregisterByPrefix("mcp." + serverId + ".");
+        McpServerConfig config = loadAllConfigs().get(serverId);
+        List<String> autoApprove = config == null ? List.of() : config.autoApprove();
 
         // MCP tool 使用 mcp.<serverId>.<toolName> 前缀注册，避免和本地工具、Skill 工具冲突。
         for (McpToolDescriptor descriptor : descriptors) {
-            toolRegistry.registerOrReplace(new McpAgentTool(descriptor, client));
+            // MCP autoApprove 正式接入 ToolExecutionGuard：未命中白名单的 MCP tool 默认是 high risk。
+            toolRegistry.registerOrReplace(new McpAgentTool(descriptor, client, isAutoApproved(descriptor, autoApprove)));
         }
         return descriptors;
+    }
+
+    private boolean isAutoApproved(McpToolDescriptor descriptor, List<String> autoApprove) {
+        if (autoApprove == null || autoApprove.isEmpty()) {
+            return false;
+        }
+        String toolName = descriptor.name();
+        String agentToolId = descriptor.agentToolId();
+        for (String rule : autoApprove) {
+            String normalized = rule == null ? "" : rule.trim();
+            if (normalized.isBlank()) {
+                continue;
+            }
+            // 支持标准 MCP toolName、ClawAgent toolId，以及 * 通配整个 server。
+            if ("*".equals(normalized)
+                    || normalized.equals(toolName)
+                    || normalized.equals(agentToolId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void safeRefreshResources(String serverId) {
@@ -281,6 +305,15 @@ public class FileMcpRegistry implements McpRegistry {
 
     private McpClient connectedClient(String serverId) {
         McpClient client = clients.get(serverId);
+        if (client != null) {
+            return client;
+        }
+        Optional<McpServerRegistration> registration = find(serverId);
+        if (registration.isPresent() && registration.get().config().enabled()) {
+            // MCP client 是运行态对象，应用重启或子进程退出后可能丢失；这里按需重连恢复。
+            connect(serverId);
+            client = clients.get(serverId);
+        }
         if (client == null) {
             throw new IllegalStateException("MCP 服务未连接：" + serverId);
         }

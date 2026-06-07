@@ -36,6 +36,23 @@ class SensitiveDataInterceptorTest {
     }
 
     @Test
+    void keepsTokenUsageMetrics() {
+        SensitiveDataInterceptor interceptor = new SensitiveDataInterceptor(SanitizationOptions.defaults());
+        Map<String, String> details = new LinkedHashMap<>();
+        details.put("promptTokens", "2732");
+        details.put("completionTokens", "122");
+        details.put("totalTokens", "2854");
+        details.put("apiKey", "sk-test-value");
+
+        Map<String, String> result = interceptor.beforeEvent(context("llm.call"), details);
+
+        assertEquals("2732", result.get("promptTokens"));
+        assertEquals("122", result.get("completionTokens"));
+        assertEquals("2854", result.get("totalTokens"));
+        assertEquals("***", result.get("apiKey"));
+    }
+
+    @Test
     void keepsOriginalValuesWhenDisabled() {
         SensitiveDataInterceptor interceptor = new SensitiveDataInterceptor(new SanitizationOptions(false, 0, "***", null, null));
         Map<String, String> details = Map.of("apiKey", "as_sk_123456");

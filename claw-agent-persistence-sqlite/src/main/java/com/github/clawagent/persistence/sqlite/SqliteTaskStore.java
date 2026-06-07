@@ -708,8 +708,9 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             properties.load(reader);
             properties.forEach((key, entryValue) -> result.put(String.valueOf(key), String.valueOf(entryValue)));
             return result;
-        } catch (java.io.IOException e) {
+        } catch (java.io.IOException | IllegalArgumentException e) {
             // 兼容历史 key=value 明文格式，旧数据不能因为反序列化策略升级而无法读取。
+            // Properties 遇到 Windows 路径这类非法反斜杠转义会抛 IllegalArgumentException，这里降级为逐行解析。
             for (String line : value.split("\\R")) {
                 int separator = line.indexOf('=');
                 if (separator > 0) {

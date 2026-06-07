@@ -15,6 +15,22 @@ import java.util.regex.Pattern;
  * 作为 Runtime Interceptor 链的一环运行，避免 Runtime 主流程硬编码具体脱敏逻辑。
  */
 public final class SensitiveDataInterceptor implements AgentRuntimeInterceptor {
+    /**
+     * 这些字段名字包含 token，但含义是用量统计，不是密钥，不能脱敏。
+     */
+    private static final List<String> NON_SECRET_TOKEN_KEYS = List.of(
+            "prompttokens",
+            "completiontokens",
+            "totaltokens",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cached_tokens",
+            "reasoning_tokens",
+            "prompt_cache_hit_tokens",
+            "prompt_cache_miss_tokens"
+    );
+
     private final boolean enabled;
     private final int order;
     private final String replacement;
@@ -105,6 +121,9 @@ public final class SensitiveDataInterceptor implements AgentRuntimeInterceptor {
     private boolean isSensitiveKey(String key) {
         String normalized = key == null ? "" : key.toLowerCase(Locale.ROOT);
         if (normalized.isBlank()) {
+            return false;
+        }
+        if (NON_SECRET_TOKEN_KEYS.contains(normalized)) {
             return false;
         }
         for (String sensitiveKey : sensitiveKeys) {

@@ -39,7 +39,7 @@ React 管理台的“配置”页面会把模型配置保存到：
 
 - 页面只保存本地覆盖 YAML，不直接改打包内置的 `application.yml`。
 - 模型客户端、Planner 等 Bean 不做热替换；保存后需要重启服务才会完全生效。
-- API Key 只保存环境变量名，例如 `DEEPSEEK_API_KEY`，不要把真实密钥写进 YAML。
+- API Key 字段使用 `api-key`；仓库配置建议写 Spring 占位符，本地覆盖文件可以由页面写入真实密钥。
 - 如果从子模块启动，后端会优先查找上级仓库里的 `.clawagent`，避免误写 `claw-agent-server/.clawagent`。
 
 ## 当前已生效配置
@@ -59,13 +59,13 @@ clawagent:
       enabled: true
       path: .clawagent/memory
     vector:
-      enabled: false
-      provider: none
+      enabled: true
+      provider: jvector
       embedding:
-        provider: none
-        model: ""
-        base-url: ""
-        api-key-env: CLAWAGENT_EMBEDDING_API_KEY
+        provider: siliconflow
+        model: BAAI/bge-m3
+        base-url: https://api.siliconflow.cn/v1
+        api-key: ${SILICONFLOW_API_KEY}
         dimensions: 0
         timeout-seconds: 60
   mcp:
@@ -132,12 +132,21 @@ clawagent:
     client: openai-compatible
     planner: single
     default: deepseek-v4-flash
+    # 可选：记忆意图识别使用的模型 ID；为空时复用默认聊天模型。
+    memory-model: siliconflow-qwen3-8b
   models:
     deepseek-v4-flash:
       provider: deepseek
       base-url: https://api.deepseek.com
       model: deepseek-v4-flash
-      api-key-env: DEEPSEEK_API_KEY
+      api-key: ${DEEPSEEK_API_KEY}
+      temperature: 0.2
+      timeout-seconds: 60
+    siliconflow-qwen3-8b:
+      provider: siliconflow
+      base-url: https://api.siliconflow.cn/v1
+      model: Qwen/Qwen3-8B
+      api-key: ${SILICONFLOW_API_KEY}
       temperature: 0.2
       timeout-seconds: 60
 ```
@@ -147,10 +156,11 @@ clawagent:
 - `server.port`：独立服务端口，默认 `17890`。
 - `clawagent.persistence.type`：当前支持 `sqlite`；`mysql`、`postgresql` 是计划项。
 - `clawagent.persistence.sqlite.path`：SQLite3 数据库文件路径。
-- `clawagent.memory.markdown.path`：Markdown 长期记忆目录。
-- `clawagent.memory.vector.enabled`：向量记忆默认关闭。
-- `clawagent.memory.vector.provider`：向量库提供方，当前默认 `none`。
-- `clawagent.memory.vector.embedding.*`：Embedding 模型配置，当前已提供 OpenAI 兼容客户端 SPI，默认不启用。
+- `clawagent.memory.markdown.path`：本地记忆 Markdown 兼容文件目录，便于人工排查和旧数据迁移。
+- `clawagent.memory.vector.enabled`：是否启用本地向量记忆。
+- `clawagent.memory.vector.provider`：向量索引提供方，当前本地实现使用 `jvector`。
+- `clawagent.memory.vector.path`：JVector 索引落盘目录，默认 `.clawagent/memory/vectors`。
+- `clawagent.memory.vector.embedding.*`：Embedding 模型配置，当前复用 OpenAI 兼容 Embeddings 客户端。
 - `clawagent.mcp.auto-connect`：是否在服务启动后自动连接已启用 MCP Server，并把 MCP tools 注册到 Agent 工具表，默认 `true`。
 - `clawagent.mcp.path`：MCP 标准配置文件列表，支持多个 `mcp.json` 文件，重启后自动加载注册配置。
 - `clawagent.skills.path`：Skill 本地安装目录列表，启动时默认扫描并加载每个目录下的 Skill。
@@ -179,9 +189,11 @@ clawagent:
 - `clawagent.model.client`：模型客户端类型，`openai-compatible` 使用内置 HTTP 客户端；`spring-ai` 使用业务应用提供的 Spring AI `ChatClient.Builder`。
 - `clawagent.model.planner`：`single` 使用单轮 JSON 工具规划；`react` 使用多轮 ReAct 规划；`tool-calling` 使用 OpenAI 兼容原生 tools/tool_calls。
 - `clawagent.model.default`：默认模型配置 ID。
+- `clawagent.model.memory-model`：记忆意图识别模型配置 ID；为空时复用默认聊天模型。
 - `clawagent.models.<id>.base-url`：OpenAI 兼容 Chat Completions 根地址。
-- `clawagent.models.<id>.api-key-env`：读取 API Key 的环境变量名，默认不把密钥写进 YAML。
+- `clawagent.models.<id>.api-key`：模型 API Key；仓库示例建议使用 `${ENV_NAME}` 占位符，本地覆盖配置可以保存真实密钥。
 - `clawagent.models.<id>.model`：真实模型名。
+- SiliconFlow 免费模型可以配置为 `Qwen/Qwen3-8B`；Embedding 可以配置为 `BAAI/bge-m3`。
 
 ## 全量目标配置
 
@@ -223,7 +235,7 @@ clawagent:
       provider: deepseek
       base-url: https://api.deepseek.com
       model: deepseek-v4-flash
-      api-key-env: DEEPSEEK_API_KEY
+      api-key: ${DEEPSEEK_API_KEY}
       temperature: 0.2
       timeout-seconds: 60
     cloud-model:
@@ -470,7 +482,7 @@ public AgentRuntimeInterceptor auditTagInterceptor() {
 - `headers`：远程 MCP 请求头。
 - `timeout`：请求超时时间，单位秒，默认 `30`。
 - `disabled`：是否禁用该服务，默认 `false`。
-- `autoApprove`：工具自动批准规则，当前先作为配置保存，后续 ToolGuard/ApprovalPolicy 接入时生效。
+- `autoApprove`：工具自动批准规则，支持 `*`、MCP 原始 toolName 或 ClawAgent toolId；命中后该 MCP tool 作为 `low` 风险工具，否则默认 `high` 风险并进入审批链路。
 
 ## 工具审批 metadata
 
