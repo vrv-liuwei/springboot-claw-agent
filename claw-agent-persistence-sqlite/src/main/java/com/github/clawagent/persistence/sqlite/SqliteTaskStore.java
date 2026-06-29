@@ -64,7 +64,8 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             statement.executeUpdate("create table if not exists agent_task (" +
                     "id text primary key, input text, session_id text, channel_id text, user_id text, " +
-                    "status text, final_answer text, created_at text, updated_at text)");
+                    "status text, final_answer text, metadata text, created_at text, updated_at text)");
+            ensureColumn(connection, "agent_task", "metadata", "text");
             statement.executeUpdate("create table if not exists agent_session (" +
                     "id text primary key, title text, channel_id text, user_id text, metadata text, summary text, " +
                     "created_at text, updated_at text, last_active_at text)");
@@ -92,11 +93,28 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     @Override
     public void saveTask(AgentTask task) {
         try (Connection connection = connect();
-             PreparedStatement ps = connection.prepareStatement("insert or replace into agent_task values (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+             PreparedStatement ps = connection.prepareStatement("insert or replace into agent_task " +
+                     "(id, input, session_id, channel_id, user_id, status, final_answer, metadata, created_at, updated_at) " +
+                     "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             bindTask(ps, task);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("保存任务失败：" + task.id(), e);
+        }
+    }
+
+    private void ensureColumn(Connection connection, String table, String column, String definition) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("pragma table_info(" + table + ")");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return;
+                }
+            }
+        }
+        // SQLite 对已存在数据执行轻量迁移，保证 App workspace 快照不会因旧库结构丢失。
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("alter table " + table + " add column " + column + " " + definition);
         }
     }
 
@@ -168,6 +186,55 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     }
 
     @Override
+    public boolean deleteSession(String sessionId) {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                // 单个会话删除要同步清理消息、事件、Todo 和任务，避免刷新后出现孤儿数据。
+                deleteBySessionId(connection, "agent_todo_item", sessionId);
+                deleteBySessionId(connection, "agent_event", sessionId);
+                deleteTaskStepsBySessionId(connection, sessionId);
+                deleteBySessionId(connection, "agent_message", sessionId);
+                deleteBySessionId(connection, "agent_task", sessionId);
+                int deleted = deleteSessionRow(connection, sessionId);
+                connection.commit();
+                return deleted > 0;
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("删除 SQLite 会话失败：" + sessionId, e);
+        }
+    }
+
+    private int deleteBySessionId(Connection connection, String table, String sessionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("delete from " + table + " where session_id = ?")) {
+            ps.setString(1, sessionId);
+            return ps.executeUpdate();
+        }
+    }
+
+    private int deleteSessionRow(Connection connection, String sessionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("delete from agent_session where id = ?")) {
+            ps.setString(1, sessionId);
+            return ps.executeUpdate();
+        }
+    }
+
+    private void deleteTaskStepsBySessionId(Connection connection, String sessionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                delete from agent_step
+                where task_id in (select id from agent_task where session_id = ?)
+                """)) {
+            ps.setString(1, sessionId);
+            ps.executeUpdate();
+        }
+    }
+
+    @Override
     public void saveMessage(AgentMessage message) {
         try (Connection connection = connect();
              PreparedStatement ps = connection.prepareStatement("insert or replace into agent_message values (?, ?, ?, ?, ?, ?, ?)")) {
@@ -187,25 +254,45 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     @Override
     public List<AgentMessage> findMessages(String sessionId, int limit) {
         try (Connection connection = connect();
-             PreparedStatement ps = connection.prepareStatement("select * from agent_message where session_id = ? order by created_at asc limit ?")) {
+             PreparedStatement ps = connection.prepareStatement("""
+                     select * from (
+                         select * from agent_message
+                         where session_id = ?
+                         order by created_at desc
+                         limit ?
+                     ) order by created_at asc
+                     """)) {
             ps.setString(1, sessionId);
             ps.setInt(2, Math.max(1, limit));
             try (ResultSet rs = ps.executeQuery()) {
-                java.util.ArrayList<AgentMessage> messages = new java.util.ArrayList<>();
-                while (rs.next()) {
-                    messages.add(new AgentMessage(
-                            rs.getString("id"),
-                            rs.getString("session_id"),
-                            rs.getString("task_id"),
-                            rs.getString("role"),
-                            rs.getString("content"),
-                            parseMap(rs.getString("metadata")),
-                            Instant.parse(rs.getString("created_at"))));
-                }
-                return messages;
+                // 聊天窗口和运行时上下文都应该使用最近消息，不能被早期消息挤掉最新轮次。
+                return readMessages(rs);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("查询会话消息失败：" + sessionId, e);
+        }
+    }
+
+    @Override
+    public List<AgentMessage> findMessagesBefore(String sessionId, Instant beforeCreatedAt, int limit) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("""
+                     select * from (
+                         select * from agent_message
+                         where session_id = ? and created_at < ?
+                         order by created_at desc
+                         limit ?
+                     ) order by created_at asc
+                     """)) {
+            ps.setString(1, sessionId);
+            ps.setString(2, beforeCreatedAt.toString());
+            ps.setInt(3, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                // 向上滚动加载旧消息时仍返回正序，前端可以直接拼到当前列表前面。
+                return readMessages(rs);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询更早会话消息失败：" + sessionId, e);
         }
     }
 
@@ -233,6 +320,21 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         } catch (SQLException e) {
             throw new IllegalStateException("查询任务消息失败：" + taskId, e);
         }
+    }
+
+    private List<AgentMessage> readMessages(ResultSet rs) throws SQLException {
+        java.util.ArrayList<AgentMessage> messages = new java.util.ArrayList<>();
+        while (rs.next()) {
+            messages.add(new AgentMessage(
+                    rs.getString("id"),
+                    rs.getString("session_id"),
+                    rs.getString("task_id"),
+                    rs.getString("role"),
+                    rs.getString("content"),
+                    parseMap(rs.getString("metadata")),
+                    Instant.parse(rs.getString("created_at"))));
+        }
+        return messages;
     }
 
     @Override
@@ -278,6 +380,52 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     }
 
     @Override
+    public List<AgentEvent> findEvents(Instant from, Instant to, String level, String type, String sessionId, String taskId, int limit) {
+        StringBuilder sql = new StringBuilder("select * from agent_event where 1=1");
+        java.util.ArrayList<Object> args = new java.util.ArrayList<>();
+        if (from != null) {
+            sql.append(" and created_at >= ?");
+            args.add(from.toString());
+        }
+        if (to != null) {
+            sql.append(" and created_at <= ?");
+            args.add(to.toString());
+        }
+        if (level != null && !level.isBlank()) {
+            sql.append(" and upper(level) = upper(?)");
+            args.add(level.trim());
+        }
+        if (type != null && !type.isBlank()) {
+            sql.append(" and type like ?");
+            args.add("%" + type.trim() + "%");
+        }
+        if (sessionId != null && !sessionId.isBlank()) {
+            sql.append(" and session_id = ?");
+            args.add(sessionId.trim());
+        }
+        if (taskId != null && !taskId.isBlank()) {
+            sql.append(" and task_id = ?");
+            args.add(taskId.trim());
+        }
+        sql.append(" order by created_at desc limit ?");
+        args.add(Math.max(1, limit));
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < args.size(); i++) {
+                Object value = args.get(i);
+                if (value instanceof Integer number) {
+                    ps.setInt(i + 1, number);
+                } else {
+                    ps.setString(i + 1, String.valueOf(value));
+                }
+            }
+            return readEvents(ps);
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询全局运行事件失败", e);
+        }
+    }
+
+    @Override
     public Optional<AgentTask> findTask(String taskId) {
         try (Connection connection = connect();
              PreparedStatement ps = connection.prepareStatement("select * from agent_task where id = ?")) {
@@ -310,6 +458,74 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     }
 
     @Override
+    public List<AgentTask> findSubTasks(String parentTaskId, int limit) {
+        String pattern = "%agent.parentTaskId=" + parentTaskId + "%";
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_task where metadata like ? order by created_at desc limit ?")) {
+            // metadata 采用 Properties 文本存储，按精确 key 前缀过滤后再反序列化复核，避免误把普通搜索结果当子任务。
+            ps.setString(1, pattern);
+            ps.setInt(2, Math.min(Math.max(limit, 1), 500));
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<AgentTask> tasks = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    AgentTask task = readTask(rs);
+                    if (parentTaskId.equals(task.metadata().get("agent.parentTaskId"))) {
+                        tasks.add(task);
+                    }
+                }
+                return tasks;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询子 Agent 任务失败：" + parentTaskId, e);
+        }
+    }
+
+    @Override
+    public List<AgentTask> searchTasks(String query, String status, String channelId, String userId, String sessionId, int limit) {
+        StringBuilder sql = new StringBuilder("select * from agent_task where 1=1");
+        java.util.ArrayList<Object> args = new java.util.ArrayList<>();
+        if (query != null && !query.isBlank()) {
+            sql.append(" and (id like ? or input like ? or final_answer like ? or metadata like ?)");
+            String pattern = "%" + query.trim() + "%";
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+        }
+        if (status != null && !status.isBlank()) {
+            sql.append(" and upper(status) = upper(?)");
+            args.add(status.trim());
+        }
+        if (channelId != null && !channelId.isBlank()) {
+            sql.append(" and channel_id = ?");
+            args.add(channelId.trim());
+        }
+        if (userId != null && !userId.isBlank()) {
+            sql.append(" and user_id = ?");
+            args.add(userId.trim());
+        }
+        if (sessionId != null && !sessionId.isBlank()) {
+            sql.append(" and session_id = ?");
+            args.add(sessionId.trim());
+        }
+        sql.append(" order by created_at desc limit ?");
+        args.add(Math.min(Math.max(limit, 1), 500));
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            bindQueryArgs(ps, args);
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<AgentTask> tasks = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    tasks.add(readTask(rs));
+                }
+                return tasks;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("跨任务检索失败", e);
+        }
+    }
+
+    @Override
     public void saveStep(AgentStep step) {
         try (Connection connection = connect();
              PreparedStatement ps = connection.prepareStatement("insert or replace into agent_step values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
@@ -337,23 +553,59 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             try (ResultSet rs = ps.executeQuery()) {
                 java.util.ArrayList<AgentStep> steps = new java.util.ArrayList<>();
                 while (rs.next()) {
-                    AgentStep step = new AgentStep(
-                            rs.getString("id"),
-                            rs.getString("task_id"),
-                            StepType.valueOf(rs.getString("type")),
-                            rs.getString("name"),
-                            parseMap(rs.getString("input")),
-                            parseInstant(rs.getString("started_at")),
-                            parseInstant(rs.getString("finished_at")),
-                            StepStatus.valueOf(rs.getString("status")),
-                            rs.getString("output"),
-                            rs.getString("error"));
-                    steps.add(step);
+                    steps.add(readStep(rs));
                 }
                 return steps;
             }
         } catch (SQLException e) {
             throw new IllegalStateException("查询步骤失败：" + taskId, e);
+        }
+    }
+
+    @Override
+    public List<AgentStep> searchSteps(String query, String status, String taskId, String toolId, String riskLevel, int limit) {
+        StringBuilder sql = new StringBuilder("select * from agent_step where 1=1");
+        java.util.ArrayList<Object> args = new java.util.ArrayList<>();
+        if (query != null && !query.isBlank()) {
+            sql.append(" and (id like ? or name like ? or input like ? or output like ? or error like ?)");
+            String pattern = "%" + query.trim() + "%";
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+        }
+        if (status != null && !status.isBlank()) {
+            sql.append(" and upper(status) = upper(?)");
+            args.add(status.trim());
+        }
+        if (taskId != null && !taskId.isBlank()) {
+            sql.append(" and task_id = ?");
+            args.add(taskId.trim());
+        }
+        if (toolId != null && !toolId.isBlank()) {
+            sql.append(" and name like ?");
+            args.add("%" + toolId.trim() + "%");
+        }
+        if (riskLevel != null && !riskLevel.isBlank()) {
+            // 运行时把本次调用的动态风险等级写入 step.input，SQLite 检索保持和内存 Store 相同的过滤语义。
+            sql.append(" and input like ?");
+            args.add("%riskLevel=" + riskLevel.trim().toLowerCase() + "%");
+        }
+        sql.append(" order by started_at desc limit ?");
+        args.add(Math.min(Math.max(limit, 1), 500));
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            bindQueryArgs(ps, args);
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<AgentStep> steps = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    steps.add(readStep(rs));
+                }
+                return steps;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("跨任务步骤检索失败", e);
         }
     }
 
@@ -574,8 +826,20 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         ps.setString(5, task.userId());
         ps.setString(6, task.status().name());
         ps.setString(7, task.finalAnswer());
-        ps.setString(8, task.createdAt().toString());
-        ps.setString(9, task.updatedAt().toString());
+        ps.setString(8, serializeMap(task.metadata()));
+        ps.setString(9, task.createdAt().toString());
+        ps.setString(10, task.updatedAt().toString());
+    }
+
+    private void bindQueryArgs(PreparedStatement ps, List<Object> args) throws SQLException {
+        for (int i = 0; i < args.size(); i++) {
+            Object value = args.get(i);
+            if (value instanceof Integer number) {
+                ps.setInt(i + 1, number);
+            } else {
+                ps.setString(i + 1, String.valueOf(value));
+            }
+        }
     }
 
     private void bindSession(PreparedStatement ps, AgentSession session) throws SQLException {
@@ -620,11 +884,25 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                 rs.getString("session_id"),
                 rs.getString("channel_id"),
                 rs.getString("user_id"),
-                new LinkedHashMap<>(),
+                parseMap(rs.getString("metadata")),
                 parseInstant(rs.getString("created_at")),
                 parseInstant(rs.getString("updated_at")),
                 TaskStatus.valueOf(rs.getString("status")),
                 rs.getString("final_answer"));
+    }
+
+    private AgentStep readStep(ResultSet rs) throws SQLException {
+        return new AgentStep(
+                rs.getString("id"),
+                rs.getString("task_id"),
+                StepType.valueOf(rs.getString("type")),
+                rs.getString("name"),
+                parseMap(rs.getString("input")),
+                parseInstant(rs.getString("started_at")),
+                parseInstant(rs.getString("finished_at")),
+                StepStatus.valueOf(rs.getString("status")),
+                rs.getString("output"),
+                rs.getString("error"));
     }
 
     private AgentSession readSession(ResultSet rs) throws SQLException {

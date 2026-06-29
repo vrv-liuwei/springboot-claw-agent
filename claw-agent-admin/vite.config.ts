@@ -6,7 +6,7 @@ export default defineConfig({
   base: '/admin/',
   server: {
     host: '127.0.0.1',
-    port: 5173,
+    port: 5174,
     proxy: {
       '/api': 'http://localhost:17891',
     },
@@ -14,5 +14,10 @@ export default defineConfig({
   build: {
     outDir: '../claw-agent-server/src/main/resources/static/admin',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        index: 'index.html',
+      },
+    },
   },
 });

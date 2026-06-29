@@ -53,6 +53,7 @@ public class FilesystemSearchFilesTool implements AgentTool {
             // 同时匹配相对路径和文件名，兼容 *.java 与 **/*.java 两类常见写法。
             try (var stream = Files.walk(root, Math.max(1, maxDepth))) {
                 stream.filter(Files::isRegularFile)
+                        .filter(path -> !access.isIgnored(path))
                         .filter(path -> matcher.matches(root.relativize(path)) || matcher.matches(path.getFileName()))
                         .limit(Math.max(1, limit))
                         .forEach(path -> output.append(root.relativize(path)).append('\n'));

@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.github.clawagent</groupId>
         <artifactId>springboot-claw-agent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>1.0.0-SNAPSHOT</version>
     </parent>
     <artifactId>claw-agent-spring-boot-starter</artifactId>
     <name>claw-agent-spring-boot-starter</name>
@@ -43,6 +43,11 @@
         </dependency>
         <dependency>
             <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-channel</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
             <artifactId>claw-agent-toolkit</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -59,6 +64,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

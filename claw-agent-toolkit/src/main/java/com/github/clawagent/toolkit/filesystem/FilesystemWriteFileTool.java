@@ -21,9 +21,11 @@ import java.util.Map;
  */
 public class FilesystemWriteFileTool implements AgentTool {
     private final FilesystemAccess access;
+    private final FileChangeSupport changeSupport;
 
     public FilesystemWriteFileTool(FilesystemAccess access) {
         this.access = access;
+        this.changeSupport = new FileChangeSupport();
     }
 
     @Override
@@ -51,6 +53,7 @@ public class FilesystemWriteFileTool implements AgentTool {
             }
             Charset charset = charset(call.arguments().get("charset"));
             boolean append = Boolean.parseBoolean(call.arguments().getOrDefault("append", "false"));
+            FileChangeSupport.FileChangeSnapshot snapshot = changeSupport.captureBefore(path, charset);
             if (path.getParent() != null) {
                 Files.createDirectories(path.getParent());
             }
@@ -60,7 +63,8 @@ public class FilesystemWriteFileTool implements AgentTool {
             } else {
                 Files.writeString(path, content, charset, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             }
-            return ToolResult.success("写入成功：" + path);
+            String after = Files.readString(path, charset);
+            return ToolResult.success(changeSupport.formatWriteResult(path, append, snapshot, after));
         } catch (Exception e) {
             return ToolResult.error(e.getMessage());
         }

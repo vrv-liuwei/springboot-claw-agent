@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -59,6 +60,8 @@ public class DefaultMemoryCandidateProcessor implements MemoryCandidateProcessor
     private final ScheduledExecutorService scheduler;
     /** 防止多个触发源同时 drain，保证同一批队列只被一个 worker 消费。 */
     private final AtomicBoolean draining = new AtomicBoolean(false);
+    /** Spring 关闭或重建 Bean 后拒绝继续接收后台候选任务，避免影响主回复链路。 */
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /**
      * 创建默认候选记忆批处理器。
@@ -102,7 +105,7 @@ public class DefaultMemoryCandidateProcessor implements MemoryCandidateProcessor
 
     @Override
     public void onTaskCompleted(AgentTask task, String answer) {
-        if (!options.enabled() || task == null || memoryProvider == null || memoryExtractors.isEmpty()) {
+        if (!options.enabled() || closed.get() || task == null || memoryProvider == null || memoryExtractors.isEmpty()) {
             return;
         }
         if (queuedTaskIds.putIfAbsent(task.id(), Boolean.TRUE) != null) {
@@ -121,20 +124,28 @@ public class DefaultMemoryCandidateProcessor implements MemoryCandidateProcessor
      * 多个触发源同时进入时只允许一个 worker 真正 drain，避免重复调用模型。
      */
     private void submitDrain() {
-        if (!options.enabled() || queue.isEmpty() || !draining.compareAndSet(false, true)) {
+        if (!options.enabled() || closed.get() || worker.isShutdown() || worker.isTerminated()
+                || queue.isEmpty() || !draining.compareAndSet(false, true)) {
             return;
         }
-        worker.submit(() -> {
-            try {
-                drainBatch();
-            } finally {
-                draining.set(false);
-                if (!queue.isEmpty()
-                        && (options.afterTaskAsyncMode() || (options.batchMode() && queue.size() >= options.batchSize()))) {
-                    submitDrain();
+        try {
+            worker.submit(() -> {
+                try {
+                    drainBatch();
+                } finally {
+                    draining.set(false);
+                    if (!closed.get()
+                            && !queue.isEmpty()
+                            && (options.afterTaskAsyncMode() || (options.batchMode() && queue.size() >= options.batchSize()))) {
+                        submitDrain();
+                    }
                 }
-            }
-        });
+            });
+        } catch (RejectedExecutionException e) {
+            // 候选记忆是后台增强能力，线程池关闭时不能反向影响当前 Agent 回复。
+            draining.set(false);
+            log.debug("agent memory candidate drain skipped because worker is closed queueSize={}", queue.size());
+        }
     }
 
     /**
@@ -210,8 +221,10 @@ public class DefaultMemoryCandidateProcessor implements MemoryCandidateProcessor
 
     @Override
     public void close() {
-        scheduler.shutdownNow();
-        worker.shutdownNow();
+        if (closed.compareAndSet(false, true)) {
+            scheduler.shutdownNow();
+            worker.shutdownNow();
+        }
     }
 
     /**

@@ -2,6 +2,7 @@ package com.github.clawagent.spi;
 
 import com.github.clawagent.core.AgentEvent;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -14,4 +15,6 @@ public interface AgentEventStore {
     List<AgentEvent> findEventsBySession(String sessionId, int limit);
 
     List<AgentEvent> findEventsByTask(String taskId, int limit);
+
+    List<AgentEvent> findEvents(Instant from, Instant to, String level, String type, String sessionId, String taskId, int limit);
 }

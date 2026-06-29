@@ -6,7 +6,7 @@
 
     <groupId>com.github.clawagent</groupId>
     <artifactId>springboot-claw-agent</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>springboot-claw-agent</name>
@@ -21,6 +21,9 @@
         <module>claw-agent-model-spring-ai</module>
         <module>claw-agent-mcp</module>
         <module>claw-agent-skill</module>
+        <module>claw-agent-channel</module>
+        <module>claw-agent-channel-feishu</module>
+        <module>claw-agent-channel-dingtalk</module>
         <module>claw-agent-toolkit</module>
         <module>claw-agent-knowledge</module>
         <module>claw-agent-observability</module>
@@ -40,6 +43,9 @@
         <hutool.version>5.8.36</hutool.version>
         <jsoup.version>1.17.2</jsoup.version>
         <commons-exec.version>1.4.0</commons-exec.version>
+        <lark.oapi.version>2.4.21</lark.oapi.version>
+        <dingtalk.stream.version>1.3.5</dingtalk.stream.version>
+        <bouncycastle.version>1.78.1</bouncycastle.version>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
     </properties>
 

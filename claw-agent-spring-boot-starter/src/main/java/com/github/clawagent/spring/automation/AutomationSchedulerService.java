@@ -7,6 +7,7 @@ import com.github.clawagent.core.AutomationRun;
 import com.github.clawagent.core.AutomationRunStatus;
 import com.github.clawagent.core.AutomationScheduleType;
 import com.github.clawagent.core.AutomationStatus;
+import com.github.clawagent.core.TaskStatus;
 import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.spi.AutomationStore;
 import com.github.clawagent.spring.ClawAgentProperties;
@@ -33,6 +34,13 @@ import java.util.concurrent.TimeUnit;
  */
 public class AutomationSchedulerService implements SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(AutomationSchedulerService.class);
+    private static final String RETRY_CURRENT_ATTEMPT = "retry.currentAttempt";
+    private static final String RETRY_MAX_ATTEMPTS = "retry.maxAttempts";
+    private static final String RETRY_BACKOFF_SECONDS = "retry.backoffSeconds";
+    private static final String RETRY_PAUSE_AFTER_EXHAUSTED = "retry.pauseAfterExhausted";
+    private static final String RETRY_LAST_ERROR = "retry.lastError";
+    private static final String RETRY_LAST_RUN_ID = "retry.lastRunId";
+    private static final String RETRY_EXHAUSTED_AT = "retry.exhaustedAt";
 
     private final AutomationStore store;
     private final AgentRuntime runtime;
@@ -136,6 +144,21 @@ public class AutomationSchedulerService implements SmartLifecycle {
             AgentResult result = runtime.submit(toAgentRequest(automation, manual));
             Instant finishedAt = Instant.now();
             AutomationDefinition executedAutomation = bindRuntimeSessionIfMissing(automation, result.sessionId(), finishedAt);
+            if (result.status() != TaskStatus.COMPLETED) {
+                String error = "自动化任务执行未完成，状态：" + result.status();
+                store.saveAutomationRun(new AutomationRun(
+                        runId,
+                        automation.id(),
+                        result.taskId(),
+                        AutomationRunStatus.FAILED,
+                        startedAt,
+                        finishedAt,
+                        error));
+                updateAutomationAfterFailure(executedAutomation, finishedAt, runId, error);
+                log.warn("automation run failed automationId={} runId={} taskId={} status={}",
+                        automation.id(), runId, result.taskId(), result.status());
+                return;
+            }
             store.saveAutomationRun(new AutomationRun(
                     runId,
                     automation.id(),
@@ -144,7 +167,7 @@ public class AutomationSchedulerService implements SmartLifecycle {
                     startedAt,
                     finishedAt,
                     null));
-            updateAutomationAfterRun(executedAutomation, finishedAt);
+            updateAutomationAfterSuccess(executedAutomation, finishedAt);
             log.info("automation run completed automationId={} runId={} taskId={}", automation.id(), runId, result.taskId());
         } catch (RuntimeException ex) {
             Instant finishedAt = Instant.now();
@@ -156,7 +179,7 @@ public class AutomationSchedulerService implements SmartLifecycle {
                     startedAt,
                     finishedAt,
                     ex.getMessage()));
-            updateAutomationAfterRun(automation, finishedAt);
+            updateAutomationAfterFailure(automation, finishedAt, runId, ex.getMessage());
             log.warn("automation run failed automationId={} runId={} error={}", automation.id(), runId, ex.getMessage(), ex);
         } finally {
             activeAutomationIds.remove(automation.id());
@@ -177,12 +200,53 @@ public class AutomationSchedulerService implements SmartLifecycle {
                 metadata);
     }
 
-    private void updateAutomationAfterRun(AutomationDefinition automation, Instant finishedAt) {
+    private void updateAutomationAfterSuccess(AutomationDefinition automation, Instant finishedAt) {
         AutomationStatus nextStatus = automation.scheduleType() == AutomationScheduleType.ONCE
                 ? AutomationStatus.PAUSED
                 : automation.status();
         Instant nextRunAt = nextStatus == AutomationStatus.ENABLED ? computeNextRun(automation, finishedAt) : null;
-        store.saveAutomation(copyAutomation(automation, nextStatus, finishedAt, nextRunAt, finishedAt));
+        store.saveAutomation(copyAutomation(automation, nextStatus, finishedAt, nextRunAt, finishedAt, retryClearedMetadata(automation)));
+    }
+
+    /**
+     * 根据全局配置或单任务 metadata 处理失败重试。
+     * retry.currentAttempt 只记录连续失败次数，成功后会清零。
+     */
+    private void updateAutomationAfterFailure(AutomationDefinition automation, Instant finishedAt, String runId, String error) {
+        int maxAttempts = metadataInt(automation, RETRY_MAX_ATTEMPTS, properties.getAutomation().getMaxRetryAttempts());
+        int currentAttempt = metadataInt(automation, RETRY_CURRENT_ATTEMPT, 0) + 1;
+        int backoffSeconds = Math.max(1, metadataInt(automation, RETRY_BACKOFF_SECONDS, properties.getAutomation().getRetryBackoffSeconds()));
+        boolean pauseAfterExhausted = metadataBoolean(
+                automation,
+                RETRY_PAUSE_AFTER_EXHAUSTED,
+                properties.getAutomation().isPauseAfterRetriesExhausted());
+        Map<String, String> metadata = new java.util.LinkedHashMap<>(automation.metadata());
+        metadata.put(RETRY_CURRENT_ATTEMPT, String.valueOf(currentAttempt));
+        metadata.put(RETRY_LAST_RUN_ID, runId);
+        metadata.put(RETRY_LAST_ERROR, error == null ? "" : error);
+
+        if (maxAttempts > 0 && currentAttempt <= maxAttempts && automation.status() == AutomationStatus.ENABLED) {
+            long delaySeconds = Math.min(86_400L, (long) backoffSeconds * currentAttempt);
+            Instant retryAt = finishedAt.plusSeconds(delaySeconds);
+            // 失败重试通过 nextRunAt 重新入调度队列，不额外创建隐藏任务。
+            store.saveAutomation(copyAutomation(automation, AutomationStatus.ENABLED, finishedAt, retryAt, finishedAt, metadata));
+            log.info("automation retry scheduled automationId={} attempt={}/{} retryAt={}",
+                    automation.id(), currentAttempt, maxAttempts, retryAt);
+            return;
+        }
+
+        if (pauseAfterExhausted && automation.status() == AutomationStatus.ENABLED) {
+            metadata.put(RETRY_EXHAUSTED_AT, finishedAt.toString());
+            store.saveAutomation(copyAutomation(automation, AutomationStatus.PAUSED, finishedAt, null, finishedAt, metadata));
+            log.warn("automation paused after retries exhausted automationId={} attempts={}", automation.id(), currentAttempt);
+            return;
+        }
+
+        AutomationStatus nextStatus = automation.scheduleType() == AutomationScheduleType.ONCE
+                ? AutomationStatus.PAUSED
+                : automation.status();
+        Instant nextRunAt = nextStatus == AutomationStatus.ENABLED ? computeNextRun(automation, finishedAt) : null;
+        store.saveAutomation(copyAutomation(automation, nextStatus, finishedAt, nextRunAt, finishedAt, metadata));
     }
 
     private AutomationDefinition bindRuntimeSessionIfMissing(AutomationDefinition automation, String runtimeSessionId, Instant updatedAt) {
@@ -232,7 +296,7 @@ public class AutomationSchedulerService implements SmartLifecycle {
             Instant lastRunAt,
             Instant nextRunAt,
             Instant updatedAt) {
-        return copyAutomation(source, status, lastRunAt, nextRunAt, updatedAt, source.sessionId());
+        return copyAutomation(source, status, lastRunAt, nextRunAt, updatedAt, source.sessionId(), source.metadata());
     }
 
     private AutomationDefinition copyAutomation(
@@ -242,6 +306,27 @@ public class AutomationSchedulerService implements SmartLifecycle {
             Instant nextRunAt,
             Instant updatedAt,
             String sessionId) {
+        return copyAutomation(source, status, lastRunAt, nextRunAt, updatedAt, sessionId, source.metadata());
+    }
+
+    private AutomationDefinition copyAutomation(
+            AutomationDefinition source,
+            AutomationStatus status,
+            Instant lastRunAt,
+            Instant nextRunAt,
+            Instant updatedAt,
+            Map<String, String> metadata) {
+        return copyAutomation(source, status, lastRunAt, nextRunAt, updatedAt, source.sessionId(), metadata);
+    }
+
+    private AutomationDefinition copyAutomation(
+            AutomationDefinition source,
+            AutomationStatus status,
+            Instant lastRunAt,
+            Instant nextRunAt,
+            Instant updatedAt,
+            String sessionId,
+            Map<String, String> metadata) {
         return new AutomationDefinition(
                 source.id(),
                 source.name(),
@@ -256,9 +341,32 @@ public class AutomationSchedulerService implements SmartLifecycle {
                 nextRunAt,
                 lastRunAt,
                 status,
-                source.metadata(),
+                metadata == null ? Map.of() : metadata,
                 source.createdAt(),
                 updatedAt);
+    }
+
+    private Map<String, String> retryClearedMetadata(AutomationDefinition automation) {
+        Map<String, String> metadata = new java.util.LinkedHashMap<>(automation.metadata());
+        metadata.remove(RETRY_CURRENT_ATTEMPT);
+        metadata.remove(RETRY_LAST_ERROR);
+        metadata.remove(RETRY_LAST_RUN_ID);
+        metadata.remove(RETRY_EXHAUSTED_AT);
+        return metadata;
+    }
+
+    private int metadataInt(AutomationDefinition automation, String key, int fallback) {
+        try {
+            String value = automation.metadata().get(key);
+            return value == null || value.isBlank() ? fallback : Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private boolean metadataBoolean(AutomationDefinition automation, String key, boolean fallback) {
+        String value = automation.metadata().get(key);
+        return value == null || value.isBlank() ? fallback : Boolean.parseBoolean(value);
     }
 
     private synchronized void ensureExecutors() {

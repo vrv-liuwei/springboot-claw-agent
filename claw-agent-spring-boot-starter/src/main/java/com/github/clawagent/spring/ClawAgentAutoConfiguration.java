@@ -22,6 +22,15 @@ import com.github.clawagent.knowledge.AttachmentService;
 import com.github.clawagent.knowledge.KnowledgeService;
 import com.github.clawagent.knowledge.LocalFileStorageProvider;
 import com.github.clawagent.knowledge.LocalKnowledgeProvider;
+import com.github.clawagent.channel.ChannelAdapterRegistry;
+import com.github.clawagent.channel.ChannelRouter;
+import com.github.clawagent.channel.ChannelOutboundClient;
+import com.github.clawagent.channel.ChannelRuntimeAdapter;
+import com.github.clawagent.channel.ChannelSessionMapper;
+import com.github.clawagent.channel.ChannelStreamClientManager;
+import com.github.clawagent.channel.ChannelStreamStatus;
+import com.github.clawagent.channel.FileChannelRegistry;
+import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.mcp.FileMcpRegistry;
 import com.github.clawagent.mcp.McpRegistry;
 import com.github.clawagent.memory.DefaultMemoryContextBuilder;
@@ -67,6 +76,7 @@ import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.AgentToolRegistry;
 import com.github.clawagent.spi.AutomationStore;
 import com.github.clawagent.spi.ChatOptions;
+import com.github.clawagent.spi.ChannelRegistry;
 import com.github.clawagent.spi.EmbeddingClient;
 import com.github.clawagent.spi.EmbeddingOptions;
 import com.github.clawagent.spi.FileStorageProvider;
@@ -159,12 +169,19 @@ public class ClawAgentAutoConfiguration {
             ClawAgentProperties properties,
             EmbeddingClient embeddingClient,
             EmbeddingOptions embeddingOptions) {
+        ClawAgentProperties.Governance governance = properties.getMemory().getGovernance();
         return new LocalMemoryProvider(
                 resolveRuntimePath(properties.getPersistence().getSqlite().getPath()),
                 resolveRuntimePath(properties.getMemory().getMarkdown().getPath()),
                 resolveRuntimePath(properties.getMemory().getVector().getPath()),
                 embeddingClient,
-                embeddingOptions);
+                embeddingOptions,
+                new LocalMemoryProvider.GovernanceOptions(
+                        governance.getStaleAfterDays(),
+                        governance.getVeryStaleAfterDays(),
+                        governance.isAutoArchiveEnabled(),
+                        governance.getArchiveAfterDays(),
+                        governance.getArchiveBelowQuality()));
     }
 
     @Bean
@@ -261,7 +278,7 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public SessionStore sessionStore(TaskStore taskStore) {
+    public SessionStore sessionStore(@Qualifier("taskStore") TaskStore taskStore) {
         if (taskStore instanceof SessionStore sessionStore) {
             return sessionStore;
         }
@@ -270,7 +287,7 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public SessionMessageStore sessionMessageStore(TaskStore taskStore) {
+    public SessionMessageStore sessionMessageStore(@Qualifier("taskStore") TaskStore taskStore) {
         if (taskStore instanceof SessionMessageStore messageStore) {
             return messageStore;
         }
@@ -279,7 +296,7 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public AgentEventStore agentEventStore(TaskStore taskStore) {
+    public AgentEventStore agentEventStore(@Qualifier("taskStore") TaskStore taskStore) {
         if (taskStore instanceof AgentEventStore eventStore) {
             return eventStore;
         }
@@ -288,7 +305,7 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public TodoStore todoStore(TaskStore taskStore) {
+    public TodoStore todoStore(@Qualifier("taskStore") TaskStore taskStore) {
         if (taskStore instanceof TodoStore todoStore) {
             return todoStore;
         }
@@ -297,7 +314,7 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public AutomationStore automationStore(TaskStore taskStore) {
+    public AutomationStore automationStore(@Qualifier("taskStore") TaskStore taskStore) {
         if (taskStore instanceof AutomationStore automationStore) {
             return automationStore;
         }
@@ -330,7 +347,9 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public ToolkitRegistry toolkitRegistry(AgentToolRegistry toolRegistry, ClawAgentProperties properties, TodoStore todoStore) {
+    public ToolkitRegistry toolkitRegistry(AgentToolRegistry toolRegistry,
+                                           ClawAgentProperties properties,
+                                           @Qualifier("todoStore") TodoStore todoStore) {
         ToolkitRegistry registry = new ToolkitRegistry(toolRegistry, toolkitProperties(properties), todoStore);
         // starter 只初始化 toolkit 注册器，不再逐个实例化具体工具。
         registry.load();
@@ -368,6 +387,70 @@ public class ClawAgentAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    public ChannelAdapterRegistry channelAdapterRegistry(ClawAgentProperties properties,
+                                                         List<ChannelRuntimeAdapter> channelRuntimeAdapters) {
+        // 平台 Channel 默认由独立模块的 Spring Bean 注册；外部 jar adapter 作为可选扩展补充加载。
+        return new ChannelAdapterRegistry(channelRuntimeAdapters, resolveRuntimePaths(properties.getChannels().getAdapterPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ChannelRegistry channelRegistry(ClawAgentProperties properties, ChannelAdapterRegistry channelAdapterRegistry) {
+        return new FileChannelRegistry(
+                resolveRuntimePath(".clawagent/channels/channels.json"),
+                channelAdapterRegistry,
+                configuredChannels(properties));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ChannelSessionMapper channelSessionMapper() {
+        return new ChannelSessionMapper();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ChannelOutboundClient channelOutboundClient(ChannelAdapterRegistry channelAdapterRegistry) {
+        return new ChannelOutboundClient(channelAdapterRegistry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ChannelStreamClientManager channelStreamClientManager(ChannelAdapterRegistry channelAdapterRegistry) {
+        return new ChannelStreamClientManager(channelAdapterRegistry, true);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(name = "clawAgentChannelStreamAutoStartRunner")
+    public ApplicationRunner clawAgentChannelStreamAutoStartRunner(
+            ChannelRegistry channelRegistry,
+            ChannelStreamClientManager channelStreamClientManager) {
+        return args -> channelRegistry.list().stream()
+                .filter(ChannelDefinition::enabled)
+                .forEach(channel -> {
+                    ChannelStreamStatus status = channelStreamClientManager.start(channel);
+                    if ("running".equalsIgnoreCase(status.status())) {
+                        log.info("channel stream auto-started channelId={} channelType={} mode={} status={}",
+                                status.channelId(), status.channelType(), status.mode(), status.status());
+                    } else if ("failed".equalsIgnoreCase(status.status())) {
+                        log.warn("channel stream auto-start failed channelId={} channelType={} mode={} message={}",
+                                status.channelId(), status.channelType(), status.mode(), status.message());
+                    }
+                });
+    }
+    @Bean
+    @ConditionalOnMissingBean
+    public ChannelRouter channelRouter(
+            AgentRuntime agentRuntime,
+            ChannelRegistry channelRegistry,
+            ChannelSessionMapper channelSessionMapper,
+            ChannelOutboundClient channelOutboundClient) {
+        // ChannelRouter 是 IM/Webhook/API 入站的统一入口，server 只做 HTTP 参数适配。
+        return new ChannelRouter(agentRuntime, channelRegistry, channelSessionMapper, channelOutboundClient);
+    }
+
+    @Bean
     @ConditionalOnMissingBean(name = "clawAgentExternalSkillInstallToolRunner")
     public ApplicationRunner clawAgentExternalSkillInstallToolRunner(AgentToolRegistry toolRegistry, SkillRegistry skillRegistry) {
         return args -> {
@@ -396,6 +479,16 @@ public class ClawAgentAutoConfiguration {
                 sanitization.getValuePatterns()));
     }
 
+    @Bean(name = "clawAgentMediaAttachmentRuntimeInterceptor")
+    @ConditionalOnMissingBean(name = "clawAgentMediaAttachmentRuntimeInterceptor")
+    public AgentRuntimeInterceptor clawAgentMediaAttachmentRuntimeInterceptor(
+            ClawAgentProperties properties,
+            FileStorageProvider fileStorageProvider,
+            AttachmentService attachmentService,
+            KnowledgeService knowledgeService) {
+        return new MediaAttachmentRuntimeInterceptor(properties, fileStorageProvider, attachmentService, knowledgeService);
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public MemoryCandidateProcessor memoryCandidateProcessor(
@@ -421,7 +514,7 @@ public class ClawAgentAutoConfiguration {
             AgentPlanner planner,
             AgentResponseGenerator responseGenerator,
             AgentToolRegistry registry,
-            TaskStore taskStore,
+            @Qualifier("taskStore") TaskStore taskStore,
             @Qualifier("sessionStore") SessionStore sessionStore,
             @Qualifier("sessionMessageStore") SessionMessageStore messageStore,
             SessionSummarizer sessionSummarizer,
@@ -429,7 +522,7 @@ public class ClawAgentAutoConfiguration {
             MemoryContextBuilder memoryContextBuilder,
             MemoryCandidateProcessor memoryCandidateProcessor,
             @Qualifier("agentEventStore") AgentEventStore eventStore,
-            TodoStore todoStore,
+            @Qualifier("todoStore") TodoStore todoStore,
             List<ToolExecutionGuard> toolGuards,
             List<AgentCallback> callbacks,
             List<AgentRuntimeInterceptor> runtimeInterceptors,
@@ -520,7 +613,12 @@ public class ClawAgentAutoConfiguration {
             ToolkitToolProperties tool = new ToolkitToolProperties();
             // starter 只透传统一工具配置，不解释具体 env 含义，具体工具自行解析自己的参数。
             tool.setEnabled(entry.getValue().isEnabled());
-            tool.setEnv(entry.getValue().getEnv());
+            Map<String, String> env = new LinkedHashMap<>(entry.getValue().getEnv());
+            if ("filesystem".equals(entry.getKey()) && !env.containsKey("IGNORED_PATTERNS")) {
+                // 本地配置页维护的是产品层工作区规则，这里下发给 filesystem 工具执行批量搜索过滤。
+                env.put("IGNORED_PATTERNS", String.join(",", properties.getLocal().getIgnorePatterns()));
+            }
+            tool.setEnv(env);
             tools.put(entry.getKey(), tool);
         }
         target.setTools(tools);
@@ -529,6 +627,28 @@ public class ClawAgentAutoConfiguration {
 
     private List<Path> resolveRuntimePaths(List<String> paths) {
         return paths.stream().map(this::resolveRuntimePath).toList();
+    }
+
+    List<ChannelDefinition> configuredChannels(ClawAgentProperties properties) {
+        List<ChannelDefinition> channels = new java.util.ArrayList<>();
+        for (ClawAgentProperties.Channel channel : properties.getChannels().getDefinitions()) {
+            if (channel == null) {
+                continue;
+            }
+            channels.add(new ChannelDefinition(
+                    channel.getId(),
+                    channel.getName(),
+                    channel.getType(),
+                    channel.isEnabled(),
+                    channel.getApprovalMode(),
+                    channel.getApprovedToolIds(),
+                    channel.getInboundPath(),
+                    channel.getMetadata(),
+                    null,
+                    null));
+        }
+        channels.addAll(FileChannelRegistry.fromAccountStyleConfig(properties.getChannels().getConfigs()));
+        return channels;
     }
 
     private Path resolveRuntimePath(String configuredPath) {

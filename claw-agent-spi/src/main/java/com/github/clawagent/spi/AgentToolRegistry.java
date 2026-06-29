@@ -33,6 +33,11 @@ public class AgentToolRegistry {
         tools.put(tool.definition().id(), tool);
     }
 
+    public synchronized void unregister(String id) {
+        // Skill 默认工具没有子工具前缀，禁用时需要按完整 id 精确删除。
+        tools.remove(id);
+    }
+
     public synchronized void unregisterByPrefix(String prefix) {
         // MCP Server 或 Skill 重新加载前，按工具 id 前缀清理旧版本工具。
         tools.keySet().removeIf(id -> id.startsWith(prefix));

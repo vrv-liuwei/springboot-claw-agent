@@ -12,6 +12,8 @@ import com.github.clawagent.spi.ChatStreamCallback;
 import com.github.clawagent.spi.LlmCallTrace;
 import com.github.clawagent.spi.LlmTraceContext;
 import com.github.clawagent.spi.ModelClient;
+import com.github.clawagent.spi.ModelImageInput;
+import com.github.clawagent.spi.MultimodalModelClient;
 import com.github.clawagent.spi.StreamingModelClient;
 import com.github.clawagent.spi.ToolCallingModelClient;
 import com.github.clawagent.spi.ToolCallingResult;
@@ -25,7 +27,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,7 +42,7 @@ import java.util.Iterator;
  * OpenAI 兼容 Chat Completions 客户端。
  * DeepSeek、OpenAI 兼容网关、私有化模型网关都可以通过 baseUrl + apiKey 接入。
  */
-public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingModelClient, StreamingModelClient {
+public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingModelClient, StreamingModelClient, MultimodalModelClient {
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleModelClient.class);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -229,6 +234,109 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
         }
     }
 
+    /**
+     * 使用 OpenAI 兼容多模态格式做单图理解。
+     * 该方法只服务 vision-model 前置识别，不改变主对话模型的纯文本接口。
+     */
+    public String chatWithImage(String prompt, Path imagePath, String mimeType, ChatOptions options) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("模型 API Key 未配置，请设置 clawagent.models.<id>.api-key 或 api-key-env 指向的环境变量。");
+        }
+        if (imagePath == null) {
+            throw new IllegalArgumentException("图片路径不能为空");
+        }
+        try {
+            long startNanos = System.nanoTime();
+            String contentType = mimeType == null || mimeType.isBlank() ? "image/png" : mimeType.trim();
+            String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(imagePath));
+            String dataUrl = "data:" + contentType + ";base64," + base64;
+
+            List<Map<String, Object>> content = new ArrayList<>();
+            content.add(Map.of("type", "text", "text", prompt == null || prompt.isBlank()
+                    ? "请描述这张图片的主要内容。"
+                    : prompt));
+            content.add(Map.of("type", "image_url", "image_url", Map.of("url", dataUrl)));
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("model", options.model());
+            payload.put("temperature", options.temperature());
+            payload.put("messages", List.of(Map.of("role", "user", "content", content)));
+
+            String requestJson = objectMapper.writeValueAsString(payload);
+            String traceRequestJson = requestJson.replace(dataUrl, "data:" + contentType + ";base64,[omitted]");
+            log.info("model vision request model={} baseUrl={} imagePath={} mimeType={}",
+                    options.model(), baseUrl, imagePath, contentType);
+            AgentHttpResponse response = AgentHttpClient.postJson(
+                    baseUrl + "/chat/completions",
+                    requestJson,
+                    authHeaders(),
+                    options.timeoutSeconds() * 1000);
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                addTrace(options, response.statusCode(), elapsedMs, traceRequestJson, response.body(), "");
+                throw new IllegalStateException("图片理解模型调用失败，HTTP " + response.statusCode() + "：" + response.body());
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            String answer = root.path("choices").path(0).path("message").path("content").asText("");
+            if (answer.isBlank()) {
+                throw new IllegalStateException("图片理解模型返回为空：" + response.body());
+            }
+            addTrace(options, response.statusCode(), elapsedMs, traceRequestJson, response.body(), answer);
+            log.info("model vision response model={} statusCode={} elapsedMs={} answerLength={}",
+                    options.model(), response.statusCode(), elapsedMs, answer.length());
+            return answer;
+        } catch (IOException e) {
+            throw new IllegalStateException("图片理解请求序列化或文件读取失败：" + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * OpenAI-compatible 多模态请求。
+     * 图片统一编码为 base64 data URL，兼容 OpenAI Chat Completions、DashScope compatible、Kimi、GLM 等接口。
+     */
+    @Override
+    public String chatWithImages(List<ChatMessage> messages, List<ModelImageInput> images, ChatOptions options) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("模型 API Key 未配置，请设置 clawagent.models.<id>.api-key 或 api-key-env 指向的环境变量。");
+        }
+        if (images == null || images.isEmpty()) {
+            return chat(messages, options);
+        }
+        try {
+            long startNanos = System.nanoTime();
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("model", options.model());
+            payload.put("temperature", options.temperature());
+            payload.put("messages", toOpenAiMultimodalMessages(messages, images));
+
+            String requestJson = objectMapper.writeValueAsString(payload);
+            String traceRequestJson = traceSafeRequestJson(requestJson);
+            log.info("model multimodal chat request model={} baseUrl={} imageCount={}",
+                    options.model(), baseUrl, images.size());
+            AgentHttpResponse response = AgentHttpClient.postJson(
+                    baseUrl + "/chat/completions",
+                    requestJson,
+                    authHeaders(),
+                    options.timeoutSeconds() * 1000);
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                addTrace(options, response.statusCode(), elapsedMs, traceRequestJson, response.body(), "");
+                throw new IllegalStateException("多模态模型调用失败，HTTP " + response.statusCode() + "：" + response.body());
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            String answer = root.path("choices").path(0).path("message").path("content").asText("");
+            if (answer.isBlank()) {
+                throw new IllegalStateException("多模态模型返回为空：" + response.body());
+            }
+            addTrace(options, response.statusCode(), elapsedMs, traceRequestJson, response.body(), answer);
+            log.info("model multimodal chat response model={} statusCode={} elapsedMs={} answerLength={}",
+                    options.model(), response.statusCode(), elapsedMs, answer.length());
+            return answer;
+        } catch (IOException e) {
+            throw new IllegalStateException("多模态模型请求序列化或图片读取失败：" + e.getMessage(), e);
+        }
+    }
+
     private String trimTrailingSlash(String value) {
         if (value == null || value.isBlank()) {
             return "https://api.deepseek.com";
@@ -238,6 +346,53 @@ public class OpenAiCompatibleModelClient implements ModelClient, ToolCallingMode
             result = result.substring(0, result.length() - 1);
         }
         return result;
+    }
+
+    private List<Map<String, Object>> toOpenAiMultimodalMessages(List<ChatMessage> messages, List<ModelImageInput> images) throws IOException {
+        List<Map<String, Object>> result = new ArrayList<>();
+        if (messages == null || messages.isEmpty()) {
+            result.add(Map.of("role", "user", "content", multimodalContent("", images)));
+            return result;
+        }
+        int lastUserIndex = -1;
+        for (int i = 0; i < messages.size(); i++) {
+            if ("user".equals(messages.get(i).role())) {
+                lastUserIndex = i;
+            }
+        }
+        for (int i = 0; i < messages.size(); i++) {
+            ChatMessage message = messages.get(i);
+            if (i == lastUserIndex) {
+                result.add(Map.of("role", message.role(), "content", multimodalContent(message.content(), images)));
+            } else {
+                result.add(Map.of("role", message.role(), "content", message.content()));
+            }
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> multimodalContent(String text, List<ModelImageInput> images) throws IOException {
+        List<Map<String, Object>> content = new ArrayList<>();
+        content.add(Map.of("type", "text", "text", text == null || text.isBlank() ? "请根据图片回答。" : text));
+        for (ModelImageInput image : images) {
+            String path = image == null ? "" : image.path();
+            if (path == null || path.isBlank()) {
+                continue;
+            }
+            Path imagePath = Path.of(path).toAbsolutePath().normalize();
+            String mimeType = image.mimeType() == null || image.mimeType().isBlank() ? "image/png" : image.mimeType().trim();
+            String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(imagePath));
+            String dataUrl = "data:" + mimeType + ";base64," + base64;
+            content.add(Map.of("type", "image_url", "image_url", Map.of("url", dataUrl)));
+        }
+        return content;
+    }
+
+    private String traceSafeRequestJson(String requestJson) {
+        if (requestJson == null || requestJson.isBlank()) {
+            return "";
+        }
+        return requestJson.replaceAll("data:([^;\\\"]+);base64,[^\\\"]+", "data:$1;base64,[omitted]");
     }
 
     private Map<String, String> authHeaders() {

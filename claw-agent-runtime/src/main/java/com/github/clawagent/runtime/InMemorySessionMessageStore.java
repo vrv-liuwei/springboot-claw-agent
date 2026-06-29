@@ -24,8 +24,21 @@ public class InMemorySessionMessageStore implements SessionMessageStore, AgentDa
     @Override
     public synchronized List<AgentMessage> findMessages(String sessionId, int limit) {
         return messages.getOrDefault(sessionId, List.of()).stream()
-                .sorted(Comparator.comparing(AgentMessage::createdAt))
+                // 内存实现和 SQLite 保持一致：先取最近 N 条，再按时间正序返回给聊天窗口。
+                .sorted(Comparator.comparing(AgentMessage::createdAt).reversed())
                 .limit(Math.max(1, limit))
+                .sorted(Comparator.comparing(AgentMessage::createdAt))
+                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
+    }
+
+    @Override
+    public synchronized List<AgentMessage> findMessagesBefore(String sessionId, java.time.Instant beforeCreatedAt, int limit) {
+        return messages.getOrDefault(sessionId, List.of()).stream()
+                // before 游标用于向上滚动加载旧消息，只返回游标之前最近的一页。
+                .filter(message -> message.createdAt().isBefore(beforeCreatedAt))
+                .sorted(Comparator.comparing(AgentMessage::createdAt).reversed())
+                .limit(Math.max(1, limit))
+                .sorted(Comparator.comparing(AgentMessage::createdAt))
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
     }
 

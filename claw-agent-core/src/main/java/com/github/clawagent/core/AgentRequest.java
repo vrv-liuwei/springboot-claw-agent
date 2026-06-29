@@ -28,4 +28,16 @@ public record AgentRequest(
     public static AgentRequest userMessage(String input) {
         return new AgentRequest(input, null, "webui", "anonymous", new LinkedHashMap<>());
     }
+
+    public String workspaceId() {
+        return metadata.getOrDefault("workspaceId", metadata.getOrDefault("workspace.id", ""));
+    }
+
+    public String workspaceRoot() {
+        String root = metadata.get("workspaceRoot");
+        if (root == null || root.isBlank()) {
+            root = metadata.get("workspace.root");
+        }
+        return root == null ? "" : root;
+    }
 }

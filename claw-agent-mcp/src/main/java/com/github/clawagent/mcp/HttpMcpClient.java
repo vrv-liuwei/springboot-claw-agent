@@ -30,6 +30,10 @@ public class HttpMcpClient implements McpClient {
     private final AtomicLong ids = new AtomicLong(1);
     /** 当前远程 MCP Server 配置。 */
     private final McpServerConfig config;
+    /** 已解析环境变量占位符的远程端点。 */
+    private final String endpoint;
+    /** 已解析环境变量占位符的请求头。 */
+    private final Map<String, String> headers;
     /** JDK 原生 HTTP Client，避免 mcp 模块引入 Spring Web 依赖。 */
     private final HttpClient httpClient;
     /** streamableHttp 服务端返回的会话 id，后续请求需要原样带回。 */
@@ -37,6 +41,8 @@ public class HttpMcpClient implements McpClient {
 
     public HttpMcpClient(McpServerConfig config) {
         this.config = config;
+        this.endpoint = McpValueResolver.resolve(config.endpoint(), config.env());
+        this.headers = McpValueResolver.resolveMap(config.headers(), config.env());
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(config.timeoutSeconds()))
                 .build();
@@ -51,7 +57,7 @@ public class HttpMcpClient implements McpClient {
         params.put("clientInfo", Map.of("name", "clawagent", "version", "0.1.0-SNAPSHOT"));
         request("initialize", params);
         notify("notifications/initialized", Map.of());
-        log.info("mcp http initialized serverId={} endpoint={}", config.id(), config.endpoint());
+        log.info("mcp http initialized serverId={} endpoint={}", config.id(), endpoint);
     }
 
     @Override
@@ -169,12 +175,12 @@ public class HttpMcpClient implements McpClient {
     private JsonNode exchange(Map<String, Object> payload, boolean expectResponse) {
         try {
             String body = objectMapper.writeValueAsString(payload);
-            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(config.endpoint()))
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint))
                     .timeout(Duration.ofSeconds(config.timeoutSeconds()))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json, text/event-stream")
                     .POST(HttpRequest.BodyPublishers.ofString(body));
-            config.headers().forEach(builder::header);
+            headers.forEach(builder::header);
             if (sessionId != null && !sessionId.isBlank()) {
                 // streamableHttp 会通过 MCP-Session-Id 绑定远程会话。
                 builder.header("MCP-Session-Id", sessionId);
@@ -236,12 +242,12 @@ public class HttpMcpClient implements McpClient {
     }
 
     private void requireEndpoint() {
-        if (config.endpoint() == null || config.endpoint().isBlank()) {
+        if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("HTTP MCP 需要配置 url/endpoint");
         }
-        String scheme = URI.create(config.endpoint()).getScheme();
+        String scheme = URI.create(endpoint).getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-            throw new IllegalArgumentException("HTTP MCP url 只支持 http/https：" + config.endpoint());
+            throw new IllegalArgumentException("HTTP MCP url 只支持 http/https：" + endpoint);
         }
     }
 }

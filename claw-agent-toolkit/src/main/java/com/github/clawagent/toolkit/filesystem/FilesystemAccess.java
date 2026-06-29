@@ -15,7 +15,9 @@ import java.util.List;
 public class FilesystemAccess {
     private final FilesystemToolkitProperties properties;
     private final List<Path> allowedRoots;
+    private final Path defaultCwd;
     private final List<PathMatcher> blockedMatchers;
+    private final List<PathMatcher> ignoredMatchers;
 
     public FilesystemAccess(FilesystemToolkitProperties properties) {
         this.properties = properties;
@@ -23,10 +25,23 @@ public class FilesystemAccess {
                 .map(Path::of)
                 .map(path -> path.toAbsolutePath().normalize())
                 .toList();
+        this.defaultCwd = Path.of(properties.getDefaultCwd()).toAbsolutePath().normalize();
         this.blockedMatchers = properties.getBlockedPatterns().stream()
                 .filter(pattern -> pattern != null && !pattern.isBlank())
                 .map(pattern -> FileSystems.getDefault().getPathMatcher("glob:" + pattern))
                 .toList();
+        this.ignoredMatchers = properties.getIgnoredPatterns().stream()
+                .filter(pattern -> pattern != null && !pattern.isBlank())
+                .map(pattern -> FileSystems.getDefault().getPathMatcher("glob:" + pattern))
+                .toList();
+        if (this.allowedRoots.stream().noneMatch(defaultCwd::startsWith)) {
+            throw new IllegalArgumentException("filesystem DEFAULT_CWD 不在 allowed-roots 内：" + defaultCwd + "，allowedRoots=" + allowedRootTexts());
+        }
+        try {
+            Files.createDirectories(defaultCwd);
+        } catch (IOException e) {
+            throw new IllegalStateException("创建 filesystem 默认工作目录失败：" + defaultCwd, e);
+        }
     }
 
     public FilesystemToolkitProperties properties() {
@@ -61,8 +76,8 @@ public class FilesystemAccess {
             throw new IllegalArgumentException("缺少参数：path");
         }
         Path input = Path.of(rawPath.trim());
-        Path path = (input.isAbsolute() ? input : Path.of(".").resolve(input)).toAbsolutePath().normalize();
-        // 先限制根目录，再检查屏蔽规则，避免路径穿越或敏感文件读取。
+        Path path = (input.isAbsolute() ? input : defaultCwd.resolve(input)).toAbsolutePath().normalize();
+        // 相对路径默认落到工作区，再限制根目录和屏蔽规则，避免误写仓库根目录或敏感文件。
         if (allowedRoots.stream().noneMatch(path::startsWith)) {
             throw new IllegalArgumentException("路径不在 allowed-roots 内：" + path + "，allowedRoots=" + allowedRootTexts());
         }
@@ -73,7 +88,18 @@ public class FilesystemAccess {
     }
 
     private boolean isBlocked(Path path) {
-        for (PathMatcher matcher : blockedMatchers) {
+        return matchesAny(path, blockedMatchers);
+    }
+
+    /**
+     * ignore 只影响搜索、审查和摘要这类批量扫描；直接读写仍由 allowed-roots/blocked-patterns 决定。
+     */
+    public boolean isIgnored(Path path) {
+        return matchesAny(path.toAbsolutePath().normalize(), ignoredMatchers);
+    }
+
+    private boolean matchesAny(Path path, List<PathMatcher> matchers) {
+        for (PathMatcher matcher : matchers) {
             if (matcher.matches(path) || matcher.matches(path.getFileName())) {
                 return true;
             }

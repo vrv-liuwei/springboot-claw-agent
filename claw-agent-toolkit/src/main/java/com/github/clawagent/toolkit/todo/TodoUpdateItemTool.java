@@ -65,17 +65,33 @@ public class TodoUpdateItemTool implements AgentTool {
         }
         int order = Integer.parseInt(orderText.trim());
         List<TodoItem> items = todoStore.listTodoItems(context.task().sessionId(), "", 200);
-        String latestPlanTaskId = items.stream()
-                .max(Comparator.comparing(TodoItem::createdAt))
-                .map(TodoItem::taskId)
-                .orElse("");
-        // 用户常说“执行第二步”，模型不一定知道 UUID，因此优先在当前会话最新计划中按步骤序号定位 Todo。
+        String activePlanTaskId = activePlanTaskId(items, context.task().id());
+        // 用户常说“执行第二步”，模型不一定知道 UUID；优先定位当前 task 创建的计划，避免误用同会话里旧任务的 order。
         return items.stream()
-                .filter(item -> latestPlanTaskId.equals(item.taskId()))
+                .filter(item -> activePlanTaskId.equals(item.taskId()))
                 .filter(item -> item.itemOrder() == order)
                 .findFirst()
                 .map(TodoItem::id)
-                .orElseThrow(() -> new IllegalArgumentException("当前会话最新计划不存在第 " + order + " 个 Todo"));
+                .orElseThrow(() -> new IllegalArgumentException("当前会话未完成计划不存在第 " + order + " 个 Todo"));
+    }
+
+    private String activePlanTaskId(List<TodoItem> items, String currentTaskId) {
+        boolean currentTaskHasTodos = items.stream()
+                .anyMatch(item -> currentTaskId.equals(item.taskId()));
+        if (currentTaskHasTodos) {
+            return currentTaskId;
+        }
+        return items.stream()
+                .filter(this::isIncomplete)
+                .max(Comparator.comparing(TodoItem::createdAt))
+                .map(TodoItem::taskId)
+                .orElse("");
+    }
+
+    private boolean isIncomplete(TodoItem item) {
+        String status = item.status() == null ? "" : item.status().toLowerCase(Locale.ROOT);
+        // failed Todo 仍属于可恢复计划；继续任务时模型需要能用 order 把它重新置为 running/completed。
+        return "pending".equals(status) || "running".equals(status) || "failed".equals(status);
     }
 
     private String required(ToolCall call, String name) {

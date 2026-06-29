@@ -1,15 +1,23 @@
 package com.github.clawagent.model;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.clawagent.core.AgentStep;
 import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.spi.AgentResponseGenerator;
 import com.github.clawagent.spi.ChatMessage;
 import com.github.clawagent.spi.ChatOptions;
 import com.github.clawagent.spi.ModelClient;
+import com.github.clawagent.spi.ModelImageInput;
+import com.github.clawagent.spi.MultimodalModelClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 基于真实模型的最终回复生成器。
@@ -17,6 +25,9 @@ import java.util.List;
  */
 public class LlmResponseGenerator implements AgentResponseGenerator {
     private static final Logger log = LoggerFactory.getLogger(LlmResponseGenerator.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String ATTACHMENTS_KEY = "attachments";
+    private static final String NATIVE_VISION_KEY = "attachments.nativeVision";
 
     private final ModelClient modelClient;
     private final ChatOptions options;
@@ -29,10 +40,13 @@ public class LlmResponseGenerator implements AgentResponseGenerator {
     @Override
     public String generate(AgentTask task, List<AgentStep> steps) {
         log.info("llm response generation started taskId={} model={} stepCount={}", task.id(), options.model(), steps.size());
-        String content = modelClient.chat(List.of(
+        List<ChatMessage> messages = List.of(
                 ChatMessage.system(systemPrompt()),
-                ChatMessage.user(buildUserPrompt(task, steps))
-        ), options);
+                ChatMessage.user(buildUserPrompt(task, steps)));
+        List<ModelImageInput> images = nativeVisionImages(task);
+        String content = !images.isEmpty() && modelClient instanceof MultimodalModelClient multimodalModelClient
+                ? multimodalModelClient.chatWithImages(messages, images, options)
+                : modelClient.chat(messages, options);
         log.info("llm response generation finished taskId={} answerLength={}", task.id(), content.length());
         log.debug("llm response content taskId={} content={}", task.id(), content);
         return content.trim();
@@ -50,6 +64,10 @@ public class LlmResponseGenerator implements AgentResponseGenerator {
         if (!knowledge.isBlank()) {
             prompt.append("知识库上下文：\n").append(knowledge).append("\n\n");
         }
+        String attachments = LlmAgentPlanner.attachmentContext(task);
+        if (!attachments.isBlank()) {
+            prompt.append("附件理解上下文：\n").append(attachments).append("\n\n");
+        }
         String memory = LlmAgentPlanner.memoryContext(task);
         if (!memory.isBlank()) {
             prompt.append("记忆上下文：\n").append(memory).append("\n\n");
@@ -58,7 +76,7 @@ public class LlmResponseGenerator implements AgentResponseGenerator {
         if (!context.isBlank()) {
             prompt.append("近期会话上下文：\n").append(context).append("\n\n");
         }
-        prompt.append("用户请求：").append(task.input()).append("\n\n");
+        prompt.append("用户请求：").append(LlmAgentPlanner.displayUserInput(task)).append("\n\n");
         if (steps.isEmpty()) {
             prompt.append("没有执行工具，请直接基于你的模型能力回答。");
             return prompt.toString();
@@ -76,5 +94,79 @@ public class LlmResponseGenerator implements AgentResponseGenerator {
         }
         prompt.append("\n请给出最终回答。");
         return prompt.toString();
+    }
+
+    protected List<ModelImageInput> nativeVisionImages(AgentTask task) {
+        if (task == null || task.metadata() == null
+                || !"true".equalsIgnoreCase(task.metadata().getOrDefault(NATIVE_VISION_KEY, ""))) {
+            return List.of();
+        }
+        String raw = task.metadata().get(ATTACHMENTS_KEY);
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<Map<String, Object>> items = OBJECT_MAPPER.readValue(raw, new TypeReference<>() {});
+            List<ModelImageInput> images = new ArrayList<>();
+            for (Map<String, Object> item : items) {
+                String localPath = text(item, "localPath");
+                String mimeType = text(item, "mimeType", "contentType");
+                String fileName = text(item, "fileName", "name");
+                if (localPath.isBlank() || !looksLikeImage(text(item, "type", "kind"), mimeType, fileName)) {
+                    continue;
+                }
+                Path path = Path.of(localPath).toAbsolutePath().normalize();
+                if (Files.isRegularFile(path)) {
+                    images.add(new ModelImageInput(path.toString(), firstNonBlank(mimeType, "image/png"), fileName));
+                }
+            }
+            return images;
+        } catch (Exception e) {
+            log.warn("native vision attachments parse failed taskId={} error={}", task.id(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    private boolean looksLikeImage(String type, String mimeType, String fileName) {
+        String explicitType = normalize(type);
+        if ("image".equals(explicitType)) {
+            return true;
+        }
+        String mime = normalize(mimeType);
+        if (mime.startsWith("image/")) {
+            return true;
+        }
+        String name = normalize(fileName);
+        return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")
+                || name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".bmp");
+    }
+
+    private String text(Map<String, Object> item, String... keys) {
+        if (item == null || keys == null) {
+            return "";
+        }
+        for (String key : keys) {
+            Object value = item.get(key);
+            if (value != null && !String.valueOf(value).isBlank()) {
+                return String.valueOf(value).trim();
+            }
+        }
+        return "";
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
     }
 }

@@ -24,11 +24,35 @@ public class ExternalSkillInstallTool implements AgentTool {
     private static final int REQUEST_TIMEOUT_MS = 60_000;
     private static final List<String> RESOURCE_DIRS = List.of("scripts", "references", "assets", "agents");
     private static final List<String> RESOURCE_FILES = List.of("runtime.conf", "runtime.conf.example", ".env.example", "README.md");
+    private static final String LIB_DIR = "lib/";
     private final SkillRegistry skillRegistry;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ExternalSkillInstallTool(SkillRegistry skillRegistry) {
         this.skillRegistry = skillRegistry;
+    }
+
+    /**
+     * 按外部安装参数解析并安装 Skill。
+     * 后台 API 和 Agent 工具共用这个入口，保证 GitHub 仓库、SKILL.md 原文和覆盖逻辑一致。
+     */
+    public List<SkillRegistration> installFromArguments(Map<String, String> arguments) throws Exception {
+        boolean overwrite = Boolean.parseBoolean(arguments.getOrDefault("overwrite", "false"));
+        List<SkillPackage> packages = resolvePackages(arguments);
+        if (packages.isEmpty()) {
+            throw new IllegalArgumentException("未找到可安装的 SKILL.md");
+        }
+        List<SkillRegistration> registrations = new ArrayList<>();
+        for (SkillPackage skillPackage : packages) {
+            SkillManifest manifest = skillPackage.manifest();
+            if (!overwrite && skillRegistry.find(manifest.id()).isPresent()) {
+                // 后台重复导入时不破坏已有用户版本，直接返回当前注册信息给页面展示。
+                registrations.add(skillRegistry.find(manifest.id()).orElseThrow());
+                continue;
+            }
+            registrations.add(skillRegistry.install(skillPackage));
+        }
+        return registrations;
     }
 
     @Override
@@ -51,22 +75,12 @@ public class ExternalSkillInstallTool implements AgentTool {
     @Override
     public ToolResult execute(ToolCall call, AgentContext context) {
         try {
-            boolean overwrite = Boolean.parseBoolean(call.arguments().getOrDefault("overwrite", "false"));
-            List<SkillPackage> packages = resolvePackages(call);
-            if (packages.isEmpty()) {
-                return ToolResult.error("未找到可安装的 SKILL.md");
-            }
+            List<SkillRegistration> registrations = installFromArguments(call.arguments());
             List<String> lines = new ArrayList<>();
-            for (SkillPackage skillPackage : packages) {
-                SkillManifest manifest = skillPackage.manifest();
-                if (!overwrite && skillRegistry.find(manifest.id()).isPresent()) {
-                    lines.add("skipped existing: " + manifest.id());
-                    continue;
-                }
-                SkillRegistration registration = skillRegistry.install(skillPackage);
+            for (SkillRegistration registration : registrations) {
                 lines.add("installed: " + registration.manifest().id()
                         + " path=" + registration.installedPath()
-                        + " resources=" + skillPackage.resourceFiles().size());
+                        + " status=" + registration.status());
             }
             return ToolResult.success(String.join("\n", lines));
         } catch (Exception e) {
@@ -74,22 +88,22 @@ public class ExternalSkillInstallTool implements AgentTool {
         }
     }
 
-    private List<SkillPackage> resolvePackages(ToolCall call) throws Exception {
-        String skillMd = call.arguments().get("skillMd");
-        String sourceUrl = call.arguments().get("sourceUrl");
+    private List<SkillPackage> resolvePackages(Map<String, String> arguments) throws Exception {
+        String skillMd = arguments.get("skillMd");
+        String sourceUrl = arguments.get("sourceUrl");
         if (skillMd != null && !skillMd.isBlank()) {
-            return List.of(convert(skillMd, call, sourceUrl));
+            return List.of(convert(skillMd, arguments, sourceUrl));
         }
         if (sourceUrl == null || sourceUrl.isBlank()) {
             throw new IllegalArgumentException("sourceUrl 和 skillMd 至少需要一个");
         }
         if (isGithubRepositoryUrl(sourceUrl)) {
-            return fromGithubRepository(sourceUrl, call);
+            return fromGithubRepository(sourceUrl, arguments);
         }
-        return List.of(convert(fetchText(sourceUrl), call, sourceUrl));
+        return List.of(convert(fetchText(sourceUrl), arguments, sourceUrl));
     }
 
-    private List<SkillPackage> fromGithubRepository(String sourceUrl, ToolCall call) throws Exception {
+    private List<SkillPackage> fromGithubRepository(String sourceUrl, Map<String, String> arguments) throws Exception {
         GithubRepo repo = parseGithubRepo(sourceUrl);
         List<SkillPackage> result = new ArrayList<>();
         JsonNode tree = githubTree(repo, "main");
@@ -106,14 +120,14 @@ public class ExternalSkillInstallTool implements AgentTool {
                 continue;
             }
             String skillDir = skillDirectory(path);
-            String idOverride = blankToNull(call.arguments().get("id"));
+            String idOverride = blankToNull(arguments.get("id"));
             if (idOverride == null) {
                 // 仓库根目录只有一个 SKILL.md 时，用仓库名作为兜底 ID，避免无 frontmatter 时退化为 imported-skill。
                 idOverride = skillDir.isBlank() ? repo.name : skillDir.substring(skillDir.lastIndexOf('/') + 1);
             }
             String rawUrl = "https://raw.githubusercontent.com/" + repo.owner + "/" + repo.name + "/" + repo.branch + "/" + path;
-            Map<String, String> resourceFiles = downloadResourceFiles(repo, skillDir, treeItems);
-            result.add(convert(fetchText(rawUrl), call, rawUrl, idOverride, resourceFiles));
+            ResourceBundle resources = downloadResourceFiles(repo, skillDir, treeItems);
+            result.add(convert(fetchText(rawUrl), arguments, rawUrl, idOverride, resources));
         }
         return result;
     }
@@ -133,23 +147,28 @@ public class ExternalSkillInstallTool implements AgentTool {
         return objectMapper.readTree(response.body());
     }
 
-    private SkillPackage convert(String content, ToolCall call, String sourceUrl) {
-        return convert(content, call, sourceUrl, blankToNull(call.arguments().get("id")), Map.of());
+    private SkillPackage convert(String content, Map<String, String> arguments, String sourceUrl) {
+        return convert(content, arguments, sourceUrl, blankToNull(arguments.get("id")), new ResourceBundle(Map.of(), Map.of()));
     }
 
-    private SkillPackage convert(String content, ToolCall call, String sourceUrl, String idOverride, Map<String, String> resourceFiles) {
+    private SkillPackage convert(String content, Map<String, String> arguments, String sourceUrl, String idOverride, ResourceBundle resources) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (sourceUrl != null && !sourceUrl.isBlank()) {
             metadata.put("sourceUrl", sourceUrl);
         }
-        SkillPackage skillPackage = SkillPackageConverter.fromSkillMarkdown(
+        SkillPackage converted = SkillPackageConverter.fromSkillMarkdown(
                 content,
                 idOverride,
-                blankToNull(call.arguments().get("name")),
-                blankToNull(call.arguments().get("description")),
+                blankToNull(arguments.get("name")),
+                blankToNull(arguments.get("description")),
                 true,
                 metadata,
-                resourceFiles);
+                resources.textFiles());
+        SkillPackage skillPackage = new SkillPackage(
+                converted.manifest(),
+                converted.content(),
+                converted.resourceFiles(),
+                resources.binaryFiles());
         return enrichKnownScriptExecutor(skillPackage);
     }
 
@@ -194,7 +213,7 @@ public class ExternalSkillInstallTool implements AgentTool {
                 manifest.tools(),
                 permissions,
                 metadata);
-        return new SkillPackage(enriched, skillPackage.content(), skillPackage.resourceFiles());
+        return new SkillPackage(enriched, skillPackage.content(), skillPackage.resourceFiles(), skillPackage.binaryResourceFiles());
     }
 
     private boolean isAnySearchSkill(SkillManifest manifest, Map<String, String> resourceFiles) {
@@ -204,8 +223,9 @@ public class ExternalSkillInstallTool implements AgentTool {
                 && resourceFiles.keySet().stream().anyMatch(path -> path.replace('\\', '/').equals("scripts/anysearch_cli.js"));
     }
 
-    private Map<String, String> downloadResourceFiles(GithubRepo repo, String skillDir, JsonNode treeItems) throws Exception {
-        Map<String, String> resources = new LinkedHashMap<>();
+    private ResourceBundle downloadResourceFiles(GithubRepo repo, String skillDir, JsonNode treeItems) throws Exception {
+        Map<String, String> textResources = new LinkedHashMap<>();
+        Map<String, byte[]> binaryResources = new LinkedHashMap<>();
         String prefix = skillDir.isBlank() ? "" : skillDir + "/";
         for (JsonNode item : treeItems) {
             String type = item.path("type").asText();
@@ -219,19 +239,31 @@ public class ExternalSkillInstallTool implements AgentTool {
             }
             String rawUrl = "https://raw.githubusercontent.com/" + repo.owner + "/" + repo.name + "/" + repo.branch + "/" + path;
             // 资源文件和 SKILL.md 同目录安装，保留 scripts/references/assets 等相对路径，确保说明中的命令可直接执行。
-            resources.put(relativePath, fetchText(rawUrl));
+            if (isBinaryResource(relativePath)) {
+                binaryResources.put(relativePath, fetchBytes(rawUrl));
+            } else {
+                textResources.put(relativePath, fetchText(rawUrl));
+            }
         }
-        return resources;
+        return new ResourceBundle(textResources, binaryResources);
     }
 
     private boolean isSkillResource(String relativePath) {
         String normalized = relativePath.replace('\\', '/');
+        if (isBinaryResource(normalized)) {
+            return true;
+        }
         for (String dir : RESOURCE_DIRS) {
             if (normalized.startsWith(dir + "/")) {
                 return true;
             }
         }
         return RESOURCE_FILES.contains(normalized);
+    }
+
+    private boolean isBinaryResource(String relativePath) {
+        String normalized = relativePath.replace('\\', '/');
+        return normalized.startsWith(LIB_DIR) && normalized.endsWith(".jar");
     }
 
     private String skillDirectory(String skillMdPath) {
@@ -245,6 +277,14 @@ public class ExternalSkillInstallTool implements AgentTool {
             throw new IllegalStateException("HTTP " + response.statusCode() + " " + url);
         }
         return response.body();
+    }
+
+    private byte[] fetchBytes(String url) throws Exception {
+        AgentHttpResponse response = AgentHttpClient.get(url, Map.of(), REQUEST_TIMEOUT_MS);
+        if (response.statusCode() >= 300) {
+            throw new IllegalStateException("HTTP " + response.statusCode() + " " + url);
+        }
+        return response.bodyBytes();
     }
 
     private boolean isGithubRepositoryUrl(String sourceUrl) {
@@ -272,5 +312,8 @@ public class ExternalSkillInstallTool implements AgentTool {
             this.owner = owner;
             this.name = name;
         }
+    }
+
+    private record ResourceBundle(Map<String, String> textFiles, Map<String, byte[]> binaryFiles) {
     }
 }

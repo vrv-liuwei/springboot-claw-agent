@@ -1,0 +1,20 @@
+export const API_PATHS: {
+  health: string;
+  appRuntime: string;
+  appRecentWorkspaces: string;
+  appCurrentWorkspace: string;
+  appOpenWorkspace: string;
+  appSwitchWorkspace: string;
+  appWorkspace: (workspaceId: string) => string;
+  sessions: string;
+  sessionsList: (limit?: number) => string;
+  sessionMessages: (sessionId: string, limit?: number) => string;
+  sessionEvents: (sessionId: string, limit?: number) => string;
+  session: (sessionId: string) => string;
+  tasksStream: string;
+  todos: (limit?: number, sessionId?: string) => string;
+  logSources: string;
+  logsQuery: (limit?: number) => string;
+  runtimeConfig: string;
+  configModels: string;
+};

@@ -67,6 +67,7 @@ public class LlmAgentPlanner implements AgentPlanner {
         prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.search 必须使用 query，其他可选参数以工具定义中当前 Provider 暴露的字段为准；builtin.web.fetch 使用 url，默认 format=markdown、extractMode=readable，可选 extractMode=readable/raw、maxOutputChars、headers(JSON)、timeoutMs、maxBytes。");
         prompt.append("web.search/web.fetch 返回 artifactId 和摘要；已有 artifactId 时，如需原文细节必须优先调用 builtin.content.read，避免重复请求相同 URL 或重复搜索相同 query。");
         prompt.append("实时信息、最新版本、新闻、资料检索、事实核验优先调用 builtin.web.search；拿到具体 URL 后，如需阅读全文再调用 builtin.web.fetch；如果 Observation 已有 artifactId，则用 builtin.content.read 按 query/chunk 读取缓存内容。");
+        prompt.append("启动、构建、测试项目时必须先确认真实项目目录，已知项目路径就把 cwd 传到 execute/process 工具；只知道 workspace 根目录时先检查一级子目录，多个候选项目时先询问用户确认，不要直接执行。");
         prompt.append("复杂、多步骤、需要拆解的任务，优先调用 builtin.todo.create_plan，items 参数为 JSON 数组字符串。");
         prompt.append("Todo 执行规则：用户说执行第 N 步时，先用 builtin.todo.update_item 将 order=N 标记为 running，再调用完成该步骤所需工具，成功后再标记 completed，失败则标记 failed。");
         prompt.append("用户说执行全部 Todo 时，按 order 从小到大执行所有 pending/running Todo；未知下一步需要先调用 builtin.todo.list 获取当前会话 Todo。");
@@ -88,11 +89,33 @@ public class LlmAgentPlanner implements AgentPlanner {
         return context == null ? "" : context.trim();
     }
 
+    static String attachmentContext(AgentTask task) {
+        String context = task.metadata().getOrDefault("attachments.modelContext", "");
+        return context == null ? "" : context.trim();
+    }
+
+    static String resumeContext(AgentTask task) {
+        String context = task.metadata().getOrDefault("runtime.resumeCheckpoint", "");
+        return context == null ? "" : context.trim();
+    }
+
+    static String displayUserInput(AgentTask task) {
+        String input = task.input() == null ? "" : task.input().trim();
+        if (!input.isBlank()) {
+            return input;
+        }
+        return attachmentContext(task).isBlank() ? "" : "用户未输入额外文字，请根据附件理解上下文回答。";
+    }
+
     static String userPromptWithSessionContext(AgentTask task) {
         StringBuilder prompt = new StringBuilder();
         String knowledge = knowledgeContext(task);
         if (!knowledge.isBlank()) {
             prompt.append("知识库上下文：\n").append(knowledge).append("\n\n");
+        }
+        String attachments = attachmentContext(task);
+        if (!attachments.isBlank()) {
+            prompt.append("附件理解上下文：\n").append(attachments).append("\n\n");
         }
         String memory = memoryContext(task);
         if (!memory.isBlank()) {
@@ -102,7 +125,11 @@ public class LlmAgentPlanner implements AgentPlanner {
         if (!context.isBlank()) {
             prompt.append("近期会话上下文：\n").append(context).append("\n\n");
         }
-        prompt.append("用户请求：").append(task.input());
+        String resume = resumeContext(task);
+        if (!resume.isBlank()) {
+            prompt.append("任务恢复点：\n").append(resume).append("\n\n");
+        }
+        prompt.append("用户请求：").append(displayUserInput(task));
         return prompt.toString();
     }
 
@@ -190,7 +217,10 @@ public class LlmAgentPlanner implements AgentPlanner {
         Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> field = fields.next();
-            arguments.put(field.getKey(), field.getValue().asText());
+            // 非文本参数保留 JSON 字符串，避免模型输出数组参数时被 Jackson asText() 吞成空串。
+            arguments.put(field.getKey(), field.getValue().isTextual()
+                    ? field.getValue().asText()
+                    : field.getValue().toString());
         }
         return arguments;
     }

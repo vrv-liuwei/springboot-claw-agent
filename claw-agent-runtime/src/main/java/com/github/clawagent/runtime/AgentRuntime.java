@@ -10,6 +10,7 @@ import com.github.clawagent.core.AgentTask;
 import com.github.clawagent.core.SessionCreateRequest;
 import com.github.clawagent.core.TokenUsageSummary;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -21,6 +22,10 @@ public interface AgentRuntime {
     AgentResult submitStream(AgentRequest request, com.github.clawagent.spi.AgentCallback callback, com.github.clawagent.spi.ChatStreamCallback streamCallback);
 
     AgentTask cancelTask(String taskId);
+
+    AgentTask approveToolCall(String taskId, String stepId, String toolId);
+
+    AgentTask rejectToolCall(String taskId, String stepId, String toolId, String reason);
 
     String createSessionId();
 
@@ -42,11 +47,17 @@ public interface AgentRuntime {
 
     List<AgentMessage> getSessionMessages(String sessionId, int limit);
 
+    List<AgentMessage> getSessionMessagesBefore(String sessionId, Instant beforeCreatedAt, int limit);
+
     AgentSession summarizeSession(String sessionId, int limit);
 
     List<AgentEvent> getSessionEvents(String sessionId, int limit);
 
     List<AgentEvent> getTaskEvents(String taskId, int limit);
+
+    List<AgentEvent> queryEvents(Instant from, Instant to, String level, String type, String sessionId, String taskId, int limit);
+
+    void recordTaskEvent(String taskId, String level, String type, String message, Map<String, String> details);
 
     TokenUsageSummary getSessionTokenUsage(String sessionId, int limit);
 

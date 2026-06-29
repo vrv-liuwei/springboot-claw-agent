@@ -52,11 +52,15 @@ import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.time.Instant;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -68,6 +72,8 @@ import java.util.regex.Pattern;
  * 这里刻意把“规划、工具查找、步骤落库、错误处理”显式拆开，便于后续替换为 LLM Planner 和审批流。
  */
 public class DefaultAgentRuntime implements AgentRuntime {
+    public static final String PROMPT_INJECTION_SUSPECTED_KEY = "security.promptInjectionSuspected";
+    public static final String PROMPT_INJECTION_REASON_KEY = "security.promptInjectionReason";
     private static final Logger log = LoggerFactory.getLogger(DefaultAgentRuntime.class);
     /** 从模型 responseJson 中恢复 usage，避免 runtime 模块为了兜底解析额外依赖 Jackson。 */
     private static final Pattern PROMPT_TOKENS_PATTERN = Pattern.compile("\"prompt_tokens\"\\s*:\\s*(\\d+)");
@@ -83,6 +89,10 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private static final String SESSION_CONTEXT_METADATA_KEY = "runtime.sessionContext";
     /** Runtime 注入给 Planner/ResponseGenerator 的统一记忆上下文 metadata key。 */
     private static final String MEMORY_CONTEXT_METADATA_KEY = "runtime.memoryContext";
+    /** Session metadata 中的上下文起点；/clear 和 /compact 会更新它来减少后续 prompt 历史。 */
+    private static final String CONTEXT_ACTIVE_FROM_KEY = "context.activeFrom";
+    /** Session metadata 中的上下文模式；compact 模式会把 session.summary 作为压缩摘要注入。 */
+    private static final String CONTEXT_MODE_KEY = "context.mode";
     /** JDK17 下平台线程仍然较重，先限制单轮只读工具并发数，避免一次 ReAct 打满服务器线程。 */
     private static final int MAX_PARALLEL_TOOL_CALLS = 8;
 
@@ -110,6 +120,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final ThreadLocal<List<AgentCallback>> activeCallbacks = new ThreadLocal<>();
     /** 当前正在执行的 Todo，用于把后续工具调用日志挂到具体 Todo 上。 */
     private final ThreadLocal<TodoItem> activeTodo = new ThreadLocal<>();
+    /** 等待前端审批的工具调用；当前先用内存态保证本地 Web Agent 的审批阻塞流程跑通。 */
+    private final Map<String, PendingToolApproval> pendingApprovals = new ConcurrentHashMap<>();
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks) {
         this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
@@ -218,13 +230,9 @@ public class DefaultAgentRuntime implements AgentRuntime {
             scopedCallbacks.add(callback);
         }
         activeCallbacks.set(scopedCallbacks);
-        AgentSession session = ensureSession(request);
-        AgentRequest normalizedRequest = new AgentRequest(
-                request.input(),
-                session.id(),
-                request.channelId(),
-                request.userId(),
-                request.metadata());
+        AgentRequest interceptedRequest = applyBeforeRequest(request);
+        AgentSession session = ensureSession(interceptedRequest);
+        AgentRequest normalizedRequest = withSessionWorkspace(interceptedRequest, session);
         AgentTask task = new AgentTask(UUID.randomUUID().toString(), normalizedRequest);
         attachSessionContext(task);
         task.markStatus(TaskStatus.RUNNING);
@@ -238,6 +246,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 "userId", nullToEmpty(task.userId())));
         saveApprovalEvent(task);
         emit("task.started", task.id(), request.input());
+        saveResumeRequestEvent(task);
+        emitResumeCheckpoint(task);
         log.info("agent task started input={}", preview(task.input()));
         log.debug("agent task input taskId={} input={}", task.id(), preview(task.input()));
 
@@ -288,6 +298,22 @@ public class DefaultAgentRuntime implements AgentRuntime {
             emit("task.cancelled", task.id(), e.getMessage());
             log.warn("agent task cancelled taskId={} reason={}", task.id(), e.getMessage());
             return new AgentResult(task.id(), "任务已取消", task.status(), task.sessionId());
+        } catch (ContinuationRequiredException e) {
+            saveLlmTraces(task, "continuation-required");
+            String answer = continuationAnswer(e.incompleteTodos());
+            task.requireContinuation(answer);
+            taskStore.updateTask(task);
+            saveMessage(task.sessionId(), task.id(), "assistant", answer);
+            saveEvent(task, "WARN", "task.continuation_required", "任务需要继续执行", Map.of(
+                    "status", task.status().name(),
+                    "maxRounds", String.valueOf(maxReactRounds),
+                    "todos", e.incompleteTodos()));
+            emit("task.continuation_required", task.id(), answer, Map.of(
+                    "status", task.status().name(),
+                    "maxRounds", String.valueOf(maxReactRounds),
+                    "todos", e.incompleteTodos()));
+            log.warn("agent task continuation required taskId={} maxRounds={} todos={}", task.id(), maxReactRounds, e.incompleteTodos());
+            return new AgentResult(task.id(), answer, task.status(), task.sessionId());
         } catch (RuntimeException e) {
             saveLlmTraces(task, "error");
             task.markStatus(TaskStatus.FAILED);
@@ -366,9 +392,15 @@ public class DefaultAgentRuntime implements AgentRuntime {
         String incompleteTodos = incompleteTodoSummary(task, steps);
         if (!incompleteTodos.isBlank()) {
             // 达到最大轮次后不能再交给最终回复模型发挥，否则会把未完成 Todo 说成已完成。
-            throw new IllegalStateException("ReAct 达到最大轮次，仍有未完成 Todo：" + incompleteTodos);
+            throw new ContinuationRequiredException(incompleteTodos);
         }
         return null;
+    }
+
+    private String continuationAnswer(String incompleteTodos) {
+        return "本轮已达到单次执行上限（maxReactRounds=" + maxReactRounds + "），仍有未完成 Todo："
+                + incompleteTodos
+                + "。\n\n这不是执行失败。请继续本会话，Agent 会基于当前 Todo 和上下文接着处理。";
     }
 
     private String incompleteTodoSummary(AgentTask task, List<AgentStep> steps) {
@@ -376,15 +408,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return "";
         }
         List<TodoItem> items = todoStore.listTodoItems(task.sessionId(), "", 200);
-        String latestPlanTaskId = items.stream()
-                .max(Comparator.comparing(TodoItem::createdAt))
-                .map(TodoItem::taskId)
-                .orElse("");
-        if (latestPlanTaskId.isBlank()) {
+        String activePlanTaskId = activeIncompletePlanTaskId(items);
+        if (activePlanTaskId.isBlank()) {
             return "";
         }
         List<TodoItem> latestPlanItems = items.stream()
-                .filter(item -> latestPlanTaskId.equals(item.taskId()))
+                .filter(item -> activePlanTaskId.equals(item.taskId()))
                 .sorted(Comparator.comparingInt(TodoItem::itemOrder))
                 .toList();
         List<TodoItem> incompleteItems = latestPlanItems.stream()
@@ -405,9 +434,26 @@ public class DefaultAgentRuntime implements AgentRuntime {
 
     private boolean shouldEnforceTodoConsistency(AgentTask task, List<AgentStep> steps) {
         String input = task.input() == null ? "" : task.input().toLowerCase();
+        if (isSimpleLocalAction(input)) {
+            // 启动/停止/查看状态这类单步操作不应被 Todo 一致性守卫拖成长任务；即使模型误建 Todo，也允许直接收口。
+            return false;
+        }
         boolean inputLooksLikeTodoWork = input.contains("todo") || input.contains("计划") || input.contains("执行全部") || input.contains("执行第");
         boolean currentTaskTouchedTodo = steps.stream().anyMatch(step -> step.name() != null && step.name().startsWith("builtin.todo."));
         return inputLooksLikeTodoWork || currentTaskTouchedTodo;
+    }
+
+    private boolean isSimpleLocalAction(String input) {
+        return input.contains("启动项目")
+                || input.contains("运行项目")
+                || input.contains("停止项目")
+                || input.contains("重启项目")
+                || input.contains("查看状态")
+                || input.contains("查看日志")
+                || input.contains("git status")
+                || input.contains("执行测试")
+                || input.contains("运行测试")
+                || input.contains("安装依赖");
     }
 
     private void addTodoConsistencyObservation(AgentTask task, List<AgentStep> steps, String incompleteTodos) {
@@ -540,15 +586,19 @@ public class DefaultAgentRuntime implements AgentRuntime {
         checkTaskCancelled(task);
         AgentTool tool = toolRegistry.find(call.toolId())
                 .orElseThrow(() -> new IllegalArgumentException("工具不存在：" + call.toolId()));
-        AgentStep step = new AgentStep(UUID.randomUUID().toString(), task.id(), StepType.TOOL_CALL, call.toolId(), call.arguments());
+        Map<String, String> stepInput = new LinkedHashMap<>(call.arguments());
+        // 动态风险等级依赖本次参数，落到 Step input 后跨任务检索可按 riskLevel 精确过滤。
+        stepInput.put("riskLevel", nullToEmpty(tool.riskLevel(call)).toLowerCase());
+        AgentStep step = new AgentStep(UUID.randomUUID().toString(), task.id(), StepType.TOOL_CALL, call.toolId(), stepInput);
         List<AgentStep> observations = new ArrayList<>();
         long startedAt = System.currentTimeMillis();
-        Map<String, String> startedDetails = toolEventDetails(step, call, tool, null, null, 0L, startedAt);
+        Map<String, String> startedDetails = toolEventDetails(task, step, call, tool, null, null, 0L, startedAt);
         emit("step.started", task.id(), call.toolId(), streamToolDetails(task, startedDetails));
         emit("tool.started", task.id(), call.toolId(), streamToolDetails(task, startedDetails));
         log.info("agent tool started stepId={} toolId={} input={}", step.id(), call.toolId(), sanitizeText("arguments", call.arguments().toString()));
         log.debug("agent tool arguments taskId={} stepId={} arguments={}", task.id(), step.id(), sanitizeText("arguments", call.arguments().toString()));
         saveEvent(task, "DEBUG", "tool.started", "工具调用开始", startedDetails);
+        detectPromptInjectionBeforeTool(task, call, step);
 
         if (failureTracker != null) {
             String blockReason;
@@ -564,7 +614,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                         "error", blockReason,
                         "toolKind", toolKind(call.toolId())));
                 log.warn("agent tool repeated failure blocked stepId={} toolId={} reason={}", step.id(), call.toolId(), blockReason);
-                Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, blockReason, elapsedMs(startedAt), startedAt);
+                Map<String, String> failedDetails = toolEventDetails(task, step, call, tool, null, blockReason, elapsedMs(startedAt), startedAt);
                 emit("tool.failed", task.id(), preview(blockReason), streamToolDetails(task, failedDetails));
                 emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, failedDetails));
                 return new ToolExecutionOutput(-1, step, observations);
@@ -573,18 +623,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
 
         RuntimeException guardError = checkToolGuards(task, tool, call);
         if (guardError != null) {
-            // 拦截失败只影响当前工具步骤，后续由 ResponseGenerator 汇总失败原因给用户。
-            step.fail(guardError.getMessage());
-            saveEvent(task, "WARN", "tool.blocked", "工具调用被安全策略拦截", Map.of(
-                    "stepId", step.id(),
-                    "toolId", call.toolId(),
-                    "error", nullToEmpty(guardError.getMessage()),
-                    "toolKind", toolKind(call.toolId())));
-            log.warn("agent tool blocked stepId={} toolId={} error={}", step.id(), call.toolId(), guardError.getMessage());
-            Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, guardError.getMessage(), elapsedMs(startedAt), startedAt);
-            emit("tool.failed", task.id(), preview(guardError.getMessage()), streamToolDetails(task, failedDetails));
-            emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, failedDetails));
-            return new ToolExecutionOutput(-1, step, observations);
+            waitForToolApproval(task, step, call, tool, guardError, startedAt);
         }
 
         checkTaskCancelled(task);
@@ -592,6 +631,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         checkTaskCancelled(task);
         if (result.success()) {
             step.succeed(result.content());
+            detectPromptInjectionFromToolOutput(task, call, step, result.content());
             TodoItem todoAfterTool = updateActiveTodoAfterTool(task, call);
             if (failureTracker != null) {
                 String recoveryMessage;
@@ -604,7 +644,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
             }
             log.info("agent tool succeeded stepId={} toolId={} output={}", step.id(), call.toolId(), sanitizeText("output", preview(result.content())));
             log.debug("agent tool output taskId={} stepId={} output={}", task.id(), step.id(), sanitizeText("output", preview(result.content())));
-            Map<String, String> succeededDetails = toolEventDetails(step, call, tool, result.content(), null, elapsedMs(startedAt), startedAt);
+            Map<String, String> succeededDetails = toolEventDetails(task, step, call, tool, result.content(), null, elapsedMs(startedAt), startedAt);
             mergeTodoDetails(succeededDetails, todoAfterTool);
             succeededDetails.put("output", nullToEmpty(result.content()));
             saveEvent(task, "DEBUG", "tool.succeeded", "工具调用成功", succeededDetails);
@@ -618,11 +658,11 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 }
             }
             log.warn("agent tool failed stepId={} toolId={} error={}", step.id(), call.toolId(), sanitizeText("error", preview(result.content())));
-            Map<String, String> failedDetails = toolEventDetails(step, call, tool, null, result.content(), elapsedMs(startedAt), startedAt);
+            Map<String, String> failedDetails = toolEventDetails(task, step, call, tool, null, result.content(), elapsedMs(startedAt), startedAt);
             saveEvent(task, "WARN", "tool.failed", "工具调用失败", failedDetails);
             emit("tool.failed", task.id(), preview(result.content()), streamToolDetails(task, failedDetails));
         }
-        emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, toolEventDetails(step, call, tool, result.content(), result.success() ? null : result.content(), elapsedMs(startedAt), startedAt)));
+        emit("step.finished", task.id(), step.status().name(), streamToolDetails(task, toolEventDetails(task, step, call, tool, result.content(), result.success() ? null : result.content(), elapsedMs(startedAt), startedAt)));
         return new ToolExecutionOutput(-1, step, observations);
     }
 
@@ -633,6 +673,79 @@ public class DefaultAgentRuntime implements AgentRuntime {
         private ToolExecutionOutput withIndex(int index) {
             return new ToolExecutionOutput(index, step, observations);
         }
+    }
+
+    private void waitForToolApproval(AgentTask task, AgentStep step, ToolCall call, AgentTool tool,
+                                     RuntimeException guardError, long startedAt) {
+        String approvalKey = approvalKey(task.id(), step.id());
+        PendingToolApproval pending = new PendingToolApproval(task.id(), step.id(), call.toolId(), new CompletableFuture<>());
+        pendingApprovals.put(approvalKey, pending);
+        task.markStatus(TaskStatus.WAITING_APPROVAL);
+        taskStore.updateTask(task);
+        Map<String, String> details = toolEventDetails(task, step, call, tool, null, guardError.getMessage(), elapsedMs(startedAt), startedAt);
+        details.put("approvalKey", approvalKey);
+        saveEvent(task, "WARN", "tool.approval_requested", "工具调用等待用户审批", details);
+        emit("tool.approval_requested", task.id(), "工具调用等待用户审批", streamToolDetails(task, details));
+        log.warn("agent tool waiting approval taskId={} stepId={} toolId={} reason={}",
+                task.id(), step.id(), call.toolId(), guardError.getMessage());
+        try {
+            // 高危工具在这里阻塞当前任务线程；审批通过后沿用同一个 task/step/context 继续执行。
+            boolean approved = pending.future().get();
+            if (!approved) {
+                String rejectReason = approvalRejectReason(task);
+                saveEvent(task, "WARN", "tool.approval_rejected", "工具调用审批已拒绝", Map.of(
+                        "stepId", step.id(),
+                        "toolId", call.toolId(),
+                        "approvalKey", approvalKey,
+                        "reason", rejectReason));
+                emit("tool.approval_rejected", task.id(), "工具调用审批已拒绝", Map.of(
+                        "stepId", step.id(),
+                        "toolId", call.toolId(),
+                        "approvalKey", approvalKey,
+                        "reason", rejectReason));
+                throw new TaskCancelledException("工具审批被拒绝：" + call.toolId());
+            }
+            task.metadata().merge("approvedToolIds", call.toolId(), (left, right) ->
+                    containsMetadataToken(left, right) ? left : left + "," + right);
+            task.markStatus(TaskStatus.RUNNING);
+            taskStore.updateTask(task);
+            saveEvent(task, "INFO", "tool.approval_granted", "工具调用已审批，继续执行", Map.of(
+                    "stepId", step.id(),
+                    "toolId", call.toolId(),
+                    "approvalKey", approvalKey));
+            emit("tool.approval_granted", task.id(), "工具调用已审批，继续执行", Map.of(
+                    "stepId", step.id(),
+                    "toolId", call.toolId(),
+                    "approvalKey", approvalKey));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new TaskCancelledException("等待工具审批被中断：" + call.toolId());
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new TaskCancelledException("等待工具审批失败：" + nullToEmpty(cause == null ? null : cause.getMessage()));
+        } finally {
+            pendingApprovals.remove(approvalKey);
+        }
+    }
+
+    private String approvalKey(String taskId, String stepId) {
+        return nullToEmpty(taskId) + ":" + nullToEmpty(stepId);
+    }
+
+    private boolean containsMetadataToken(String value, String expected) {
+        if (value == null || value.isBlank() || expected == null || expected.isBlank()) {
+            return false;
+        }
+        String normalizedExpected = expected.trim();
+        for (String token : value.split("[,;\\s]+")) {
+            if (normalizedExpected.equals(token.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private AgentStep createFailureRecoveryObservation(AgentTask task, ToolCall call, String message) {
@@ -661,6 +774,73 @@ public class DefaultAgentRuntime implements AgentRuntime {
         return null;
     }
 
+    private void detectPromptInjectionBeforeTool(AgentTask task, ToolCall call, AgentStep step) {
+        String evidence = promptInjectionEvidence(task.input() + "\n" + toolControlText(call));
+        if (!evidence.isBlank()) {
+            markPromptInjectionSuspected(task, step, call, "tool-input", evidence);
+        }
+    }
+
+    private void detectPromptInjectionFromToolOutput(AgentTask task, ToolCall call, AgentStep step, String output) {
+        String evidence = promptInjectionEvidence(output);
+        if (!evidence.isBlank()) {
+            markPromptInjectionSuspected(task, step, call, "tool-output", evidence);
+        }
+    }
+
+    private void markPromptInjectionSuspected(AgentTask task, AgentStep step, ToolCall call, String source, String evidence) {
+        if ("true".equalsIgnoreCase(task.metadata().get(PROMPT_INJECTION_SUSPECTED_KEY))
+                && evidence.equals(task.metadata().get(PROMPT_INJECTION_REASON_KEY))) {
+            return;
+        }
+        task.metadata().put(PROMPT_INJECTION_SUSPECTED_KEY, "true");
+        task.metadata().put(PROMPT_INJECTION_REASON_KEY, evidence);
+        taskStore.updateTask(task);
+        Map<String, String> details = new LinkedHashMap<>();
+        details.put("stepId", step.id());
+        details.put("toolId", call.toolId());
+        details.put("source", source);
+        details.put("riskLevel", "medium");
+        details.put("reason", evidence);
+        details.put("inputPreview", sanitizeText("arguments", preview(toolControlText(call), 800)));
+        // 这里先记录风险提示，不直接失败；后续非 low 工具会被 Guard 转成人工确认。
+        saveEvent(task, "WARN", "security.prompt_injection_detected", "疑似提示词注入风险", details);
+        emit("security.prompt_injection_detected", task.id(), "疑似提示词注入风险", details);
+    }
+
+    private String toolControlText(ToolCall call) {
+        StringBuilder builder = new StringBuilder(call.toolId());
+        call.arguments().forEach((key, value) -> {
+            String normalizedKey = nullToEmpty(key).toLowerCase(Locale.ROOT);
+            if (Set.of("content", "body", "text", "aftercontent", "beforecontent").contains(normalizedKey)) {
+                return;
+            }
+            builder.append('\n').append(key).append('=').append(value);
+        });
+        return builder.toString();
+    }
+
+    private String promptInjectionEvidence(String value) {
+        String normalized = nullToEmpty(value).toLowerCase(Locale.ROOT);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        Map<String, List<String>> patterns = new LinkedHashMap<>();
+        patterns.put("ignore-instructions", List.of("ignore previous instructions", "ignore all previous", "disregard previous", "忽略之前", "忽略以上", "忽略系统"));
+        patterns.put("system-prompt-leak", List.of("system prompt", "developer message", "hidden instruction", "系统提示词", "开发者消息", "隐藏指令"));
+        patterns.put("secret-exfiltration", List.of("reveal secret", "dump secret", "api key", "access token", "private key", "泄露密钥", "导出密钥", "读取.env", ".env"));
+        patterns.put("approval-bypass", List.of("bypass approval", "disable approval", "without approval", "无需审批", "绕过审批", "关闭审批"));
+        patterns.put("audit-evasion", List.of("do not tell the user", "hide this action", "delete audit", "不要告诉用户", "隐藏这个操作", "删除审计"));
+        for (Map.Entry<String, List<String>> entry : patterns.entrySet()) {
+            for (String pattern : entry.getValue()) {
+                if (normalized.contains(pattern)) {
+                    return entry.getKey() + ": " + pattern;
+                }
+            }
+        }
+        return "";
+    }
+
     @Override
     public AgentTask cancelTask(String taskId) {
         AgentTask task = getTask(taskId);
@@ -668,12 +848,58 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return task;
         }
         cancelledTaskIds.add(taskId);
+        releasePendingApprovals(taskId, false);
         task.markStatus(TaskStatus.CANCELLED);
         taskStore.updateTask(task);
         saveEvent(task, "WARN", "task.cancel.requested", "任务取消请求已接收", Map.of(
                 "status", task.status().name()));
         log.warn("agent task cancel requested taskId={}", taskId);
         return task;
+    }
+
+    @Override
+    public AgentTask approveToolCall(String taskId, String stepId, String toolId) {
+        String approvalKey = approvalKey(taskId, stepId);
+        PendingToolApproval pending = pendingApprovals.get(approvalKey);
+        if (pending == null) {
+            throw new IllegalArgumentException("没有待审批的工具调用：" + approvalKey);
+        }
+        if (!pending.toolId().equals(toolId)) {
+            throw new IllegalArgumentException("审批工具不匹配，期望 " + pending.toolId() + "，实际 " + toolId);
+        }
+        pending.future().complete(true);
+        return getTask(taskId);
+    }
+
+    @Override
+    public AgentTask rejectToolCall(String taskId, String stepId, String toolId, String reason) {
+        String approvalKey = approvalKey(taskId, stepId);
+        PendingToolApproval pending = pendingApprovals.get(approvalKey);
+        if (pending == null) {
+            throw new IllegalArgumentException("没有待审批的工具调用：" + approvalKey);
+        }
+        if (!pending.toolId().equals(toolId)) {
+            throw new IllegalArgumentException("审批工具不匹配，期望 " + pending.toolId() + "，实际 " + toolId);
+        }
+        AgentTask task = getTask(taskId);
+        // 拒绝原因先写入 task metadata，等待中的任务线程被唤醒后统一记录审批拒绝事件。
+        task.metadata().put("lastApprovalRejectReason", nullToEmpty(reason).isBlank() ? "用户拒绝审批" : reason);
+        taskStore.updateTask(task);
+        pending.future().complete(false);
+        return task;
+    }
+
+    private String approvalRejectReason(AgentTask task) {
+        String reason = nullToEmpty(task.metadata().get("lastApprovalRejectReason"));
+        return reason.isBlank() ? "用户拒绝审批" : reason;
+    }
+
+    private void releasePendingApprovals(String taskId, boolean approved) {
+        for (PendingToolApproval pending : pendingApprovals.values()) {
+            if (pending.taskId().equals(taskId)) {
+                pending.future().complete(approved);
+            }
+        }
     }
 
     private void checkTaskCancelled(AgentTask task) {
@@ -684,13 +910,32 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private boolean isTerminalStatus(TaskStatus status) {
-        return status == TaskStatus.COMPLETED || status == TaskStatus.FAILED || status == TaskStatus.CANCELLED;
+        return status == TaskStatus.COMPLETED
+                || status == TaskStatus.FAILED
+                || status == TaskStatus.CANCELLED
+                || status == TaskStatus.CONTINUATION_REQUIRED;
     }
 
     private static class TaskCancelledException extends RuntimeException {
         private TaskCancelledException(String message) {
             super(message);
         }
+    }
+
+    private static class ContinuationRequiredException extends RuntimeException {
+        private final String incompleteTodos;
+
+        private ContinuationRequiredException(String incompleteTodos) {
+            super("ReAct 达到最大轮次，仍有未完成 Todo：" + incompleteTodos);
+            this.incompleteTodos = incompleteTodos;
+        }
+
+        private String incompleteTodos() {
+            return incompleteTodos;
+        }
+    }
+
+    private record PendingToolApproval(String taskId, String stepId, String toolId, CompletableFuture<Boolean> future) {
     }
 
     @Override
@@ -713,7 +958,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     @Override
     public AgentSession createSession(SessionCreateRequest request) {
         String title = request.title() == null || request.title().isBlank() ? "新会话" : request.title();
-        AgentSession session = new AgentSession(UUID.randomUUID().toString(), title, request.channelId(), request.userId(), request.metadata());
+        AgentSession session = new AgentSession(UUID.randomUUID().toString(), title, request.channelId(), request.userId(),
+                normalizeWorkspaceMetadata(request.workspaceId(), request.metadata()));
         sessionStore.saveSession(session);
         log.info("agent session created sessionId={} channelId={} userId={}", session.id(), session.channelId(), session.userId());
         return session;
@@ -768,6 +1014,13 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     @Override
+    public List<AgentMessage> getSessionMessagesBefore(String sessionId, java.time.Instant beforeCreatedAt, int limit) {
+        getSession(sessionId);
+        // 滚动分页加载旧消息也要补齐附件 metadata，保证刷新前后聊天卡片展示一致。
+        return hydrateMessageMetadata(messageStore.findMessagesBefore(sessionId, beforeCreatedAt, limit));
+    }
+
+    @Override
     public AgentSession summarizeSession(String sessionId, int limit) {
         AgentSession session = getSession(sessionId);
         List<AgentMessage> messages = messageStore.findMessages(sessionId, limit);
@@ -791,6 +1044,21 @@ public class DefaultAgentRuntime implements AgentRuntime {
     public List<AgentEvent> getTaskEvents(String taskId, int limit) {
         getTask(taskId);
         return eventStore.findEventsByTask(taskId, limit);
+    }
+
+    @Override
+    public List<AgentEvent> queryEvents(Instant from, Instant to, String level, String type, String sessionId, String taskId, int limit) {
+        int safeLimit = Math.min(Math.max(limit, 1), 1000);
+        // 全局审计查询只读 AgentEventStore，不触发 task/session 存在性校验，避免历史事件因任务清理而不可检索。
+        return eventStore.findEvents(from, to, level, type, sessionId, taskId, safeLimit);
+    }
+
+    @Override
+    public void recordTaskEvent(String taskId, String level, String type, String message, Map<String, String> details) {
+        AgentTask task = getTask(taskId);
+        // 管理台触发的手动动作也进入同一条事件链，文件审查和审计查询才能按任务恢复上下文。
+        saveEvent(task, level, type, message, details == null ? Map.of() : details);
+        emit(type, task.id(), message, details == null ? Map.of() : details);
     }
 
     @Override
@@ -861,10 +1129,41 @@ public class DefaultAgentRuntime implements AgentRuntime {
 
     private AgentSession createSessionWithId(String sessionId, String title, String channelId, String userId, Map<String, String> metadata) {
         // 前端已申请但未落盘的 sessionId，在第一条消息到达时正式成为持久化会话。
-        AgentSession session = new AgentSession(sessionId, title, channelId, userId, metadata);
+        AgentSession session = new AgentSession(sessionId, title, channelId, userId, normalizeWorkspaceMetadata("", metadata));
         sessionStore.saveSession(session);
         log.info("agent session created from requested id sessionId={} channelId={} userId={}", session.id(), session.channelId(), session.userId());
         return session;
+    }
+
+    private AgentRequest withSessionWorkspace(AgentRequest request, AgentSession session) {
+        Map<String, String> metadata = new LinkedHashMap<>(request.metadata());
+        inheritWorkspace(metadata, session);
+        return new AgentRequest(request.input(), session.id(), request.channelId(), request.userId(), metadata);
+    }
+
+    private Map<String, String> normalizeWorkspaceMetadata(String workspaceId, Map<String, String> source) {
+        Map<String, String> metadata = source == null ? new LinkedHashMap<>() : new LinkedHashMap<>(source);
+        if (workspaceId != null && !workspaceId.isBlank()) {
+            metadata.putIfAbsent("workspaceId", workspaceId);
+        }
+        aliasWorkspace(metadata);
+        return metadata;
+    }
+
+    private void inheritWorkspace(Map<String, String> metadata, AgentSession session) {
+        putIfPresent(metadata, "workspaceId", firstNonBlank(session.workspaceId(), metadata.get("workspaceId"), ""));
+        putIfPresent(metadata, "workspaceName", firstNonBlank(session.workspaceName(), metadata.get("workspaceName"), ""));
+        putIfPresent(metadata, "workspaceRoot", firstNonBlank(session.workspaceRoot(), metadata.get("workspaceRoot"), ""));
+        aliasWorkspace(metadata);
+    }
+
+    private void aliasWorkspace(Map<String, String> metadata) {
+        putIfPresent(metadata, "workspace.id", metadata.get("workspaceId"));
+        putIfPresent(metadata, "workspace.name", metadata.get("workspaceName"));
+        putIfPresent(metadata, "workspace.root", metadata.get("workspaceRoot"));
+        putIfPresent(metadata, "workspace.projectPath", metadata.get("workspaceRoot"));
+        putIfPresent(metadata, "projectPath", metadata.get("workspaceRoot"));
+        putIfPresent(metadata, "activeProjectPath", metadata.get("workspaceRoot"));
     }
 
     private void saveMessage(String sessionId, String taskId, String role, String content) {
@@ -926,10 +1225,13 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private void attachSessionContext(AgentTask task) {
-        List<AgentMessage> messages = messageStore.findMessages(task.sessionId(), SESSION_CONTEXT_MESSAGE_LIMIT);
         AgentSession session = sessionStore.findSession(task.sessionId()).orElse(null);
+        List<AgentMessage> messages = activeContextMessages(
+                messageStore.findMessages(task.sessionId(), SESSION_CONTEXT_MESSAGE_LIMIT),
+                session);
+        List<TodoItem> todos = todoStore == null ? List.of() : todoStore.listTodoItems(task.sessionId(), "", 200);
+        attachResumeCheckpoint(task, todos);
         if (memoryContextBuilder != null && session != null) {
-            List<TodoItem> todos = todoStore == null ? List.of() : todoStore.listTodoItems(task.sessionId(), "", 50);
             var snapshot = memoryContextBuilder.build(task, session, messages, todos);
             if (snapshot != null && snapshot.context() != null && !snapshot.context().isBlank()) {
                 // 统一记忆上下文包含短期会话、Todo 状态和长期记忆命中，后续模型只读取这一份。
@@ -937,10 +1239,18 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 task.metadata().put("runtime.memoryHitCount", String.valueOf(snapshot.hits() == null ? 0 : snapshot.hits().size()));
             }
         }
-        if (messages.isEmpty()) {
+        boolean compactMode = session != null
+                && "compact".equalsIgnoreCase(session.metadata().get(CONTEXT_MODE_KEY))
+                && session.summary() != null
+                && !session.summary().isBlank();
+        if (messages.isEmpty() && !compactMode) {
             return;
         }
         StringBuilder context = new StringBuilder();
+        if (compactMode) {
+            // 压缩摘要代表 activeFrom 之前的有效任务状态，避免继续塞入大量旧轮次原文。
+            context.append("summary: ").append(preview(session.summary(), 3000)).append("\n");
+        }
         for (AgentMessage message : messages) {
             String content = preview(message.content(), 1200);
             if (content.isBlank()) {
@@ -956,6 +1266,24 @@ public class DefaultAgentRuntime implements AgentRuntime {
         if (!value.isBlank()) {
             task.metadata().put(SESSION_CONTEXT_METADATA_KEY, value);
             log.debug("agent session context attached taskId={} chars={}", task.id(), value.length());
+        }
+    }
+
+    private List<AgentMessage> activeContextMessages(List<AgentMessage> messages, AgentSession session) {
+        if (messages == null || messages.isEmpty() || session == null) {
+            return messages == null ? List.of() : messages;
+        }
+        String activeFrom = session.metadata().get(CONTEXT_ACTIVE_FROM_KEY);
+        if (activeFrom == null || activeFrom.isBlank()) {
+            return messages;
+        }
+        try {
+            Instant activeFromInstant = Instant.parse(activeFrom);
+            return messages.stream()
+                    .filter(message -> !message.createdAt().isBefore(activeFromInstant))
+                    .toList();
+        } catch (RuntimeException ignored) {
+            return messages;
         }
     }
 
@@ -1064,20 +1392,46 @@ public class DefaultAgentRuntime implements AgentRuntime {
         // 只记录审批相关白名单字段，避免把用户自定义 metadata 或密钥写入任务事件。
         details.put("allowHighRiskTools", nullToEmpty(task.metadata().get("allowHighRiskTools")));
         details.put("approvedToolIds", nullToEmpty(task.metadata().get("approvedToolIds")));
+        details.put("approvalMode", nullToEmpty(task.metadata().get("approvalMode")));
+        details.put("toolPermissionMode", nullToEmpty(task.metadata().get("toolPermissionMode")));
         saveEvent(task, "DEBUG", "task.approval", "任务审批元数据", details);
-        log.debug("agent task approval metadata taskId={} allowHighRiskTools={} approvedToolIds={}",
-                task.id(), details.get("allowHighRiskTools"), details.get("approvedToolIds"));
+        log.debug("agent task approval metadata taskId={} allowHighRiskTools={} approvalMode={} approvedToolIds={}",
+                task.id(), details.get("allowHighRiskTools"), details.get("approvalMode"), details.get("approvedToolIds"));
     }
 
-    private Map<String, String> toolEventDetails(AgentStep step, ToolCall call, AgentTool tool, String output, String error, long elapsedMs, long startedAt) {
+    private void saveResumeRequestEvent(AgentTask task) {
+        if (!"true".equalsIgnoreCase(nullToEmpty(task.metadata().get("runtime.resumeRequest")))) {
+            return;
+        }
+        Map<String, String> details = new LinkedHashMap<>();
+        details.put("resumeFromTaskId", nullToEmpty(task.metadata().get("runtime.resumeFromTaskId")));
+        details.put("resumeFromStatus", nullToEmpty(task.metadata().get("runtime.resumeFromStatus")));
+        details.put("todoId", nullToEmpty(task.metadata().get("runtime.resumeTodoId")));
+        details.put("todoOrder", nullToEmpty(task.metadata().get("runtime.resumeTodoOrder")));
+        details.put("todoTitle", nullToEmpty(task.metadata().get("runtime.resumeTodoTitle")));
+        details.put("todoStatus", nullToEmpty(task.metadata().get("runtime.resumeTodoStatus")));
+        details.put("resumeMode", nullToEmpty(task.metadata().get("runtime.resumeMode")));
+        details.put("resumeInstruction", nullToEmpty(task.metadata().get("runtime.resumeInstruction")));
+        // 恢复事件是用户可见审计点，说明本任务不是新规划，而是接续之前未完成的 Todo。
+        saveEvent(task, "INFO", "task.resume_requested", "任务继续执行请求", details);
+        emit("task.resume_requested", task.id(), "任务继续执行请求", details);
+    }
+
+    private Map<String, String> toolEventDetails(AgentTask task, AgentStep step, ToolCall call, AgentTool tool, String output, String error, long elapsedMs, long startedAt) {
         Map<String, String> details = new LinkedHashMap<>();
         details.put("stepId", step.id());
         details.put("toolId", call.toolId());
         details.put("status", step.status().name());
         details.put("toolKind", toolKind(call.toolId()));
+        // riskLevel 使用本次调用参数的动态结果，管理台和审计日志看到的是实际风险，而不是工具静态默认值。
+        details.put("riskLevel", nullToEmpty(tool.riskLevel(call)));
+        details.put("approvalMode", nullToEmpty(task.metadata().get("approvalMode")));
+        details.put("toolPermissionMode", nullToEmpty(task.metadata().get("toolPermissionMode")));
         details.put("inputPreview", sanitizeText("arguments", preview(call.arguments().toString())));
         details.put("arguments", sanitizeText("arguments", call.arguments().toString()));
-        details.put("outputPreview", sanitizeText("output", preview(output)));
+        // 事件里同时保存完整受控输出和预览：聊天流只用预览，详情展开时可按 stepId 读取完整结果。
+        details.put("output", sanitizeText("output", preview(output, 50000)));
+        details.put("outputPreview", sanitizeText("output", preview(output, 4000)));
         details.put("outputLength", String.valueOf(output == null ? 0 : output.length()));
         details.put("error", sanitizeText("error", nullToEmpty(error)));
         details.put("elapsedMs", String.valueOf(elapsedMs));
@@ -1126,15 +1480,33 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return null;
         }
         List<TodoItem> items = todoStore.listTodoItems(task.sessionId(), "", 200);
-        String latestPlanTaskId = items.stream()
-                .max(Comparator.comparing(TodoItem::createdAt))
-                .map(TodoItem::taskId)
-                .orElse("");
+        String latestPlanTaskId = activeIncompletePlanTaskId(items);
         return items.stream()
                 .filter(item -> latestPlanTaskId.equals(item.taskId()))
                 .filter(item -> item.itemOrder() == order)
                 .findFirst()
                 .orElse(null);
+    }
+
+    private String activeIncompletePlanTaskId(List<TodoItem> items) {
+        if (items == null || items.isEmpty()) {
+            return "";
+        }
+        return items.stream()
+                .filter(this::isResumableTodo)
+                .min(Comparator.comparing(TodoItem::createdAt))
+                .map(TodoItem::taskId)
+                .orElse("");
+    }
+
+    private boolean isIncompleteTodo(TodoItem item) {
+        String status = item.status() == null ? "" : item.status().toLowerCase(Locale.ROOT);
+        return "pending".equals(status) || "running".equals(status);
+    }
+
+    private boolean isResumableTodo(TodoItem item) {
+        String status = item.status() == null ? "" : item.status().toLowerCase(Locale.ROOT);
+        return "pending".equals(status) || "running".equals(status) || "failed".equals(status);
     }
 
     private void mergeTodoDetails(Map<String, String> details, TodoItem todo) {
@@ -1159,6 +1531,18 @@ public class DefaultAgentRuntime implements AgentRuntime {
         for (AgentRuntimeInterceptor interceptor : runtimeInterceptors) {
             // 前置拦截器按顺序串联，后一个拦截器只能看到前一个处理后的结果。
             current = copyDetails(interceptor.beforeEvent(context, current));
+        }
+        return current;
+    }
+
+    private AgentRequest applyBeforeRequest(AgentRequest request) {
+        AgentRequest current = request;
+        for (AgentRuntimeInterceptor interceptor : runtimeInterceptors) {
+            // 请求级拦截器在任务落库前执行，用于统一归一化 input 和 metadata。
+            AgentRequest next = interceptor.beforeRequest(current);
+            if (next != null) {
+                current = next;
+            }
         }
         return current;
     }
@@ -1236,12 +1620,116 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
     }
 
+    private void attachResumeCheckpoint(AgentTask task, List<TodoItem> todos) {
+        String activePlanTaskId = activeIncompletePlanTaskId(todos);
+        if (activePlanTaskId.isBlank()) {
+            return;
+        }
+        List<TodoItem> activeItems = todos.stream()
+                .filter(item -> activePlanTaskId.equals(item.taskId()))
+                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
+                .toList();
+        TodoItem current = activeItems.stream()
+                .filter(item -> "running".equalsIgnoreCase(item.status()))
+                .findFirst()
+                .or(() -> activeItems.stream().filter(item -> "failed".equalsIgnoreCase(item.status())).findFirst())
+                .orElseGet(() -> activeItems.stream()
+                        .filter(this::isIncompleteTodo)
+                        .findFirst()
+                        .orElse(null));
+        if (current == null) {
+            return;
+        }
+        String checkpoint = "resumeFromTaskId=" + activePlanTaskId + "\n"
+                + "currentTodoOrder=" + current.itemOrder() + "\n"
+                + "currentTodoId=" + current.id() + "\n"
+                + "currentTodoTitle=" + current.title() + "\n"
+                + "remainingTodos=\n" + formatTodoCheckpoint(activeItems);
+        task.metadata().put("runtime.resumeFromTaskId", activePlanTaskId);
+        task.metadata().put("runtime.resumeTodoId", current.id());
+        task.metadata().put("runtime.resumeTodoOrder", String.valueOf(current.itemOrder()));
+        task.metadata().put("runtime.resumeTodoTitle", nullToEmpty(current.title()));
+        task.metadata().put("runtime.resumeTodoStatus", nullToEmpty(current.status()));
+        task.metadata().put("runtime.resumeMode", resumeMode(current));
+        task.metadata().put("runtime.resumeInstruction", resumeInstruction(current));
+        task.metadata().put("runtime.resumeCheckpoint", preview(checkpoint, 3000));
+    }
+
+    private String resumeMode(TodoItem current) {
+        String status = current.status() == null ? "" : current.status().toLowerCase(Locale.ROOT);
+        return switch (status) {
+            case "failed" -> "retry-failed-todo";
+            case "running" -> "continue-running-todo";
+            case "pending" -> "start-pending-todo";
+            default -> "resume-todo";
+        };
+    }
+
+    private String resumeInstruction(TodoItem current) {
+        String status = current.status() == null ? "" : current.status().toLowerCase(Locale.ROOT);
+        return switch (status) {
+            case "failed" -> "先复盘该 Todo 失败原因和最近工具输出，再决定重试或修正方案";
+            case "running" -> "从当前 running Todo 接着执行，不要重新创建计划";
+            case "pending" -> "从第一个 pending Todo 开始执行";
+            default -> "按恢复点继续执行";
+        };
+    }
+
+    private String formatTodoCheckpoint(List<TodoItem> items) {
+        StringBuilder builder = new StringBuilder();
+        for (TodoItem item : items) {
+            if (!builder.isEmpty()) {
+                builder.append("\n");
+            }
+            builder.append(item.itemOrder())
+                    .append(". [").append(item.status()).append("] ")
+                    .append(item.title())
+                    .append(" id=").append(item.id());
+        }
+        return builder.toString();
+    }
+
+    private void emitResumeCheckpoint(AgentTask task) {
+        String todoId = task.metadata().get("runtime.resumeTodoId");
+        if (todoId == null || todoId.isBlank()) {
+            return;
+        }
+        Map<String, String> details = new LinkedHashMap<>();
+        details.put("resumeFromTaskId", nullToEmpty(task.metadata().get("runtime.resumeFromTaskId")));
+        details.put("todoId", todoId);
+        details.put("todoOrder", nullToEmpty(task.metadata().get("runtime.resumeTodoOrder")));
+        details.put("todoTitle", nullToEmpty(task.metadata().get("runtime.resumeTodoTitle")));
+        details.put("todoStatus", nullToEmpty(task.metadata().get("runtime.resumeTodoStatus")));
+        details.put("resumeMode", nullToEmpty(task.metadata().get("runtime.resumeMode")));
+        details.put("resumeInstruction", nullToEmpty(task.metadata().get("runtime.resumeInstruction")));
+        // 恢复事件直接携带 checkpoint，前端运行中也能展示恢复依据，不必等任务结束后再补拉接口。
+        details.put("checkpoint", nullToEmpty(task.metadata().get("runtime.resumeCheckpoint")));
+        saveEvent(task, "INFO", "task.resume_checkpoint", "任务恢复点", details);
+        emit("task.resume_checkpoint", task.id(), "任务恢复点", details);
+    }
+
     private String emptyToUnknown(String value) {
         return value == null || value.isBlank() ? "unknown" : value;
     }
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private String firstNonBlank(String first, String second, String fallback) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        if (second != null && !second.isBlank()) {
+            return second;
+        }
+        return fallback;
+    }
+
+    private void putIfPresent(Map<String, String> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
     }
 
     private String titleFromInput(String input) {

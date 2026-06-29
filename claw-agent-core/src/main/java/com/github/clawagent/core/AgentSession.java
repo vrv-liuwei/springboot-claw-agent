@@ -78,6 +78,12 @@ public class AgentSession {
     public String getUserId() { return userId; }
     public Map<String, String> metadata() { return metadata; }
     public Map<String, String> getMetadata() { return metadata; }
+    public String workspaceId() { return firstMetadata("workspaceId", "workspace.id"); }
+    public String getWorkspaceId() { return workspaceId(); }
+    public String workspaceName() { return firstMetadata("workspaceName", "workspace.name"); }
+    public String getWorkspaceName() { return workspaceName(); }
+    public String workspaceRoot() { return firstMetadata("workspaceRoot", "workspace.root", "workspace.projectPath", "projectPath", "activeProjectPath"); }
+    public String getWorkspaceRoot() { return workspaceRoot(); }
     public Instant createdAt() { return createdAt; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant updatedAt() { return updatedAt; }
@@ -95,5 +101,15 @@ public class AgentSession {
     public void updateSummary(String summary) {
         this.summary = summary;
         this.updatedAt = Instant.now();
+    }
+
+    private String firstMetadata(String... keys) {
+        for (String key : keys) {
+            String value = metadata.get(key);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
     }
 }

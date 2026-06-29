@@ -79,7 +79,7 @@ public class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
             }
             log.info("embedding usage model={} promptTokens={} totalTokens={} resultCount={}",
                     options.model(), promptTokens, totalTokens, results.size());
-            log.debug("embedding response body model={} response={}", options.model(), response.body());
+            log.debug("embedding response body model={} ", options.model());
             return results;
         } catch (IOException e) {
             throw new IllegalStateException("Embedding 请求序列化或响应解析失败：" + e.getMessage(), e);

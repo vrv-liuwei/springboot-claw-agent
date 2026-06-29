@@ -14,6 +14,7 @@ import java.util.Map;
 @ConfigurationProperties(prefix = "clawagent")
 public class ClawAgentProperties {
     private boolean enabled = true;
+    private String mode = "server";
     private final Persistence persistence = new Persistence();
     private final Memory memory = new Memory();
     private final Mcp mcp = new Mcp();
@@ -22,7 +23,10 @@ public class ClawAgentProperties {
     private final Knowledge knowledge = new Knowledge();
     private final Attachments attachments = new Attachments();
     private final Automation automation = new Automation();
+    private final Channels channels = new Channels();
     private final Runtime runtime = new Runtime();
+    private final Local local = new Local();
+    private final Cost cost = new Cost();
     private final Model model = new Model();
     private final Map<String, ModelConfig> models = new LinkedHashMap<>();
 
@@ -32,6 +36,14 @@ public class ClawAgentProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public String getMode() {
+        return mode;
+    }
+
+    public void setMode(String mode) {
+        this.mode = mode;
     }
 
     public Persistence getPersistence() {
@@ -66,8 +78,20 @@ public class ClawAgentProperties {
         return automation;
     }
 
+    public Channels getChannels() {
+        return channels;
+    }
+
     public Runtime getRuntime() {
         return runtime;
+    }
+
+    public Local getLocal() {
+        return local;
+    }
+
+    public Cost getCost() {
+        return cost;
     }
 
     public Model getModel() {
@@ -98,10 +122,12 @@ public class ClawAgentProperties {
         private final Markdown markdown = new Markdown();
         private final Vector vector = new Vector();
         private final Extraction extraction = new Extraction();
+        private final Governance governance = new Governance();
 
         public Markdown getMarkdown() { return markdown; }
         public Vector getVector() { return vector; }
         public Extraction getExtraction() { return extraction; }
+        public Governance getGovernance() { return governance; }
     }
 
     /**
@@ -126,6 +152,34 @@ public class ClawAgentProperties {
         public void setIntervalSeconds(long intervalSeconds) { this.intervalSeconds = intervalSeconds; }
         public int getBatchSize() { return batchSize; }
         public void setBatchSize(int batchSize) { this.batchSize = batchSize; }
+    }
+
+    /**
+     * 长期记忆治理配置。
+     * 只处理 active 记忆，pending/conflict/disabled 不会因为自动规则改变状态。
+     */
+    public static class Governance {
+        /** 超过该天数未命中后开始降权。 */
+        private int staleAfterDays = 30;
+        /** 超过该天数未命中后降权趋近上限。 */
+        private int veryStaleAfterDays = 180;
+        /** 是否启用低质量或长期未命中记忆自动归档。 */
+        private boolean autoArchiveEnabled = false;
+        /** 超过该天数未命中时归档，0 表示不按天数归档。 */
+        private int archiveAfterDays = 365;
+        /** 质量分低于该阈值时归档，0 表示不按质量分归档。 */
+        private double archiveBelowQuality = 0.15;
+
+        public int getStaleAfterDays() { return staleAfterDays; }
+        public void setStaleAfterDays(int staleAfterDays) { this.staleAfterDays = staleAfterDays; }
+        public int getVeryStaleAfterDays() { return veryStaleAfterDays; }
+        public void setVeryStaleAfterDays(int veryStaleAfterDays) { this.veryStaleAfterDays = veryStaleAfterDays; }
+        public boolean isAutoArchiveEnabled() { return autoArchiveEnabled; }
+        public void setAutoArchiveEnabled(boolean autoArchiveEnabled) { this.autoArchiveEnabled = autoArchiveEnabled; }
+        public int getArchiveAfterDays() { return archiveAfterDays; }
+        public void setArchiveAfterDays(int archiveAfterDays) { this.archiveAfterDays = archiveAfterDays; }
+        public double getArchiveBelowQuality() { return archiveBelowQuality; }
+        public void setArchiveBelowQuality(double archiveBelowQuality) { this.archiveBelowQuality = archiveBelowQuality; }
     }
 
     public static class Mcp {
@@ -188,6 +242,9 @@ public class ClawAgentProperties {
         private boolean enabled = true;
         private int pollIntervalSeconds = 5;
         private int dueBatchSize = 10;
+        private int maxRetryAttempts = 0;
+        private int retryBackoffSeconds = 60;
+        private boolean pauseAfterRetriesExhausted = false;
         private String defaultChannelId = "automation";
         private String defaultUserId = "automation";
 
@@ -197,10 +254,195 @@ public class ClawAgentProperties {
         public void setPollIntervalSeconds(int pollIntervalSeconds) { this.pollIntervalSeconds = pollIntervalSeconds; }
         public int getDueBatchSize() { return dueBatchSize; }
         public void setDueBatchSize(int dueBatchSize) { this.dueBatchSize = dueBatchSize; }
+        public int getMaxRetryAttempts() { return maxRetryAttempts; }
+        public void setMaxRetryAttempts(int maxRetryAttempts) { this.maxRetryAttempts = maxRetryAttempts; }
+        public int getRetryBackoffSeconds() { return retryBackoffSeconds; }
+        public void setRetryBackoffSeconds(int retryBackoffSeconds) { this.retryBackoffSeconds = retryBackoffSeconds; }
+        public boolean isPauseAfterRetriesExhausted() { return pauseAfterRetriesExhausted; }
+        public void setPauseAfterRetriesExhausted(boolean pauseAfterRetriesExhausted) { this.pauseAfterRetriesExhausted = pauseAfterRetriesExhausted; }
         public String getDefaultChannelId() { return defaultChannelId; }
         public void setDefaultChannelId(String defaultChannelId) { this.defaultChannelId = defaultChannelId; }
         public String getDefaultUserId() { return defaultUserId; }
         public void setDefaultUserId(String defaultUserId) { this.defaultUserId = defaultUserId; }
+    }
+
+    public static class Channels {
+        /** 外部 ChannelRuntimeAdapter jar 扫描路径；目录下所有 jar 会通过 ServiceLoader 加入 adapter 注册表。 */
+        private List<String> adapterPath = new ArrayList<>(List.of(".clawagent/channels/adapters"));
+        /** application.yml 中声明的扁平 Channel 配置，启动时会和内置模板、本地 channels.json 合并。 */
+        private List<Channel> definitions = new ArrayList<>();
+        /** OpenClaw 风格多账号配置，key 是 channel type，例如 feishu/dingtalk/ddio。 */
+        private Map<String, Object> configs = new LinkedHashMap<>();
+
+        public List<String> getAdapterPath() { return adapterPath; }
+        public void setAdapterPath(List<String> adapterPath) {
+            this.adapterPath = adapterPath == null ? new ArrayList<>() : new ArrayList<>(adapterPath);
+        }
+        public List<Channel> getDefinitions() { return definitions; }
+        public void setDefinitions(List<Channel> definitions) {
+            this.definitions = definitions == null ? new ArrayList<>() : new ArrayList<>(definitions);
+        }
+        public Map<String, Object> getConfigs() { return configs; }
+        public void setConfigs(Map<String, Object> configs) {
+            this.configs = configs == null ? new LinkedHashMap<>() : new LinkedHashMap<>(configs);
+        }
+    }
+
+    public static class Channel {
+        private String id = "";
+        private String name = "";
+        private String type = "";
+        private boolean enabled = false;
+
+        private String approvalMode = "ask";
+        private List<String> approvedToolIds = new ArrayList<>();
+        private String inboundPath = "";
+        private Map<String, String> metadata = new LinkedHashMap<>();
+
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getType() { return type; }
+        public void setType(String type) { this.type = type; }
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+        public String getApprovalMode() { return approvalMode; }
+        public void setApprovalMode(String approvalMode) { this.approvalMode = approvalMode; }
+        public List<String> getApprovedToolIds() { return approvedToolIds; }
+        public void setApprovedToolIds(List<String> approvedToolIds) {
+            this.approvedToolIds = approvedToolIds == null ? new ArrayList<>() : new ArrayList<>(approvedToolIds);
+        }
+        public String getInboundPath() { return inboundPath; }
+        public void setInboundPath(String inboundPath) { this.inboundPath = inboundPath; }
+        public Map<String, String> getMetadata() { return metadata; }
+        public void setMetadata(Map<String, String> metadata) {
+            this.metadata = metadata == null ? new LinkedHashMap<>() : new LinkedHashMap<>(metadata);
+        }
+    }
+
+    public static class Cost {
+        /** 成本估算默认币种；管理台会按模型价格规则估算 Token 成本。 */
+        private String currency = "USD";
+        /** 按模型 ID 或真实模型名维护的每百万 Token 单价。 */
+        private Map<String, ModelPrice> rules = new LinkedHashMap<>();
+
+        public String getCurrency() { return currency; }
+        public void setCurrency(String currency) { this.currency = currency; }
+        public Map<String, ModelPrice> getRules() { return rules; }
+        public void setRules(Map<String, ModelPrice> rules) {
+            this.rules = rules == null ? new LinkedHashMap<>() : new LinkedHashMap<>(rules);
+        }
+    }
+
+    public static class ModelPrice {
+        /** 输入 Token 每百万单价。 */
+        private double inputPerMillion = 0;
+        /** 输出 Token 每百万单价。 */
+        private double outputPerMillion = 0;
+        /** 单条规则可覆盖默认币种。 */
+        private String currency = "";
+
+        public double getInputPerMillion() { return inputPerMillion; }
+        public void setInputPerMillion(double inputPerMillion) { this.inputPerMillion = inputPerMillion; }
+        public double getOutputPerMillion() { return outputPerMillion; }
+        public void setOutputPerMillion(double outputPerMillion) { this.outputPerMillion = outputPerMillion; }
+        public String getCurrency() { return currency; }
+        public void setCurrency(String currency) { this.currency = currency; }
+    }
+
+    public static class Local {
+        /** 默认本地项目目录；聊天页和桌面端都可以用它作为任务工作区起点。 */
+        private String workspaceRoot = ".clawagent/workspace";
+        /** 默认 Shell 名称；桌面端和 Web 管理台用它提示用户当前命令执行环境。 */
+        private String defaultShell = System.getProperty("os.name", "").toLowerCase().contains("win") ? "powershell" : "sh";
+        /** 本地工具权限模式：ask/auto/full/custom，真实执行仍由 ToolExecutionGuard 做最终判定。 */
+        private String permissionMode = "ask";
+        /** custom 权限模式下默认批准的工具 ID；每次任务仍会写入 metadata 便于审计。 */
+        private List<String> approvedToolIds = new ArrayList<>();
+        /** 允许本地工具访问的根目录；会同步到 execute/filesystem 的 ALLOWED_ROOTS。 */
+        private List<String> allowedRoots = new ArrayList<>(List.of(".clawagent/workspace"));
+        /** 用户确认过的最近项目目录，后续用于快速切换工作区。 */
+        private List<String> recentProjects = new ArrayList<>();
+        /** 项目验证命令，按顺序展示和建议执行，默认仍会结合项目文件自动检测。 */
+        private List<String> testCommands = new ArrayList<>();
+        /** 按项目目录配置的验证命令；用于 monorepo 或多个本地项目共用一套 ClawAgent 的场景。 */
+        private Map<String, List<String>> projectTestCommands = new LinkedHashMap<>();
+        /** 本地开发默认忽略目录；用于搜索、文件审查和摘要，不影响用户显式读取单个文件。 */
+        private List<String> ignorePatterns = new ArrayList<>(List.of(
+                "**/.git/**",
+                ".git/**",
+                "**/.clawagent/**",
+                ".clawagent/**",
+                "**/node_modules/**",
+                "node_modules/**",
+                "**/target/**",
+                "target/**",
+                "**/build/**",
+                "build/**",
+                "**/dist/**",
+                "dist/**",
+                "**/.idea/**",
+                ".idea/**",
+                "**/.vscode/**",
+                ".vscode/**"
+        ));
+        /** 敏感路径模式；filesystem 直接拦截，execute 命中后升为高危审批。 */
+        private List<String> sensitivePathPatterns = new ArrayList<>(List.of(
+                "**/.env",
+                ".env",
+                "**/.env.*",
+                ".env.*",
+                "**/*.key",
+                "**/*.pem",
+                "**/*.p12",
+                "**/*.pfx",
+                "**/.ssh/**",
+                ".ssh/**",
+                "**/.git/**",
+                ".git/**"
+        ));
+
+        public String getWorkspaceRoot() { return workspaceRoot; }
+        public void setWorkspaceRoot(String workspaceRoot) { this.workspaceRoot = workspaceRoot; }
+        public String getDefaultShell() { return defaultShell; }
+        public void setDefaultShell(String defaultShell) { this.defaultShell = defaultShell; }
+        public String getPermissionMode() { return permissionMode; }
+        public void setPermissionMode(String permissionMode) { this.permissionMode = permissionMode; }
+        public List<String> getApprovedToolIds() { return approvedToolIds; }
+        public void setApprovedToolIds(List<String> approvedToolIds) {
+            this.approvedToolIds = approvedToolIds == null ? new ArrayList<>() : new ArrayList<>(approvedToolIds);
+        }
+        public List<String> getAllowedRoots() { return allowedRoots; }
+        public void setAllowedRoots(List<String> allowedRoots) {
+            this.allowedRoots = allowedRoots == null ? new ArrayList<>() : new ArrayList<>(allowedRoots);
+        }
+        public List<String> getRecentProjects() { return recentProjects; }
+        public void setRecentProjects(List<String> recentProjects) {
+            this.recentProjects = recentProjects == null ? new ArrayList<>() : new ArrayList<>(recentProjects);
+        }
+        public List<String> getTestCommands() { return testCommands; }
+        public void setTestCommands(List<String> testCommands) {
+            this.testCommands = testCommands == null ? new ArrayList<>() : new ArrayList<>(testCommands);
+        }
+        public Map<String, List<String>> getProjectTestCommands() { return projectTestCommands; }
+        public void setProjectTestCommands(Map<String, List<String>> projectTestCommands) {
+            this.projectTestCommands = new LinkedHashMap<>();
+            if (projectTestCommands == null) {
+                return;
+            }
+            projectTestCommands.forEach((path, commands) ->
+                    this.projectTestCommands.put(path, commands == null ? new ArrayList<>() : new ArrayList<>(commands)));
+        }
+        public List<String> getIgnorePatterns() { return ignorePatterns; }
+        public void setIgnorePatterns(List<String> ignorePatterns) {
+            this.ignorePatterns = ignorePatterns == null ? new ArrayList<>() : new ArrayList<>(ignorePatterns);
+        }
+        public List<String> getSensitivePathPatterns() { return sensitivePathPatterns; }
+        public void setSensitivePathPatterns(List<String> sensitivePathPatterns) {
+            this.sensitivePathPatterns = sensitivePathPatterns == null ? new ArrayList<>() : new ArrayList<>(sensitivePathPatterns);
+        }
     }
 
     public static class Runtime {
@@ -305,6 +547,7 @@ public class ClawAgentProperties {
         private String client = "openai-compatible";
         private String defaultModel = "deepseek-v4-flash";
         private String memoryModel = "";
+        private String visionModel = "";
         private String planner = "single";
 
         public String getMode() { return mode; }
@@ -315,6 +558,8 @@ public class ClawAgentProperties {
         public void setDefault(String defaultModel) { this.defaultModel = defaultModel; }
         public String getMemoryModel() { return memoryModel; }
         public void setMemoryModel(String memoryModel) { this.memoryModel = memoryModel; }
+        public String getVisionModel() { return visionModel; }
+        public void setVisionModel(String visionModel) { this.visionModel = visionModel; }
         public String getPlanner() { return planner; }
         public void setPlanner(String planner) { this.planner = planner; }
     }
@@ -327,6 +572,7 @@ public class ClawAgentProperties {
         private String apiKeyEnv = "DEEPSEEK_API_KEY";
         private double temperature = 0.2;
         private int timeoutSeconds = 60;
+        private boolean vision = false;
 
         public String getProvider() { return provider; }
         public void setProvider(String provider) { this.provider = provider; }
@@ -342,5 +588,7 @@ public class ClawAgentProperties {
         public void setTemperature(double temperature) { this.temperature = temperature; }
         public int getTimeoutSeconds() { return timeoutSeconds; }
         public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+        public boolean isVision() { return vision; }
+        public void setVision(boolean vision) { this.vision = vision; }
     }
 }

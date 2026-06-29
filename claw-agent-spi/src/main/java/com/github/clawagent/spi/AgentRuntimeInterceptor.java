@@ -1,5 +1,7 @@
 package com.github.clawagent.spi;
 
+import com.github.clawagent.core.AgentRequest;
+
 import java.util.Map;
 
 /**
@@ -12,6 +14,13 @@ public interface AgentRuntimeInterceptor {
      */
     default int order() {
         return 0;
+    }
+
+    /**
+     * AgentRequest 创建任务前处理入口。
+     */
+    default AgentRequest beforeRequest(AgentRequest request) {
+        return request;
     }
 
     /**

@@ -14,12 +14,15 @@ import org.apache.commons.exec.PumpStreamHandler;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 本机命令执行工具。
@@ -27,9 +30,12 @@ import java.util.Map;
  */
 public class ExecuteCommandTool implements AgentTool {
     private final ExecuteToolkitProperties properties;
+    private final ExecuteCommandRiskClassifier riskClassifier = new ExecuteCommandRiskClassifier();
+    private final ProjectWorkingDirectoryResolver cwdResolver;
 
     public ExecuteCommandTool(ExecuteToolkitProperties properties) {
         this.properties = properties == null ? new ExecuteToolkitProperties() : properties;
+        this.cwdResolver = new ProjectWorkingDirectoryResolver(this.properties);
     }
 
     @Override
@@ -42,21 +48,28 @@ public class ExecuteCommandTool implements AgentTool {
         return new ToolDefinition(
                 "builtin.execute.command",
                 "Execute Command",
-                "在本机执行命令。高危工具，默认关闭且需要审批；参数必须使用 command + args，不执行整段 shell 字符串。",
+                "在本机执行命令。会按 command + args 动态评估风险；查询类命令默认允许，写入/删除/脚本/安装等高危命令需要审批。",
                 "high",
                 ToolDefinition.objectSchema(schema, false, List.of("command")));
+    }
+
+    public String riskLevel(ToolCall call) {
+        return assessRisk(call).riskLevel();
     }
 
     @Override
     public ToolResult execute(ToolCall call, AgentContext context) {
         try {
-            String command = required(call, "command");
-            List<String> args = args(call);
-            Path cwd = resolveCwd(call.arguments().get("cwd"));
+            CommandInvocation invocation = commandInvocation(call);
+            CommandRiskAssessment assessment = riskClassifier.classify(
+                    invocation.command(),
+                    invocation.args(),
+                    properties.getSensitivePathPatterns());
+            Path cwd = resolveCwd(call.arguments().get("cwd"), invocation, context);
             long timeoutMs = longArg(call, "timeoutMs", properties.getTimeoutMs());
 
-            CommandLine commandLine = new CommandLine(command);
-            for (String arg : args) {
+            CommandLine commandLine = new CommandLine(invocation.executable());
+            for (String arg : invocation.args()) {
                 commandLine.addArgument(arg, false);
             }
 
@@ -71,9 +84,21 @@ public class ExecuteCommandTool implements AgentTool {
             long started = System.nanoTime();
             int exitCode = execute(executor, commandLine);
             long elapsedMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-            return ToolResult.success(format(exitCode, stdout, stderr, elapsedMs));
+            return ToolResult.success(format(invocation.command(), invocation.args(), cwd, assessment, exitCode, stdout, stderr, elapsedMs));
         } catch (Exception e) {
             return ToolResult.error(e.getMessage());
+        }
+    }
+
+    public CommandRiskAssessment assessRisk(ToolCall call) {
+        try {
+            CommandInvocation invocation = commandInvocation(call);
+            return riskClassifier.classify(
+                    invocation.command(),
+                    invocation.args(),
+                    properties.getSensitivePathPatterns());
+        } catch (RuntimeException e) {
+            return CommandRiskAssessment.high("invalid", e.getMessage());
         }
     }
 
@@ -85,21 +110,43 @@ public class ExecuteCommandTool implements AgentTool {
         }
     }
 
-    private Path resolveCwd(String rawCwd) {
-        Path cwd = rawCwd == null || rawCwd.isBlank() ? Path.of(".") : Path.of(rawCwd.trim());
+    Path resolveCwd(String rawCwd) {
+        return resolveCwd(rawCwd, null, null);
+    }
+
+    Path resolveCwd(String rawCwd, CommandInvocation invocation, AgentContext context) {
+        if (invocation != null) {
+            return cwdResolver.resolve(rawCwd, invocation.command(), invocation.args(), context);
+        }
+        boolean useDefaultCwd = rawCwd == null || rawCwd.isBlank();
+        Path cwd = useDefaultCwd ? Path.of(properties.getDefaultCwd()) : Path.of(rawCwd.trim());
         Path resolved = cwd.toAbsolutePath().normalize();
         // 工作目录必须限制在 allowed roots 内，避免模型在未知目录执行命令。
         boolean allowed = properties.allowedRootPaths().stream().anyMatch(resolved::startsWith);
         if (!allowed) {
             throw new IllegalArgumentException("cwd 不在 execute allowed roots 内：" + resolved);
         }
+        if (useDefaultCwd) {
+            try {
+                Files.createDirectories(resolved);
+            } catch (Exception e) {
+                throw new IllegalStateException("创建 execute 默认工作目录失败：" + resolved, e);
+            }
+        }
         return resolved;
     }
 
-    private String format(int exitCode, ByteArrayOutputStream stdout, ByteArrayOutputStream stderr, long elapsedMs) {
-        String out = truncate(stdout.toString(StandardCharsets.UTF_8));
-        String err = truncate(stderr.toString(StandardCharsets.UTF_8));
-        return "exitCode: " + exitCode + "\n"
+    private String format(String command, List<String> args, Path cwd, CommandRiskAssessment assessment,
+                          int exitCode, ByteArrayOutputStream stdout, ByteArrayOutputStream stderr, long elapsedMs) {
+        String out = truncate(CommandOutputDecoder.decode(stdout.toByteArray(), "stdout"));
+        String err = truncate(CommandOutputDecoder.decode(stderr.toByteArray(), "stderr"));
+        return "command: " + command + (args.isEmpty() ? "" : " " + String.join(" ", args)) + "\n"
+                + "cwd: " + cwd + "\n"
+                + "riskLevel: " + assessment.riskLevel() + "\n"
+                + "riskCategory: " + assessment.category() + "\n"
+                + "approvalRequired: " + assessment.approvalRequired() + "\n"
+                + "riskReason: " + assessment.reason() + "\n"
+                + "exitCode: " + exitCode + "\n"
                 + "elapsedMs: " + elapsedMs + "\n"
                 + "stdout:\n" + out + "\n\n"
                 + "stderr:\n" + err;
@@ -118,7 +165,87 @@ public class ExecuteCommandTool implements AgentTool {
         if (raw == null || raw.isBlank()) {
             return List.of();
         }
-        return JSONUtil.parseArray(raw).stream().map(Object::toString).toList();
+        try {
+            return JSONUtil.parseArray(raw).stream().map(Object::toString).toList();
+        } catch (RuntimeException e) {
+            return parseCommandLine("placeholder " + raw).stream().skip(1).toList();
+        }
+    }
+
+    CommandInvocation commandInvocation(ToolCall call) {
+        String rawCommand = required(call, "command");
+        List<String> explicitArgs = args(call);
+        List<String> commandParts = parseCommandLine(rawCommand);
+        String command = commandParts.isEmpty() ? rawCommand : commandParts.get(0);
+        List<String> mergedArgs = new ArrayList<>();
+        if (commandParts.size() > 1) {
+            // 兼容模型把整条命令放进 command 字段的情况，避免把 "npm install" 当作可执行文件名。
+            mergedArgs.addAll(commandParts.subList(1, commandParts.size()));
+        }
+        mergedArgs.addAll(explicitArgs);
+        mergedArgs = normalizeShellArgs(command, mergedArgs);
+        String executable = resolveExecutable(command).orElse(command);
+        return new CommandInvocation(command, executable, List.copyOf(mergedArgs));
+    }
+
+    private List<String> parseCommandLine(String commandLine) {
+        try {
+            CommandLine parsed = CommandLine.parse(commandLine);
+            List<String> parts = new ArrayList<>();
+            parts.add(parsed.getExecutable());
+            parts.addAll(Arrays.asList(parsed.getArguments()));
+            return parts.stream().filter(part -> part != null && !part.isBlank()).toList();
+        } catch (RuntimeException e) {
+            return List.of(commandLine.trim());
+        }
+    }
+
+    private List<String> normalizeShellArgs(String command, List<String> args) {
+        if (!"cmd".equalsIgnoreCase(command) || args.isEmpty()) {
+            return args;
+        }
+        List<String> normalized = new ArrayList<>(args);
+        if ("\\c".equalsIgnoreCase(normalized.get(0)) || "-c".equalsIgnoreCase(normalized.get(0)) || "c".equalsIgnoreCase(normalized.get(0))) {
+            // Windows cmd 的执行开关是 /c；这里修正常见的反斜杠误写，减少模型格式波动。
+            normalized.set(0, "/c");
+        }
+        return normalized;
+    }
+
+    private Optional<String> resolveExecutable(String command) {
+        if (!isWindows() || command.contains("\\") || command.contains("/") || command.contains(".")) {
+            return Optional.empty();
+        }
+        if ("cmd".equalsIgnoreCase(command)) {
+            String comspec = System.getenv("COMSPEC");
+            if (comspec != null && !comspec.isBlank() && Path.of(comspec).toFile().isFile()) {
+                return Optional.of(Path.of(comspec).toAbsolutePath().normalize().toString());
+            }
+            String systemRoot = System.getenv("SystemRoot");
+            if (systemRoot != null && !systemRoot.isBlank()) {
+                Path candidate = Path.of(systemRoot, "System32", "cmd.exe").toAbsolutePath().normalize();
+                if (candidate.toFile().isFile()) {
+                    return Optional.of(candidate.toString());
+                }
+            }
+        }
+        String path = System.getenv("PATH");
+        if (path == null || path.isBlank()) {
+            return Optional.empty();
+        }
+        for (String dir : path.split(";")) {
+            for (String extension : List.of(".exe", ".cmd", ".bat")) {
+                File candidate = Path.of(dir, command + extension).toFile();
+                if (candidate.isFile()) {
+                    return Optional.of(candidate.getAbsolutePath());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 
     private String required(ToolCall call, String name) {
@@ -132,5 +259,11 @@ public class ExecuteCommandTool implements AgentTool {
     private long longArg(ToolCall call, String name, long defaultValue) {
         String value = call.arguments().get(name);
         return value == null || value.isBlank() ? defaultValue : Long.parseLong(value.trim());
+    }
+
+    record CommandInvocation(String command, String executable, List<String> args) {
+        String commandLine() {
+            return command + (args.isEmpty() ? "" : " " + String.join(" ", args));
+        }
     }
 }

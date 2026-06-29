@@ -1,0 +1,44 @@
+{
+  "name": "claw-agent-app",
+  "version": "0.1.0",
+  "description": "ClawAgent App desktop shell, local workbench UI, and remote server client.",
+  "author": "ClawAgent",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "electron/main/main.js",
+  "bin": {
+    "clawagent": "cli/clawagent.mjs"
+  },
+  "scripts": {
+    "dev": "vite --config ui/vite.config.ts --host 127.0.0.1 --port 5180",
+    "build": "tsc -p ui/tsconfig.json && vite build --config ui/vite.config.ts",
+    "cli": "node cli/clawagent.mjs",
+    "electron": "electron electron/main/main.js",
+    "check-java": "node scripts/check-java17.mjs",
+    "package-server": "mvn -f ../pom.xml -pl claw-agent-server -am package -DskipTests",
+    "package-server:clean": "mvn -f ../pom.xml -pl claw-agent-server -am clean package -Dmaven.test.skip=true",
+    "prepare-runtime": "node scripts/prepare-runtime.mjs",
+    "refresh:unpacked": "node scripts/refresh-unpacked.mjs",
+    "dist": "node scripts/run-dist.mjs",
+    "dist:dir": "node scripts/run-dist.mjs --dir"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.5.2",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.19"
+  }
+}

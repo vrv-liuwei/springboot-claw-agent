@@ -116,12 +116,19 @@ public class KnowledgeService {
      * 聊天请求进入模型前，按用户行为和语义选择“读文档”或“检索”后注入上下文。
      */
     public AgentRequest enrichForModel(AgentRequest request) {
-        if (request == null || request.input() == null || request.input().isBlank()) {
+        if (request == null) {
             return request;
         }
         Map<String, String> originalMetadata = request.metadata();
+        if (!value(originalMetadata, METADATA_CONTEXT_KEY).isBlank()) {
+            return request;
+        }
         List<String> attachmentDocumentIds = idsFromMetadata(originalMetadata, METADATA_ATTACHMENT_DOCUMENT_IDS_KEY);
         List<String> selectedDocumentIds = selectedDocumentIds(originalMetadata);
+        boolean hasScopedDocuments = !attachmentDocumentIds.isEmpty() || !selectedDocumentIds.isEmpty();
+        if ((request.input() == null || request.input().isBlank()) && !hasScopedDocuments) {
+            return request;
+        }
         boolean enabled = Boolean.parseBoolean(value(originalMetadata, METADATA_ENABLED_KEY));
         KnowledgeRoute route = route(request.input(), originalMetadata, attachmentDocumentIds, selectedDocumentIds, enabled);
         if (route.intent() == KnowledgeIntent.NONE) {
@@ -209,6 +216,9 @@ public class KnowledgeService {
             return new KnowledgeRoute(KnowledgeIntent.NONE, "none", List.of());
         }
         KnowledgeIntent explicitIntent = explicitIntent(metadata);
+        if ((input == null || input.isBlank()) && explicitIntent == KnowledgeIntent.NONE && !documentIds.isEmpty()) {
+            return new KnowledgeRoute(KnowledgeIntent.SUMMARY, scope, documentIds);
+        }
         KnowledgeIntent intent = explicitIntent == KnowledgeIntent.NONE ? inferIntent(input, scope) : explicitIntent;
         return new KnowledgeRoute(intent, scope, documentIds);
     }

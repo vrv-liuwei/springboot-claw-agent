@@ -12,8 +12,10 @@ import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.TodoStore;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -42,6 +44,12 @@ public class TodoCreatePlanTool implements AgentTool {
     @Override
     public ToolResult execute(ToolCall call, AgentContext context) {
         try {
+            List<TodoItem> existing = todoStore.listTodoItems(context.task().sessionId(), "", 200);
+            List<TodoItem> incompleteExisting = activeIncompleteItems(existing);
+            if (isContinuationRequest(context.task().input()) && !incompleteExisting.isEmpty()) {
+                // 续跑同一会话时沿用原计划，避免模型反复 create_plan 导致 Todo 计数和 order 定位漂移。
+                return ToolResult.success(formatExisting(incompleteExisting));
+            }
             JSONArray rawItems = JSONUtil.parseArray(required(call, "items"));
             List<TodoItem> items = new ArrayList<>();
             for (int i = 0; i < rawItems.size(); i++) {
@@ -87,6 +95,50 @@ public class TodoCreatePlanTool implements AgentTool {
                     .append(item.title()).append("\n");
         }
         return builder.toString();
+    }
+
+    private String formatExisting(List<TodoItem> items) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("existingPlan: true\n");
+        builder.append("remaining: ").append(items.size()).append("\n");
+        for (TodoItem item : items) {
+            builder.append("- [").append(item.status()).append("] ")
+                    .append(item.id()).append(" ")
+                    .append(item.itemOrder()).append(". ")
+                    .append(item.title()).append("\n");
+        }
+        builder.append("继续任务时不要重新创建 Todo 计划，请使用这些已有 Todo 的 id 或 order 更新状态。");
+        return builder.toString();
+    }
+
+    private List<TodoItem> activeIncompleteItems(List<TodoItem> items) {
+        String taskId = activePlanTaskId(items);
+        if (taskId.isBlank()) {
+            return List.of();
+        }
+        return items.stream()
+                .filter(item -> taskId.equals(item.taskId()))
+                .filter(this::isIncomplete)
+                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
+                .toList();
+    }
+
+    private String activePlanTaskId(List<TodoItem> items) {
+        return items.stream()
+                .filter(this::isIncomplete)
+                .min(Comparator.comparing(TodoItem::createdAt))
+                .map(TodoItem::taskId)
+                .orElse("");
+    }
+
+    private boolean isIncomplete(TodoItem item) {
+        String status = item.status() == null ? "" : item.status().toLowerCase(Locale.ROOT);
+        return "pending".equals(status) || "running".equals(status);
+    }
+
+    private boolean isContinuationRequest(String input) {
+        String value = input == null ? "" : input.toLowerCase(Locale.ROOT);
+        return value.contains("继续") || value.contains("接着") || value.contains("续跑") || value.contains("continue");
     }
 
     private String required(ToolCall call, String name) {

@@ -12,6 +12,8 @@ public interface McpRegistry {
 
     McpServerRegistration register(McpServerConfig config);
 
+    McpServerRegistration update(String serverId, McpServerConfig config);
+
     List<McpServerRegistration> importServers(String json);
 
     McpServerRegistration connect(String serverId);
@@ -41,4 +43,6 @@ public interface McpRegistry {
     List<McpServerRegistration> list();
 
     void disable(String serverId);
+
+    boolean delete(String serverId);
 }

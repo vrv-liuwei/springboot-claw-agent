@@ -89,6 +89,26 @@ public class FileMcpRegistry implements McpRegistry {
     }
 
     @Override
+    public synchronized McpServerRegistration update(String serverId, McpServerConfig config) {
+        if (serverId == null || serverId.isBlank()) {
+            throw new IllegalArgumentException("MCP Server id 不能为空");
+        }
+        McpServerConfig update = withServerId(serverId, config);
+        McpServerConfig normalized = normalize(update, update.enabled());
+        saveServer(normalized);
+        if (!normalized.enabled()) {
+            clearRuntimeState(serverId, true);
+            markStatus(serverId, McpServerStatus.DISABLED, "updated and disabled");
+        } else if (clients.containsKey(serverId)) {
+            // 配置变更后旧 client 已不可信，等待用户或下一次调用重新连接。
+            clearRuntimeState(serverId, true);
+            markStatus(serverId, McpServerStatus.REGISTERED, "updated, reconnect required");
+        }
+        log.info("mcp server updated id={} name={} paths={}", normalized.id(), normalized.name(), storePaths);
+        return registrationWithRuntimeStatus(normalized);
+    }
+
+    @Override
     public synchronized List<McpServerRegistration> importServers(String json) {
         List<McpServerRegistration> registrations = new ArrayList<>();
         for (McpServerConfig config : importer.parse(json)) {
@@ -122,6 +142,7 @@ public class FileMcpRegistry implements McpRegistry {
             markStatus(serverId, McpServerStatus.CONNECTED, "connected");
             return registrationWithRuntimeStatus(registration.config());
         } catch (RuntimeException e) {
+            clearRuntimeState(serverId, true);
             markStatus(serverId, McpServerStatus.FAILED, e.getMessage());
             throw e;
         }
@@ -157,14 +178,7 @@ public class FileMcpRegistry implements McpRegistry {
     @Override
     public synchronized McpServerRegistration disconnect(String serverId) {
         McpServerRegistration registration = require(serverId);
-        McpClient client = clients.remove(serverId);
-        if (client != null) {
-            client.close();
-        }
-        tools.remove(serverId);
-        resources.remove(serverId);
-        prompts.remove(serverId);
-        toolRegistry.unregisterByPrefix("mcp." + serverId + ".");
+        clearRuntimeState(serverId, true);
         markStatus(serverId, McpServerStatus.REGISTERED, "disconnected");
         return registrationWithRuntimeStatus(registration.config());
     }
@@ -172,18 +186,26 @@ public class FileMcpRegistry implements McpRegistry {
     @Override
     public synchronized List<McpToolDescriptor> refreshTools(String serverId) {
         McpClient client = connectedClient(serverId);
-        List<McpToolDescriptor> descriptors = client.listTools();
-        tools.put(serverId, descriptors);
-        toolRegistry.unregisterByPrefix("mcp." + serverId + ".");
-        McpServerConfig config = loadAllConfigs().get(serverId);
-        List<String> autoApprove = config == null ? List.of() : config.autoApprove();
+        try {
+            List<McpToolDescriptor> descriptors = client.listTools();
+            tools.put(serverId, descriptors);
+            toolRegistry.unregisterByPrefix("mcp." + serverId + ".");
+            McpServerConfig config = loadAllConfigs().get(serverId);
+            List<String> autoApprove = config == null ? List.of() : config.autoApprove();
 
-        // MCP tool 使用 mcp.<serverId>.<toolName> 前缀注册，避免和本地工具、Skill 工具冲突。
-        for (McpToolDescriptor descriptor : descriptors) {
-            // MCP autoApprove 正式接入 ToolExecutionGuard：未命中白名单的 MCP tool 默认是 high risk。
-            toolRegistry.registerOrReplace(new McpAgentTool(descriptor, client, isAutoApproved(descriptor, autoApprove)));
+            // MCP tool 使用 mcp.<serverId>.<toolName> 前缀注册，避免和本地工具、Skill 工具冲突。
+            for (McpToolDescriptor descriptor : descriptors) {
+                // MCP autoApprove 正式接入 ToolExecutionGuard：未命中白名单的 MCP tool 默认是 high risk。
+                toolRegistry.registerOrReplace(new McpAgentTool(descriptor, client, isAutoApproved(descriptor, autoApprove)));
+            }
+            markStatus(serverId, McpServerStatus.CONNECTED, "tools refreshed count=" + descriptors.size());
+            return descriptors;
+        } catch (RuntimeException e) {
+            // tools/list 失败通常说明连接已不可用；清理旧工具，防止模型继续调用已断开的 MCP tool。
+            clearRuntimeState(serverId, true);
+            markStatus(serverId, McpServerStatus.FAILED, e.getMessage());
+            throw e;
         }
-        return descriptors;
     }
 
     private boolean isAutoApproved(McpToolDescriptor descriptor, List<String> autoApprove) {
@@ -299,8 +321,44 @@ public class FileMcpRegistry implements McpRegistry {
         }
     }
 
+    @Override
+    public synchronized boolean delete(String serverId) {
+        boolean removed = false;
+        clearRuntimeState(serverId, true);
+        for (Path storePath : storePaths) {
+            if (storePath == null || !Files.exists(storePath)) {
+                continue;
+            }
+            Map<String, McpServerConfig> configs = readConfigs(storePath);
+            if (configs.remove(serverId) != null) {
+                writeConfigs(storePath, configs);
+                removed = true;
+            }
+        }
+        runtimeStatuses.remove(serverId);
+        runtimeMessages.remove(serverId);
+        log.warn("mcp server deleted id={} removed={}", serverId, removed);
+        return removed;
+    }
+
     private McpServerRegistration require(String serverId) {
         return find(serverId).orElseThrow(() -> new IllegalArgumentException("MCP 服务不存在：" + serverId));
+    }
+
+    private void clearRuntimeState(String serverId, boolean closeClient) {
+        McpClient client = clients.remove(serverId);
+        if (closeClient && client != null) {
+            try {
+                client.close();
+            } catch (RuntimeException e) {
+                log.debug("mcp client close ignored serverId={} message={}", serverId, e.getMessage());
+            }
+        }
+        // MCP 运行态由 client、缓存和 AgentToolRegistry 三部分组成，清理时必须保持一致。
+        tools.remove(serverId);
+        resources.remove(serverId);
+        prompts.remove(serverId);
+        toolRegistry.unregisterByPrefix("mcp." + serverId + ".");
     }
 
     private McpClient connectedClient(String serverId) {
@@ -424,6 +482,19 @@ public class FileMcpRegistry implements McpRegistry {
         }
     }
 
+    private void writeConfigs(Path storePath, Map<String, McpServerConfig> configs) {
+        try {
+            Path parent = storePath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            objectMapper.writeValue(storePath.toFile(), toStandardMcpConfig(configs));
+            log.debug("mcp server file rewritten count={} path={}", configs.size(), storePath);
+        } catch (IOException e) {
+            throw new IllegalStateException("MCP Server 配置保存失败：" + e.getMessage(), e);
+        }
+    }
+
     private Map<String, McpServerConfig> readConfigs(Path storePath) {
         Map<String, McpServerConfig> configs = new LinkedHashMap<>();
         if (storePath == null || !Files.exists(storePath)) {
@@ -529,5 +600,24 @@ public class FileMcpRegistry implements McpRegistry {
 
     private String slug(String value) {
         return value == null ? "" : value.trim().toLowerCase().replaceAll("[^a-z0-9._-]+", "-");
+    }
+
+    private McpServerConfig withServerId(String serverId, McpServerConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("MCP Server 配置不能为空");
+        }
+        return new McpServerConfig(
+                serverId.trim(),
+                config.name(),
+                config.transport(),
+                config.endpoint(),
+                config.command(),
+                config.args(),
+                config.env(),
+                config.headers(),
+                config.cwd(),
+                config.timeoutSeconds(),
+                config.autoApprove(),
+                config.enabled());
     }
 }

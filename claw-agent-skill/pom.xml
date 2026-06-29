@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.github.clawagent</groupId>
         <artifactId>springboot-claw-agent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>1.0.0-SNAPSHOT</version>
     </parent>
     <artifactId>claw-agent-skill</artifactId>
     <name>claw-agent-skill</name>
@@ -28,6 +28,12 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

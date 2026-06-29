@@ -41,6 +41,11 @@ public class InMemorySessionStore implements SessionStore, AgentDataCleaner {
     }
 
     @Override
+    public synchronized boolean deleteSession(String sessionId) {
+        return sessions.remove(sessionId) != null;
+    }
+
+    @Override
     public synchronized void clearAllAgentData() {
         // 内存模式下清空当前进程里的所有会话容器。
         sessions.clear();

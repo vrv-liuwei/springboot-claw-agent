@@ -7,6 +7,8 @@ public enum TaskStatus {
     RUNNING,
     /** 任务等待用户审批。 */
     WAITING_APPROVAL,
+    /** 单轮执行已到上限，仍有未完成工作，等待用户继续。 */
+    CONTINUATION_REQUIRED,
     /** 任务已完成。 */
     COMPLETED,
     /** 任务执行失败。 */

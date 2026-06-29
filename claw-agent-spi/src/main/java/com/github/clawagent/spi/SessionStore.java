@@ -17,4 +17,8 @@ public interface SessionStore {
     Optional<AgentSession> findSession(String sessionId);
 
     List<AgentSession> listSessions(int limit);
+
+    default boolean deleteSession(String sessionId) {
+        return false;
+    }
 }

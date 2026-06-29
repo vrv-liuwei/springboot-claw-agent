@@ -323,19 +323,6 @@ public class StdioMcpClient implements McpClient {
     }
 
     private Map<String, String> resolveEnv(Map<String, String> env) {
-        Map<String, String> resolved = new LinkedHashMap<>();
-        env.forEach((key, value) -> resolved.put(key, resolveEnvValue(value)));
-        return resolved;
-    }
-
-    private String resolveEnvValue(String value) {
-        if (value == null) {
-            return "";
-        }
-        if (value.startsWith("${") && value.endsWith("}") && value.length() > 3) {
-            String envName = value.substring(2, value.length() - 1);
-            return System.getenv().getOrDefault(envName, "");
-        }
-        return value;
+        return McpValueResolver.resolveMap(env);
     }
 }

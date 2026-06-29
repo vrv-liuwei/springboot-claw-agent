@@ -6,6 +6,8 @@ import com.github.clawagent.spi.ChatMessage;
 import com.github.clawagent.spi.ChatOptions;
 import com.github.clawagent.spi.ChatStreamCallback;
 import com.github.clawagent.spi.ModelClient;
+import com.github.clawagent.spi.ModelImageInput;
+import com.github.clawagent.spi.MultimodalModelClient;
 import com.github.clawagent.spi.StreamingAgentResponseGenerator;
 import com.github.clawagent.spi.StreamingModelClient;
 
@@ -27,15 +29,22 @@ public class StreamingLlmResponseGenerator extends LlmResponseGenerator implemen
 
     @Override
     public String generateStream(AgentTask task, List<AgentStep> steps, ChatStreamCallback callback) {
+        List<ChatMessage> messages = List.of(
+                ChatMessage.system(systemPrompt()),
+                ChatMessage.user(buildUserPrompt(task, steps)));
+        List<ModelImageInput> images = nativeVisionImages(task);
+        if (!images.isEmpty() && modelClient instanceof MultimodalModelClient multimodalModelClient) {
+            String content = multimodalModelClient.chatWithImages(messages, images, options);
+            callback.onDelta(content);
+            callback.onComplete(content);
+            return content;
+        }
         if (!(modelClient instanceof StreamingModelClient streamingModelClient)) {
             String content = generate(task, steps);
             callback.onDelta(content);
             callback.onComplete(content);
             return content;
         }
-        return streamingModelClient.chatStream(List.of(
-                ChatMessage.system(systemPrompt()),
-                ChatMessage.user(buildUserPrompt(task, steps))
-        ), options, callback);
+        return streamingModelClient.chatStream(messages, options, callback);
     }
 }

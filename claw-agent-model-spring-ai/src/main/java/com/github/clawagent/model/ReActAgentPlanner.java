@@ -79,7 +79,13 @@ public class ReActAgentPlanner implements AgentReActPlanner {
         prompt.append("参数约定：weather 使用 city；time 无参数；builtin.web.search 必须使用 query，其他可选参数以工具定义中当前 Provider 暴露的字段为准；builtin.web.fetch 使用 url，默认 format=markdown、extractMode=readable，可选 extractMode=readable/raw、maxOutputChars、headers(JSON)、timeoutMs、maxBytes。");
         prompt.append("web.search/web.fetch 返回 artifactId 和摘要；已有 artifactId 时，如需原文细节必须优先调用 builtin.content.read，避免重复请求相同 URL 或重复搜索相同 query。");
         prompt.append("实时信息、最新版本、新闻、资料检索、事实核验优先调用 builtin.web.search；拿到具体 URL 后，如需阅读全文再调用 builtin.web.fetch；如果 Observation 已有 artifactId，则用 builtin.content.read 按 query/chunk 读取缓存内容。");
+        prompt.append("用户请求属于简单本地操作时必须走最短路径，例如“启动项目/运行项目/查看状态/执行测试/查看端口/安装依赖”：不要创建 Todo，不要读取业务源码，不要为了确认而遍历文件；只允许做必要的目录/构建文件检查，然后直接调用 execute/process 类工具。");
+        prompt.append("启动项目时，优先使用 builtin.process.start 托管长期进程；只有需要一次性命令输出时才使用 builtin.execute.command。已知项目路径时不要先搜索源码。");
+        prompt.append("执行启动/构建/测试命令前必须确认真实项目目录：如果用户给了项目路径，cwd 必须传该路径；如果只知道 workspace 根目录，先检查一级子目录里的 pom.xml/package.json；多个候选项目时不要执行，先询问用户确认。");
+        prompt.append("只有在编译、启动、测试失败且错误明确指向某个文件时，才读取该文件；禁止无错误地批量读取 Service/Controller/Entity 等业务源码。");
         prompt.append("复杂、多步骤、需要拆解的任务，优先调用 builtin.todo.create_plan，items 参数为 JSON 数组字符串。");
+        prompt.append("单步或低复杂度任务禁止调用 builtin.todo.create_plan，包括启动项目、停止项目、查看日志、查看 git 状态、运行单条命令、读取单个文件。");
+        prompt.append("如果用户是在同一会话中说“继续”“继续完成”“接着做”，并且近期上下文已有未完成 Todo，禁止重新调用 builtin.todo.create_plan，必须继续更新现有 Todo。");
         prompt.append("Todo 执行规则：用户说执行第 N 步时，先用 builtin.todo.update_item 将 order=N 标记为 running，再调用完成该步骤所需工具，成功后再标记 completed，失败则标记 failed。");
         prompt.append("用户说执行全部 Todo 时，按 order 从小到大执行所有 pending/running Todo；每轮 Observation 后继续规划下一步，直到全部完成或遇到阻塞。");
         prompt.append("如果 Observation 提示工具被失败恢复策略阻断，必须换 API/路径/参数，或把当前 Todo 标记为 failed 并说明阻塞原因；禁止重复调用相同工具和相同参数。");
@@ -92,6 +98,10 @@ public class ReActAgentPlanner implements AgentReActPlanner {
         if (!knowledge.isBlank()) {
             prompt.append("知识库上下文：\n").append(knowledge).append("\n\n");
         }
+        String attachments = LlmAgentPlanner.attachmentContext(task);
+        if (!attachments.isBlank()) {
+            prompt.append("附件理解上下文：\n").append(attachments).append("\n\n");
+        }
         String memory = LlmAgentPlanner.memoryContext(task);
         if (!memory.isBlank()) {
             prompt.append("记忆上下文：\n").append(memory).append("\n\n");
@@ -100,7 +110,11 @@ public class ReActAgentPlanner implements AgentReActPlanner {
         if (!context.isBlank()) {
             prompt.append("近期会话上下文：\n").append(context).append("\n\n");
         }
-        prompt.append("用户请求：").append(task.input()).append("\n");
+        String resume = LlmAgentPlanner.resumeContext(task);
+        if (!resume.isBlank()) {
+            prompt.append("任务恢复点：\n").append(resume).append("\n\n");
+        }
+        prompt.append("用户请求：").append(LlmAgentPlanner.displayUserInput(task)).append("\n");
         prompt.append("当前轮次：").append(round).append("\n\n");
         if (observations.isEmpty()) {
             prompt.append("Observation：暂无工具结果。\n");
@@ -210,7 +224,10 @@ public class ReActAgentPlanner implements AgentReActPlanner {
         Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> field = fields.next();
-            arguments.put(field.getKey(), field.getValue().asText());
+            // 工具参数统一传给 ToolCall 的字符串 Map；数组/对象必须保留 JSON，否则 args=["status","--short"] 会被 asText() 读成空串。
+            arguments.put(field.getKey(), field.getValue().isTextual()
+                    ? field.getValue().asText()
+                    : field.getValue().toString());
         }
         return arguments;
     }

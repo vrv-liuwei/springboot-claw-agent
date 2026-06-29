@@ -6,6 +6,52 @@
 
 ## 快速启动
 
+推荐使用仓库根目录的一键启动脚本。脚本会检查端口、构建管理台前端、打包服务端，并启动 Spring Boot 服务。
+
+Windows PowerShell：
+
+```powershell
+cd D:\workspace\codex\springboot-claw-agent
+$env:DEEPSEEK_API_KEY='你的 DeepSeek API Key'
+.\start-clawagent.ps1
+```
+
+后台启动：
+
+```powershell
+.\start-clawagent.ps1 -Background
+```
+
+后台启动会等待 Health API 变为 `UP`，默认超时 60 秒；需要调整时使用：
+
+```powershell
+.\start-clawagent.ps1 -Background -HealthTimeoutSeconds 120
+```
+
+Linux / macOS：
+
+```bash
+cd /path/to/springboot-claw-agent
+export DEEPSEEK_API_KEY='你的 DeepSeek API Key'
+sh ./start-clawagent.sh
+```
+
+Linux / macOS 后台启动并等待健康检查：
+
+```bash
+BACKGROUND=true HEALTH_TIMEOUT_SECONDS=120 sh ./start-clawagent.sh
+```
+
+默认访问：
+
+- Admin Console: `http://localhost:17891/admin/index.html`
+- Web Console: `http://localhost:17891/console/index.html`
+- Health API: `http://localhost:17891/api/v1/health`
+
+如果端口被占用，Windows 使用 `.\start-clawagent.ps1 -Port 17892`，Linux / macOS 使用 `PORT=17892 sh ./start-clawagent.sh`。
+
+手动启动方式如下：
+
 ```powershell
 cd D:\workspace\codex\springboot-claw-agent
 
@@ -14,7 +60,7 @@ $env:Path="$env:JAVA_HOME\bin;D:\tools\Java\apache-maven-3.6.3\bin;$env:Path"
 $env:DEEPSEEK_API_KEY='你的 DeepSeek API Key'
 
 & 'D:\tools\Java\apache-maven-3.6.3\bin\mvn.cmd' clean package -DskipTests
-& 'D:\tools\Java\64\jdk17.0.7\bin\java.exe' -jar .\claw-agent-server\target\claw-agent-server-0.1.0-SNAPSHOT.jar
+& 'D:\tools\Java\64\jdk17.0.7\bin\java.exe' -jar .\claw-agent-server\target\claw-agent-server-0.1.0-SNAPSHOT.jar --server.port=17891
 ```
 
 ## 常用命令
@@ -65,12 +111,12 @@ Start-Process `
   -WindowStyle Hidden
 ```
 
-如果默认端口 `17890` 被占用，可以临时指定其他端口：
+如果默认端口 `17891` 被占用，可以临时指定其他端口：
 
 ```powershell
 & 'D:\tools\Java\64\jdk17.0.7\bin\java.exe' `
   -jar .\claw-agent-server\target\claw-agent-server-0.1.0-SNAPSHOT.jar `
-  --server.port=17890
+  --server.port=17892
 ```
 
 ### Stop
@@ -78,19 +124,19 @@ Start-Process `
 按端口停止服务：
 
 ```powershell
-$port=17890
+$port=17891
 $pid=(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess
 if ($pid) {
   Stop-Process -Id $pid
 }
 ```
 
-如果本地验证时使用了 `17891`，把 `$port` 改成 `17891`。
+如果本地验证时使用了其他端口，把 `$port` 改成对应端口。
 
 ### Check
 
 ```powershell
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/health'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/health'
 ```
 
 ### Logs
@@ -142,7 +188,7 @@ $body = @{
 } | ConvertTo-Json -Depth 5
 
 Invoke-WebRequest `
-  -Uri 'http://localhost:17890/api/v1/tasks/stream' `
+  -Uri 'http://localhost:17891/api/v1/tasks/stream' `
   -Method Post `
   -Body $body `
   -ContentType 'application/json; charset=utf-8'
@@ -152,12 +198,12 @@ Invoke-WebRequest `
 
 默认访问：
 
-- Web Console: `http://localhost:17890/console/index.html`
-- Admin Console: `http://localhost:17890/admin/index.html`
-- Health API: `http://localhost:17890/api/v1/health`
-- Assistant API: `http://localhost:17890/api/v1/assistant?query=北京天气和计算2+3*4`
-- Session API: `http://localhost:17890/api/v1/sessions`
-- MCP Server API: `http://localhost:17890/api/v1/mcp/servers`
+- Web Console: `http://localhost:17891/console/index.html`
+- Admin Console: `http://localhost:17891/admin/index.html`
+- Health API: `http://localhost:17891/api/v1/health`
+- Assistant API: `http://localhost:17891/api/v1/assistant?query=北京天气和计算2+3*4`
+- Session API: `http://localhost:17891/api/v1/sessions`
+- MCP Server API: `http://localhost:17891/api/v1/mcp/servers`
 
 默认数据目录：
 
@@ -442,7 +488,7 @@ React + Vite 正式管理台源码模块。
 
 - React 管理台源码：`src/App.tsx`、`src/api.ts`、`src/styles.css`。
 - 管理台构建配置：`vite.config.ts`。
-- 开发代理：本地 `npm run dev` 时把 `/api` 代理到 `http://localhost:17890`。
+- 开发代理：本地 `npm run dev` 时把 `/api` 代理到 `http://localhost:17891`。
 - 构建产物输出：`claw-agent-server/src/main/resources/static/admin`，由 Spring Boot 直接通过 `/admin/index.html` 访问。
 
 当前管理台采用运维控制台布局，不复用原生 Web Console。已提供：
@@ -473,7 +519,7 @@ npm run build
 构建后访问：
 
 ```text
-http://localhost:17890/admin/index.html
+http://localhost:17891/admin/index.html
 ```
 
 原生聊天调试页面 `/console/index.html` 保留，用于快速测试任务流式交互。
@@ -484,7 +530,7 @@ http://localhost:17890/admin/index.html
 
 主要包含：
 
-- 默认端口 `17890`。
+- 默认端口 `17891`。
 - REST API：
   - health
   - task
@@ -586,7 +632,7 @@ $body = @{
 } | ConvertTo-Json -Depth 5
 
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/sessions' `
+  -Uri 'http://localhost:17891/api/v1/sessions' `
   -Method Post `
   -Body $body `
   -ContentType 'application/json; charset=utf-8'
@@ -595,12 +641,12 @@ Invoke-RestMethod `
 查询会话：
 
 ```powershell
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions?limit=20'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/tasks?limit=20'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/messages?limit=100'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/token-usage?limit=1000'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/tasks/{taskId}/token-usage'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/sessions?limit=20'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/sessions/{sessionId}'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/sessions/{sessionId}/tasks?limit=20'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/sessions/{sessionId}/messages?limit=100'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/sessions/{sessionId}/token-usage?limit=1000'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/tasks/{taskId}/token-usage'
 ```
 
 Token usage 聚合来自任务事件中的 `llm.call` 记录，返回 `callCount`、`promptTokens`、`completionTokens`、`totalTokens`，并按 `model` 和 `phase` 做分组。当前只统计 token，费用换算规则属于后续观测增强。
@@ -609,7 +655,7 @@ Token usage 聚合来自任务事件中的 `llm.call` 记录，返回 `callCount
 
 ```powershell
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/sessions/{sessionId}/summary?limit=80' `
+  -Uri 'http://localhost:17891/api/v1/sessions/{sessionId}/summary?limit=80' `
   -Method Post
 ```
 
@@ -688,7 +734,7 @@ $body = @{
 } | ConvertTo-Json -Depth 10
 
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/mcp/import' `
+  -Uri 'http://localhost:17891/api/v1/mcp/import' `
   -Method Post `
   -Body $body `
   -ContentType 'application/json; charset=utf-8'
@@ -710,7 +756,7 @@ $body = @{
 } | ConvertTo-Json -Depth 5
 
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/mcp/servers' `
+  -Uri 'http://localhost:17891/api/v1/mcp/servers' `
   -Method Post `
   -Body $body `
   -ContentType 'application/json; charset=utf-8'
@@ -719,25 +765,25 @@ Invoke-RestMethod `
 查询 MCP Server：
 
 ```powershell
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/mcp/servers'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/mcp/servers/filesystem'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/mcp/servers'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/mcp/servers/filesystem'
 ```
 
 连接并刷新 MCP tools：
 
 ```powershell
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/mcp/servers/filesystem/connect' -Method Post
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/mcp/servers/filesystem/tools'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/mcp/servers/filesystem/resources'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/mcp/servers/filesystem/prompts'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/tools'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/mcp/servers/filesystem/connect' -Method Post
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/mcp/servers/filesystem/tools'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/mcp/servers/filesystem/resources'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/mcp/servers/filesystem/prompts'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/tools'
 ```
 
 读取 MCP Resource：
 
 ```powershell
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/mcp/servers/filesystem/resources/read?uri=file:///D:/workspace/codex/README.md'
+  -Uri 'http://localhost:17891/api/v1/mcp/servers/filesystem/resources/read?uri=file:///D:/workspace/codex/README.md'
 ```
 
 获取 MCP Prompt：
@@ -746,7 +792,7 @@ Invoke-RestMethod `
 $body = @{ arguments = @{} } | ConvertTo-Json -Depth 5
 
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/mcp/servers/demo/prompts/demo-prompt/get' `
+  -Uri 'http://localhost:17891/api/v1/mcp/servers/demo/prompts/demo-prompt/get' `
   -Method Post `
   -Body $body `
   -ContentType 'application/json; charset=utf-8'
@@ -814,7 +860,7 @@ $body = @{
 } | ConvertTo-Json -Depth 10
 
 Invoke-RestMethod `
-  -Uri 'http://localhost:17890/api/v1/skills' `
+  -Uri 'http://localhost:17891/api/v1/skills' `
   -Method Post `
   -Body $body `
   -ContentType 'application/json; charset=utf-8'
@@ -823,10 +869,10 @@ Invoke-RestMethod `
 查询和启停：
 
 ```powershell
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/skills'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/skills/demo-skill'
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/skills/demo-skill/disable' -Method Post
-Invoke-RestMethod -Uri 'http://localhost:17890/api/v1/skills/demo-skill/enable' -Method Post
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/skills'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/skills/demo-skill'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/skills/demo-skill/disable' -Method Post
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/skills/demo-skill/enable' -Method Post
 ```
 
 ### Skill Executor
@@ -923,7 +969,7 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成 SQLite3 单机持久化。
 - 已完成 Markdown 记忆目录初始化。
 - 已完成 Spring Boot starter 自动配置。
-- 已完成独立 server，默认端口 `17890`。
+- 已完成独立 server，默认端口 `17891`。
 - 已完成最小 Web Console。
 - 已新增 React + Vite 管理台源码模块 `claw-agent-admin`，构建后访问 `/admin/index.html`。
 - 已完成内置工具：天气、时间、WebFetch、WebSearch、Filesystem。
@@ -944,18 +990,18 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成 EmbeddingClient SPI 和 OpenAI 兼容 Embeddings 客户端。
 - 已完成内置 filesystem 工具：读取文本、列目录、搜索文件、文件信息、受控写入。
 - 已新增 React + Vite 管理台入口 `/admin/index.html`，原 `/console/index.html` 保留。
-- 已完成智能体定时任务与自动化基础能力：创建、编辑、启停、固定间隔、Cron、单次执行、立即运行、运行历史和管理台页面。
+- 已完成智能体定时任务与自动化基础能力：创建、编辑、启停、固定间隔、Cron、单次执行、立即运行、运行历史、失败重试、退避策略、重试耗尽后暂停、耗时/Token/工具链路聚合和管理台页面。
 
 ## 未完成能力
 
-- 智能体定时任务增强：失败重试、退避策略、运行历史中的 Token/工具链路聚合仍需补充。
+- 智能体定时任务增强：后续只补更细的统计报表和趋势分析。
 - 记忆质量治理需要继续增强：当前已支持长期记忆本地入库、FTS5/JVector/RRF 检索、命中记录、候选审核和管理台页面；去重、冲突处理、过期策略仍需增强。
-- React + Vite 正式管理台持续优化：后台新增的业务能力必须同步补充管理台页面；原 `/console/index.html` 暂时保留。
+- React + Vite 正式管理台持续优化：已覆盖内置能力/权限、Token 成本、审计、自动化、文件审查、进程、记忆和本地配置；后台新增的业务能力仍必须同步补充管理台页面；原 `/console/index.html` 暂时保留。
 - Shell/cmd/PowerShell 工具：第一阶段查询类命令不审批，删除/覆盖等破坏性操作必须用户确认；`claw-agent-worker` 隔离执行后续再做。
 - Skill 目录风格和加载逻辑调整：每个 Skill 独立保存到 `.clawagent/skills/<skillId>/`，完整加载 `manifest.json`、`SKILL.md`、`scripts/`、`assets/`、`references/`、`lib/` 等资源。
 - MCP 健壮性继续增强：当前已有 timeout、启动隔离和运行态按需重连；更复杂的断线检测和会话级关闭策略后续补充。
 - MCP `autoApprove` 已接入工具风险等级，通道级审批策略仍在 M4 扩展。
-- Prompt Injection Defense、审批、限流、PermissionPolicy 等安全治理。
+- Prompt Injection Defense 和本地审批主链路已落地；限流、企业级 PermissionPolicy 和 Channel/User/Agent 维度权限矩阵后续补充。
 - 通道 Channel、Auth、设备配对等治理项。
 - MySQL / PostgreSQL 持久化实现。
 - 企业级 VectorStore Provider 实现。
@@ -979,3 +1025,14 @@ clawagent:
 ## 后期计划
 
 后期计划和已完成/未完成标记见 [docs/CLAWAGENT-ROADMAP.md](docs/CLAWAGENT-ROADMAP.md)。
+
+## 配置说明
+
+本地运行、模型、Vision 图片理解、附件入口、DDIO 通道和编译命令已整理到 [CONFIGURATION.md](CONFIGURATION.md)。
+
+重点约定：
+
+- `AgentRequest.input` 只表示用户输入的文字问题。
+- 图片、文件和视频统一通过 `metadata.attachments` JSON 字符串传入。
+- 默认模型 `vision: true` 时，图片直接进入默认模型；否则才使用 `model.vision-model` 做图片描述 fallback。
+- DDIO 公众号回调入口为 `/ddio/message`，通道配置可放在 `clawagent.channels.configs` 或 `.clawagent/channels/channels.json`。

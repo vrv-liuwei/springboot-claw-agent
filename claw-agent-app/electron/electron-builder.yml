@@ -1,0 +1,24 @@
+appId: com.github.clawagent.app
+productName: ClawAgent
+directories:
+  output: dist
+files:
+  - electron/**
+  - cli/**
+  - shared/**
+  - package.json
+extraResources:
+  - from: ../claw-agent-server/target/claw-agent-server-0.1.0-SNAPSHOT.jar
+    to: server/claw-agent-server.jar
+  - from: runtime/java17
+    to: runtime/java17
+  - from: cli
+    to: cli
+  - from: shared
+    to: shared
+win:
+  signAndEditExecutable: false
+  target:
+    - nsis
+nsis:
+  include: build/installer.nsh

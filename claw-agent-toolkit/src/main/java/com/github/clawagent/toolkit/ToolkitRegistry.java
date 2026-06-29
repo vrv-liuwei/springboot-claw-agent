@@ -11,11 +11,18 @@ import com.github.clawagent.toolkit.filesystem.FilesystemAccess;
 import com.github.clawagent.toolkit.filesystem.FilesystemFileInfoTool;
 import com.github.clawagent.toolkit.filesystem.FilesystemListDirectoryTool;
 import com.github.clawagent.toolkit.filesystem.FilesystemReadTextTool;
+import com.github.clawagent.toolkit.filesystem.FilesystemRollbackFileTool;
 import com.github.clawagent.toolkit.filesystem.FilesystemSearchFilesTool;
+import com.github.clawagent.toolkit.filesystem.FilesystemSearchTextTool;
 import com.github.clawagent.toolkit.filesystem.FilesystemToolkitProperties;
 import com.github.clawagent.toolkit.filesystem.FilesystemWriteFileTool;
 import com.github.clawagent.toolkit.github.GithubReadFileTool;
 import com.github.clawagent.toolkit.github.GithubRepoTreeTool;
+import com.github.clawagent.toolkit.process.ManagedProcessStore;
+import com.github.clawagent.toolkit.process.ProcessLogsTool;
+import com.github.clawagent.toolkit.process.ProcessStartTool;
+import com.github.clawagent.toolkit.process.ProcessStatusTool;
+import com.github.clawagent.toolkit.process.ProcessStopTool;
 import com.github.clawagent.toolkit.todo.TodoCreatePlanTool;
 import com.github.clawagent.toolkit.todo.TodoListTool;
 import com.github.clawagent.toolkit.todo.TodoUpdateItemTool;
@@ -45,6 +52,7 @@ public class ToolkitRegistry {
     private final AgentToolRegistry toolRegistry;
     private final ToolkitProperties properties;
     private final TodoStore todoStore;
+    private final ManagedProcessStore processStore = new ManagedProcessStore();
     private boolean loaded;
 
     public ToolkitRegistry(AgentToolRegistry toolRegistry) {
@@ -107,15 +115,24 @@ public class ToolkitRegistry {
             List.of(
                     new FilesystemReadTextTool(access),
                     new FilesystemListDirectoryTool(access),
+                    new FilesystemSearchTextTool(access),
                     new FilesystemWriteFileTool(access),
+                    new FilesystemRollbackFileTool(access),
                     new FilesystemSearchFilesTool(access),
                     new FilesystemFileInfoTool(access)
             ).forEach(toolRegistry::registerOrReplace);
         }
+        ExecuteToolkitProperties executeProperties =
+                ExecuteToolkitProperties.fromEnv(properties.tool(TOOL_EXECUTE).getEnv());
         if (properties.tool(TOOL_EXECUTE).isEnabled()) {
-            ExecuteToolkitProperties executeProperties =
-                    ExecuteToolkitProperties.fromEnv(properties.tool(TOOL_EXECUTE).getEnv());
             toolRegistry.registerOrReplace(new ExecuteCommandTool(executeProperties));
+            // 后台进程属于 execute 能力域，共用 allowed roots、default cwd 和输出限制配置。
+            List.of(
+                    new ProcessStartTool(processStore, executeProperties),
+                    new ProcessStatusTool(processStore, executeProperties),
+                    new ProcessLogsTool(processStore, executeProperties),
+                    new ProcessStopTool(processStore, executeProperties)
+            ).forEach(toolRegistry::registerOrReplace);
         }
         if (properties.tool(TOOL_TODO).isEnabled() && todoStore != null) {
             // Todo 工具依赖持久化 store；没有 store 时跳过，避免 toolkit 直接依赖具体数据库实现。
@@ -133,5 +150,9 @@ public class ToolkitRegistry {
             ).forEach(toolRegistry::registerOrReplace);
         }
         loaded = true;
+    }
+
+    public ManagedProcessStore processStore() {
+        return processStore;
     }
 }

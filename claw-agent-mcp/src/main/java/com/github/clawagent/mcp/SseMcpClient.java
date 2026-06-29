@@ -39,6 +39,10 @@ public class SseMcpClient implements McpClient {
     private final Map<String, CompletableFuture<JsonNode>> pendingResponses = new ConcurrentHashMap<>();
     /** 当前 SSE MCP Server 配置。 */
     private final McpServerConfig config;
+    /** 已解析环境变量占位符的 SSE 入口地址。 */
+    private final String endpoint;
+    /** 已解析环境变量占位符的请求头。 */
+    private final Map<String, String> headers;
     /** JDK HTTP Client，避免引入额外 Web 依赖。 */
     private final HttpClient httpClient;
     /** SSE 服务端下发的消息 POST 地址。 */
@@ -52,6 +56,8 @@ public class SseMcpClient implements McpClient {
 
     public SseMcpClient(McpServerConfig config) {
         this.config = config;
+        this.endpoint = McpValueResolver.resolve(config.endpoint(), config.env());
+        this.headers = McpValueResolver.resolveMap(config.headers(), config.env());
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(config.timeoutSeconds()))
                 .build();
@@ -204,11 +210,11 @@ public class SseMcpClient implements McpClient {
 
     private void readEventStream() {
         try {
-            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(config.endpoint()))
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint))
                     .timeout(Duration.ofSeconds(config.timeoutSeconds()))
                     .header("Accept", "text/event-stream")
                     .GET();
-            config.headers().forEach(builder::header);
+            headers.forEach(builder::header);
             HttpResponse<InputStream> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("HTTP " + response.statusCode());
@@ -251,7 +257,7 @@ public class SseMcpClient implements McpClient {
         }
         if ("endpoint".equals(event)) {
             // endpoint 可能是绝对地址，也可能是相对路径；统一解析成完整 URI。
-            messageEndpoint.complete(URI.create(config.endpoint()).resolve(data));
+            messageEndpoint.complete(URI.create(endpoint).resolve(data));
             return;
         }
         JsonNode json = objectMapper.readTree(data);
@@ -269,11 +275,11 @@ public class SseMcpClient implements McpClient {
     private void post(Map<String, Object> payload) {
         try {
             String body = objectMapper.writeValueAsString(payload);
-            HttpRequest.Builder builder = HttpRequest.newBuilder(messageEndpoint.getNow(URI.create(config.endpoint())))
+            HttpRequest.Builder builder = HttpRequest.newBuilder(messageEndpoint.getNow(URI.create(endpoint)))
                     .timeout(Duration.ofSeconds(config.timeoutSeconds()))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body));
-            config.headers().forEach(builder::header);
+            headers.forEach(builder::header);
             HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("HTTP " + response.statusCode() + " body=" + response.body());
@@ -300,12 +306,12 @@ public class SseMcpClient implements McpClient {
     }
 
     private void requireEndpoint() {
-        if (config.endpoint() == null || config.endpoint().isBlank()) {
+        if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("SSE MCP 需要配置 url/endpoint");
         }
-        String scheme = URI.create(config.endpoint()).getScheme();
+        String scheme = URI.create(endpoint).getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-            throw new IllegalArgumentException("SSE MCP url 只支持 http/https：" + config.endpoint());
+            throw new IllegalArgumentException("SSE MCP url 只支持 http/https：" + endpoint);
         }
     }
 }

@@ -14,8 +14,24 @@ import java.util.stream.Collectors;
  */
 public class ExecuteToolkitProperties {
     private List<String> allowedRoots = new ArrayList<>(List.of("."));
+    private String defaultCwd = ".";
     private long timeoutMs = 30000;
+    private long processWaitMs = 5000;
     private int maxOutputChars = 20000;
+    private List<String> sensitivePathPatterns = new ArrayList<>(List.of(
+            "**/.env",
+            ".env",
+            "**/.env.*",
+            ".env.*",
+            "**/*.key",
+            "**/*.pem",
+            "**/*.p12",
+            "**/*.pfx",
+            "**/.ssh/**",
+            ".ssh/**",
+            "**/.git/**",
+            ".git/**"
+    ));
 
     public List<String> getAllowedRoots() {
         return allowedRoots;
@@ -23,6 +39,14 @@ public class ExecuteToolkitProperties {
 
     public void setAllowedRoots(List<String> allowedRoots) {
         this.allowedRoots = allowedRoots == null ? new ArrayList<>() : new ArrayList<>(allowedRoots);
+    }
+
+    public String getDefaultCwd() {
+        return defaultCwd;
+    }
+
+    public void setDefaultCwd(String defaultCwd) {
+        this.defaultCwd = defaultCwd == null || defaultCwd.isBlank() ? "." : defaultCwd.trim();
     }
 
     public long getTimeoutMs() {
@@ -33,12 +57,28 @@ public class ExecuteToolkitProperties {
         this.timeoutMs = timeoutMs;
     }
 
+    public long getProcessWaitMs() {
+        return processWaitMs;
+    }
+
+    public void setProcessWaitMs(long processWaitMs) {
+        this.processWaitMs = processWaitMs <= 0 ? 5000 : processWaitMs;
+    }
+
     public int getMaxOutputChars() {
         return maxOutputChars;
     }
 
     public void setMaxOutputChars(int maxOutputChars) {
         this.maxOutputChars = maxOutputChars;
+    }
+
+    public List<String> getSensitivePathPatterns() {
+        return sensitivePathPatterns;
+    }
+
+    public void setSensitivePathPatterns(List<String> sensitivePathPatterns) {
+        this.sensitivePathPatterns = sensitivePathPatterns == null ? new ArrayList<>() : new ArrayList<>(sensitivePathPatterns);
     }
 
     public List<Path> allowedRootPaths() {
@@ -61,8 +101,11 @@ public class ExecuteToolkitProperties {
                         (left, right) -> right
                 ));
         properties.setAllowedRoots(listValue(normalized.get("ALLOWED_ROOTS"), properties.getAllowedRoots()));
+        properties.setDefaultCwd(stringValue(normalized.get("DEFAULT_CWD"), properties.getDefaultCwd()));
         properties.setTimeoutMs(longValue(normalized.get("TIMEOUT_MS"), properties.getTimeoutMs()));
+        properties.setProcessWaitMs(longValue(normalized.get("PROCESS_WAIT_MS"), properties.getProcessWaitMs()));
         properties.setMaxOutputChars(intValue(normalized.get("MAX_OUTPUT_CHARS"), properties.getMaxOutputChars()));
+        properties.setSensitivePathPatterns(listValue(normalized.get("SENSITIVE_PATH_PATTERNS"), properties.getSensitivePathPatterns()));
         return properties;
     }
 
@@ -78,6 +121,10 @@ public class ExecuteToolkitProperties {
             return defaultValue;
         }
         return Long.parseLong(value.trim());
+    }
+
+    private static String stringValue(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value.trim();
     }
 
     private static int intValue(String value, int defaultValue) {

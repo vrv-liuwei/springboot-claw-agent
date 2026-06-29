@@ -2,6 +2,8 @@ server:
   port: 17891
 
 spring:
+  profiles:
+    active: dev
   config:
     import:
       - optional:file:.clawagent/config/clawagent.yml
@@ -24,6 +26,12 @@ logging:
 
 clawagent:
   enabled: true
+  auth:
+    api-token-required: false
+    protected-path-patterns:
+      - /api/v1/**
+    excluded-path-patterns:
+      - /api/v1/health
   path:
     base: .clawagent
   attachments:
@@ -57,6 +65,42 @@ clawagent:
     enabled: true
     path:
       - ${clawagent.path.base}/skills
+  channels:
+    adapter-path:
+      - ${clawagent.path.base}/channels/adapters
+    configs:
+      feishu:
+        defaultAccount: main
+        dmPolicy: open
+        accounts:
+          main:
+            name: 主助手 - 飞书机器人
+            enabled: true
+            approvalMode: auto
+            appId: ${FEISHU_APP_ID}
+            appSecret: ${FEISHU_APP_SECRET}
+            outboundMessageType: auto
+      ddio:
+        accounts:
+          main:
+            name: DDIO Bot
+            enabled: true
+            approvalMode: auto
+            appId: ${DDIO_APP_ID}
+            appSecret: ${DDIO_APP_SECRET}
+            baseUrl: ${DDIO_BASE_URL}
+      dingtalk:
+        defaultAccount: main
+        accounts:
+          main:
+            name: 钉钉机器人
+            enabled: true
+            approvalMode: auto
+            connectionMode: stream
+            agentId: ${DINGTALK_AGENT_ID}
+            appKey: ${DINGTALK_APP_KEY}
+            appSecret: ${DINGTALK_APP_SECRET}
+            outboundMessageType: markdown
   runtime:
     max-react-rounds: 15
     sanitization:
@@ -67,6 +111,46 @@ clawagent:
     due-batch-size: 10
     default-channel-id: automation
     default-user-id: automation
+  local:
+    workspace-root: "${clawagent.path.base}/workspace"
+    default-shell: powershell
+    permission-mode: ask
+    approved-tool-ids: []
+    allowed-roots:
+      - "${clawagent.path.base}/workspace"
+    recent-projects: []
+    test-commands: []
+    project-test-commands: {}
+    ignore-patterns:
+      - "**/.git/**"
+      - ".git/**"
+      - "**/.clawagent/**"
+      - ".clawagent/**"
+      - "**/node_modules/**"
+      - "node_modules/**"
+      - "**/target/**"
+      - "target/**"
+      - "**/build/**"
+      - "build/**"
+      - "**/dist/**"
+      - "dist/**"
+      - "**/.idea/**"
+      - ".idea/**"
+      - "**/.vscode/**"
+      - ".vscode/**"
+    sensitive-path-patterns:
+      - "**/.env"
+      - ".env"
+      - "**/.env.*"
+      - ".env.*"
+      - "**/*.key"
+      - "**/*.pem"
+      - "**/*.p12"
+      - "**/*.pfx"
+      - "**/.ssh/**"
+      - ".ssh/**"
+      - "**/.git/**"
+      - ".git/**"
   toolkit:
     enabled: true
     tools:
@@ -103,9 +187,12 @@ clawagent:
       execute:
         enabled: true
         env:
-          ALLOWED_ROOTS: "${clawagent.path.base},${clawagent.path.base}/workspace/codex"
+          ALLOWED_ROOTS: "${clawagent.path.base}"
+          DEFAULT_CWD: "${clawagent.path.base}/workspace"
           TIMEOUT_MS: "30000"
+          PROCESS_WAIT_MS: "5000"
           MAX_OUTPUT_CHARS: "20000"
+          SENSITIVE_PATH_PATTERNS: "**/.env,.env,**/.env.*,.env.*,**/*.key,**/*.pem,**/*.p12,**/*.pfx,**/.ssh/**,.ssh/**,**/.git/**,.git/**"
       todo:
         enabled: true
         env: {}
@@ -113,8 +200,9 @@ clawagent:
         enabled: true
         env:
           READONLY: "false"
-          ALLOWED_ROOTS: "${clawagent.path.base},${clawagent.path.base}/workspace/codex"
-          BLOCKED_PATTERNS: "**/.git/**,**/*.key,**/*.pem,**/.env"
+          ALLOWED_ROOTS: "${clawagent.path.base}"
+          DEFAULT_CWD: "${clawagent.path.base}/workspace"
+          BLOCKED_PATTERNS: "**/.env,.env,**/.env.*,.env.*,**/*.key,**/*.pem,**/*.p12,**/*.pfx,**/.ssh/**,.ssh/**,**/.git/**,.git/**"
           MAX_READ_BYTES: "1048576"
           MAX_SEARCH_RESULTS: "100"
   model:
@@ -122,6 +210,7 @@ clawagent:
     planner: react
     default: deepseek-v4-flash
     memory-model: siliconflow-qwen3-8b
+    vision-model: qwen3-vl
   models:
     deepseek-v4-flash:
       provider: deepseek
@@ -130,6 +219,7 @@ clawagent:
       api-key: ${DEEPSEEK_API_KEY:}
       temperature: 0.2
       timeout-seconds: 60
+      vision: false
     siliconflow-qwen3-8b:
       provider: siliconflow
       base-url: https://api.siliconflow.cn/v1
@@ -137,3 +227,12 @@ clawagent:
       api-key: ${SILICONFLOW_API_KEY:}
       temperature: 0.2
       timeout-seconds: 60
+      vision: false
+    qwen3-vl:
+      provider: dashscope
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: qwen3-vl-flash
+      api-key: ${DASHSCOPE_API_KEY:}
+      temperature: 0.2
+      timeout-seconds: 60
+      vision: true

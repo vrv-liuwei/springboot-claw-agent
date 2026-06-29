@@ -63,18 +63,7 @@ public class FileSkillRegistry implements SkillRegistry {
         SkillManifest manifest = normalize(skillPackage.manifest(), skillPackage.manifest().enabled());
         Path skillDir = skillDir(primaryRoot(), manifest.id());
         try {
-            Files.createDirectories(skillDir);
-            objectMapper.writeValue(skillDir.resolve("manifest.json").toFile(), manifest);
-            if (skillPackage.content() != null && !skillPackage.content().isBlank()) {
-                // 外部 Skill 的入口通常是 SKILL.md，必须按 manifest.entrypoint 落盘，否则脚本说明和触发内容会错位。
-                Files.writeString(safeResolve(skillDir, entrypointOrDefault(manifest)), skillPackage.content(), StandardCharsets.UTF_8);
-            }
-            for (Map.Entry<String, String> resource : skillPackage.resourceFiles().entrySet()) {
-                Path resourcePath = safeResolve(skillDir, resource.getKey());
-                // GitHub Skill 的 scripts/references/assets 等资源随包保存，后续执行器可直接按相对路径读取。
-                Files.createDirectories(resourcePath.getParent());
-                Files.writeString(resourcePath, resource.getValue() == null ? "" : resource.getValue(), StandardCharsets.UTF_8);
-            }
+            writeSkillPackage(skillDir, manifest, skillPackage);
             SkillRegistration registration = new SkillRegistration(manifest, Instant.now(), skillDir.toString(), "INSTALLED", "installed");
             skills.put(manifest.id(), registration);
             syncTools(manifest, skillDir);
@@ -82,6 +71,45 @@ public class FileSkillRegistry implements SkillRegistry {
             return registration;
         } catch (IOException e) {
             throw new IllegalStateException("Skill 保存失败：" + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public synchronized SkillRegistration update(String skillId, SkillPackage skillPackage) {
+        SkillRegistration current = require(skillId);
+        SkillPackage safePackage = skillPackage == null
+                ? new SkillPackage(current.manifest(), null)
+                : skillPackage;
+        SkillManifest sourceManifest = safePackage.manifest() == null ? current.manifest() : safePackage.manifest();
+        // 更新接口不允许通过 body 改 Skill ID，避免管理台编辑 manifest 时误创建另一个目录。
+        SkillManifest manifest = normalize(new SkillManifest(
+                current.manifest().id(),
+                sourceManifest.name(),
+                sourceManifest.version(),
+                sourceManifest.description(),
+                sourceManifest.enabled(),
+                sourceManifest.entrypoint(),
+                sourceManifest.tools(),
+                sourceManifest.permissions(),
+                sourceManifest.metadata()), sourceManifest.enabled());
+        Path skillDir = Path.of(current.installedPath()).normalize();
+        if (!isUnderSkillRoot(skillDir)) {
+            throw new IllegalStateException("Skill 目录不在允许根目录内：" + skillDir);
+        }
+        try {
+            writeSkillPackage(skillDir, manifest, safePackage);
+            SkillRegistration registration = new SkillRegistration(
+                    manifest,
+                    current.installedAt(),
+                    skillDir.toString(),
+                    manifest.enabled() ? "UPDATED" : "DISABLED",
+                    "updated");
+            skills.put(manifest.id(), registration);
+            syncTools(manifest, skillDir);
+            log.info("skill updated id={} path={}", manifest.id(), skillDir);
+            return registration;
+        } catch (IOException e) {
+            throw new IllegalStateException("Skill 更新失败：" + e.getMessage(), e);
         }
     }
 
@@ -96,6 +124,22 @@ public class FileSkillRegistry implements SkillRegistry {
     }
 
     @Override
+    public synchronized boolean delete(String skillId) {
+        SkillRegistration current = skills.remove(skillId);
+        if (current == null) {
+            return false;
+        }
+        unloadSkillTools(skillId);
+        Path skillDir = Path.of(current.installedPath()).normalize();
+        if (!isUnderSkillRoot(skillDir)) {
+            throw new IllegalStateException("Skill 目录不在允许根目录内：" + skillDir);
+        }
+        deleteDirectory(skillDir);
+        log.warn("skill deleted id={} path={}", skillId, skillDir);
+        return true;
+    }
+
+    @Override
     public synchronized Optional<SkillRegistration> find(String skillId) {
         return Optional.ofNullable(skills.get(skillId));
     }
@@ -105,6 +149,15 @@ public class FileSkillRegistry implements SkillRegistry {
         return skills.values().stream()
                 .sorted(Comparator.comparing(registration -> registration.manifest().id()))
                 .toList();
+    }
+
+    @Override
+    public synchronized List<SkillRegistration> refresh() {
+        // 后台修改 Skill 目录后，刷新必须先卸载旧工具，避免禁用或删除的工具继续留在运行态。
+        unloadAllSkillTools();
+        skills.clear();
+        load();
+        return list();
     }
 
     private SkillRegistration setEnabled(String skillId, boolean enabled) {
@@ -124,6 +177,27 @@ public class FileSkillRegistry implements SkillRegistry {
             return registration;
         } catch (IOException e) {
             throw new IllegalStateException("Skill 状态保存失败：" + e.getMessage(), e);
+        }
+    }
+
+    private void writeSkillPackage(Path skillDir, SkillManifest manifest, SkillPackage skillPackage) throws IOException {
+        Files.createDirectories(skillDir);
+        objectMapper.writeValue(skillDir.resolve("manifest.json").toFile(), manifest);
+        if (skillPackage.content() != null && !skillPackage.content().isBlank()) {
+            // 外部 Skill 的入口通常是 SKILL.md，必须按 manifest.entrypoint 落盘，否则脚本说明和触发内容会错位。
+            Files.writeString(safeResolve(skillDir, entrypointOrDefault(manifest)), skillPackage.content(), StandardCharsets.UTF_8);
+        }
+        for (Map.Entry<String, String> resource : skillPackage.resourceFiles().entrySet()) {
+            Path resourcePath = safeResolve(skillDir, resource.getKey());
+            // GitHub Skill 的 scripts/references/assets 等资源随包保存，后续执行器可直接按相对路径读取。
+            Files.createDirectories(resourcePath.getParent());
+            Files.writeString(resourcePath, resource.getValue() == null ? "" : resource.getValue(), StandardCharsets.UTF_8);
+        }
+        for (Map.Entry<String, byte[]> resource : skillPackage.binaryResourceFiles().entrySet()) {
+            Path resourcePath = safeResolve(skillDir, resource.getKey());
+            // Java Skill 的 lib/*.jar 必须按字节保存，不能经过字符串转换。
+            Files.createDirectories(resourcePath.getParent());
+            Files.write(resourcePath, resource.getValue() == null ? new byte[0] : resource.getValue());
         }
     }
 
@@ -204,6 +278,7 @@ public class FileSkillRegistry implements SkillRegistry {
             return;
         }
         String prefix = toolPrefix(manifest.id());
+        toolRegistry.unregister("skill." + manifest.id());
         toolRegistry.unregisterByPrefix(prefix);
         if (!manifest.enabled()) {
             log.info("skill tools disabled skillId={}", manifest.id());
@@ -228,6 +303,24 @@ public class FileSkillRegistry implements SkillRegistry {
         return registration;
     }
 
+    private void unloadAllSkillTools() {
+        if (toolRegistry == null) {
+            return;
+        }
+        for (String skillId : skills.keySet()) {
+            unloadSkillTools(skillId);
+        }
+    }
+
+    private void unloadSkillTools(String skillId) {
+        if (toolRegistry == null) {
+            return;
+        }
+        // 同时清理默认工具 skill.<id> 和子工具 skill.<id>.*，保证刷新、禁用、删除后的工具表和 manifest 一致。
+        toolRegistry.unregister("skill." + skillId);
+        toolRegistry.unregisterByPrefix(toolPrefix(skillId));
+    }
+
     private Path primaryRoot() {
         return roots.get(0);
     }
@@ -249,6 +342,25 @@ public class FileSkillRegistry implements SkillRegistry {
             throw new IllegalArgumentException("Skill 文件路径越权：" + relativePath);
         }
         return target;
+    }
+
+    private boolean isUnderSkillRoot(Path skillDir) {
+        for (Path root : roots) {
+            if (skillDir.startsWith(root.normalize())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void deleteDirectory(Path skillDir) {
+        try (var stream = Files.walk(skillDir)) {
+            for (Path path : stream.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Skill 删除失败：" + e.getMessage(), e);
+        }
     }
 
     private String entrypointOrDefault(SkillManifest manifest) {

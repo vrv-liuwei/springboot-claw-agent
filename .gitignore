@@ -4,8 +4,19 @@ bin/
 **/bin/
 .omx/
 node_modules/
+
+claw-agent-channel-ddio/
 claw-agent-admin/dist/
+claw-agent-app/dist/
+claw-agent-app/runtime/
+claw-agent-app/.clawagent/
+
+
+.npm-cache/
+.electron-cache/
+.electron-builder-cache/
 docs/
+.tmp-hermes-agent
 
 scripts/
 .codegraph/
@@ -30,6 +41,12 @@ logs/
 .clawagent/npm-cache
 .clawagent/knowledge
 .clawagent/attachments
+.clawagent/config/
+.clawagent/auth/
+.clawagent/channels/
+.clawagent/workspace/
+**/application-dev.yml
+
 
 # Keep editable MCP and Skill definitions, but ignore transient legacy/runtime files
 .clawagent/mcp/servers.json
