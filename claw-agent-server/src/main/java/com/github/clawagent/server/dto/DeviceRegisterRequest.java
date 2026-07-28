@@ -1,5 +1,6 @@
 package com.github.clawagent.server.dto;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -9,6 +10,8 @@ import java.util.Map;
 public record DeviceRegisterRequest(
         String name,
         String type,
+        String permissionMode,
+        List<String> approvedToolIds,
         Map<String, String> metadata
 ) {
 }

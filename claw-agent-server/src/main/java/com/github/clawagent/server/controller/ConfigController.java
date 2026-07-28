@@ -1,14 +1,17 @@
 package com.github.clawagent.server.controller;
 
-import com.github.clawagent.server.service.AgentConsoleService;
 import com.github.clawagent.server.dto.LocalHealthView;
 import com.github.clawagent.server.dto.ModelApiTestRequest;
 import com.github.clawagent.server.dto.ModelApiTestResponse;
 import com.github.clawagent.server.dto.ModelConfigUpdate;
 import com.github.clawagent.server.dto.ModelConfigUpsertRequest;
 import com.github.clawagent.server.dto.PolicyConfigUpdate;
+import com.github.clawagent.server.dto.PolicyResolveRequest;
+import com.github.clawagent.server.dto.PolicyResolveView;
 import com.github.clawagent.server.dto.RecentProjectRequest;
 import com.github.clawagent.server.dto.RuntimeConfigSnapshot;
+import com.github.clawagent.server.service.AgentConsoleService;
+import com.github.clawagent.server.service.TaskPolicyEnrichmentService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -25,9 +28,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/config")
 public class ConfigController {
     private final AgentConsoleService delegate;
+    private final TaskPolicyEnrichmentService taskPolicyEnrichmentService;
 
-    public ConfigController(AgentConsoleService delegate) {
+    public ConfigController(AgentConsoleService delegate,
+                            TaskPolicyEnrichmentService taskPolicyEnrichmentService) {
         this.delegate = delegate;
+        this.taskPolicyEnrichmentService = taskPolicyEnrichmentService;
     }
 
     /**
@@ -68,6 +74,18 @@ public class ConfigController {
     @PutMapping("/policy")
     public RuntimeConfigSnapshot savePolicyConfig(@RequestBody PolicyConfigUpdate update) {
         return delegate.savePolicyConfig(update);
+    }
+
+    /**
+     * 预览一次任务会命中的审批策略。
+     * 该接口只做解析，不写入配置，适合管理台展示 user/token/device/agent 多层策略合并原因。
+     */
+    @PostMapping("/policy/resolve")
+    public PolicyResolveView resolvePolicy(@RequestBody PolicyResolveRequest request) {
+        return taskPolicyEnrichmentService.resolve(
+                request == null ? "" : request.channelId(),
+                request == null ? "" : request.userId(),
+                request == null ? null : request.metadata());
     }
 
     /**

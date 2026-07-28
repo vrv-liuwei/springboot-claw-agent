@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SERVER_URL,
   clientConfigPath,
-  isDefaultLocalServer,
   normalizeServerUrl,
   readClientConfig,
   writeClientConfig,
@@ -19,6 +18,7 @@ let serverProcess;
 let mainWindow;
 let startupConnectionError = '';
 let activeServerUrl = '';
+let managedServerUrl = '';
 
 app.setName('ClawAgent');
 
@@ -66,23 +66,27 @@ async function waitForServer(serverUrl) {
 }
 
 async function startServer() {
-  const serverUrl = configuredServerUrl();
-  if (!isDefaultLocalServer(serverUrl)) {
+  const config = configuredClientConfig();
+  if (config.connectionMode === 'remote') {
     try {
-      await waitForServer(serverUrl);
+      await waitForServer(config.serverUrl);
       startupConnectionError = '';
-      return serverUrl;
+      return config.serverUrl;
     } catch (error) {
-      startupConnectionError = `远程服务暂不可用：${serverUrl}。已临时启动本地服务用于打开设置。`;
+      startupConnectionError = `远程服务暂不可用：${config.serverUrl}。已临时启动本地服务用于打开设置。`;
       console.warn(startupConnectionError, error?.message || error);
       return startLocalServer(DEFAULT_SERVER_URL);
     }
   }
   startupConnectionError = '';
-  return startLocalServer(serverUrl);
+  return startLocalServer(config.serverUrl);
 }
 
 async function startLocalServer(serverUrl) {
+  // 已托管的本地服务仍健康时直接复用，避免每次切换都占用新的端口。
+  if (serverProcess && !serverProcess.killed && managedServerUrl && await isServerHealthy(managedServerUrl, 1500)) {
+    return managedServerUrl;
+  }
   const configuredPort = Number(new URL(serverUrl).port || 17891);
   const port = await isFree(configuredPort)
     ? configuredPort
@@ -90,7 +94,7 @@ async function startLocalServer(serverUrl) {
   const jarPath = process.env.CLAW_AGENT_SERVER_JAR || defaultServerJarPath();
   const javaExecutable = process.env.CLAW_AGENT_JAVA || defaultJavaExecutable();
   const runtimePaths = appRuntimePaths();
-  serverProcess = spawn(javaExecutable, [
+  const child = spawn(javaExecutable, [
     '-jar',
     jarPath,
     `--server.port=${port}`,
@@ -102,13 +106,32 @@ async function startLocalServer(serverUrl) {
     stdio: 'inherit',
     windowsHide: true,
   });
-  await waitForServer(`http://127.0.0.1:${port}`);
-  return `http://127.0.0.1:${port}`;
+  serverProcess = child;
+  managedServerUrl = `http://127.0.0.1:${port}`;
+  child.once('exit', () => {
+    // 旧进程退出不能覆盖随后新启动的本地服务状态。
+    if (serverProcess !== child) return;
+    serverProcess = undefined;
+    managedServerUrl = '';
+  });
+  await waitForServer(managedServerUrl);
+  return managedServerUrl;
 }
 
-function configuredServerUrl() {
-  if (process.env.CLAW_AGENT_SERVER_URL) return normalizeServerUrl(process.env.CLAW_AGENT_SERVER_URL);
-  return readClientConfig(clientConfigDir()).serverUrl || DEFAULT_SERVER_URL;
+function configuredClientConfig() {
+  if (process.env.CLAW_AGENT_SERVER_URL) {
+    return {
+      serverUrl: normalizeServerUrl(process.env.CLAW_AGENT_SERVER_URL),
+      connectionMode: 'remote',
+    };
+  }
+  return readClientConfig(clientConfigDir());
+}
+
+function stopManagedServer() {
+  if (serverProcess && !serverProcess.killed) serverProcess.kill();
+  serverProcess = undefined;
+  managedServerUrl = '';
 }
 
 function clientConfigDir() {
@@ -119,7 +142,7 @@ function defaultServerJarPath() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'server', 'claw-agent-server.jar');
   }
-  return path.resolve(__dirname, '../../../claw-agent-server/target/claw-agent-server-0.1.0-SNAPSHOT.jar');
+  return path.resolve(__dirname, '../../../claw-agent-server/target/claw-agent-server-1.0.0-SNAPSHOT.jar');
 }
 
 function defaultJavaExecutable() {
@@ -236,15 +259,18 @@ ipcMain.handle('clawagent:get-client-config', async () => ({
 }));
 
 ipcMain.handle('clawagent:set-server-url', async (_event, serverUrl, options = {}) => {
-  const normalized = normalizeServerUrl(serverUrl);
+  const connectionMode = options.connectionMode === 'remote' ? 'remote' : 'local';
+  const normalized = connectionMode === 'local' ? DEFAULT_SERVER_URL : normalizeServerUrl(serverUrl);
   const shouldCheck = options.check !== false;
-  if (shouldCheck && !isDefaultLocalServer(normalized)) {
+  if (shouldCheck && connectionMode === 'remote') {
     await waitForServer(normalized);
   }
-  const saved = writeClientConfig({ serverUrl: normalized }, clientConfigDir());
+  const saved = writeClientConfig({ serverUrl: normalized, connectionMode }, clientConfigDir());
   startupConnectionError = '';
   if (mainWindow && shouldCheck) {
-    const nextUrl = await startServer();
+    // 远程健康检查成功后才停止 App 托管的本地服务，失败时仍保留当前连接。
+    if (connectionMode === 'remote') stopManagedServer();
+    const nextUrl = connectionMode === 'remote' ? normalized : await startLocalServer(DEFAULT_SERVER_URL);
     activeServerUrl = nextUrl;
     await mainWindow.loadURL(`${nextUrl}/app/`);
   }
@@ -256,8 +282,6 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  if (serverProcess && !serverProcess.killed) {
-    serverProcess.kill();
-  }
+  stopManagedServer();
 });
 }

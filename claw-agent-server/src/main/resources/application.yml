@@ -2,8 +2,6 @@ server:
   port: 17891
 
 spring:
-  profiles:
-    active: dev
   config:
     import:
       - optional:file:.clawagent/config/clawagent.yml
@@ -32,6 +30,53 @@ clawagent:
       - /api/v1/**
     excluded-path-patterns:
       - /api/v1/health
+    scope-mappings:
+      tasks:
+        - /api/v1/tasks/**
+        - /api/v1/steps/**
+        - /api/v1/agents/**
+        - /api/v1/todos/**
+      plans:
+        - /api/v1/plans/**
+      sessions:
+        - /api/v1/sessions/**
+      auth:
+        - /api/v1/auth/**
+      channels:
+        - /api/v1/channels/**
+      config:
+        - /api/v1/config/**
+      knowledge:
+        - /api/v1/knowledge/**
+      memory:
+        - /api/v1/memory/**
+      mcp:
+        - /api/v1/mcp/**
+      skills:
+        - /api/v1/skills/**
+      attachments:
+        - /api/v1/attachments/**
+  rate-limit:
+    enabled: false
+    default-limit: 120
+    default-window-seconds: 60
+    protected-path-patterns:
+      - /api/v1/**
+    excluded-path-patterns:
+      - /api/v1/health
+    rules:
+      - name: task-write
+        path-patterns:
+          - /api/v1/tasks/**
+          - /api/v1/agents/**
+          - /api/v1/plans/**
+        methods:
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+        limit: 30
+        window-seconds: 60
   path:
     base: .clawagent
   attachments:
@@ -56,6 +101,9 @@ clawagent:
         api-key: ${SILICONFLOW_API_KEY:}
         dimensions: 0
         timeout-seconds: 60
+  intent:
+    enabled: true
+    threshold: 0.78
   mcp:
     enabled: true
     auto-connect: true
@@ -77,8 +125,8 @@ clawagent:
             name: 主助手 - 飞书机器人
             enabled: true
             approvalMode: auto
-            appId: ${FEISHU_APP_ID}
-            appSecret: ${FEISHU_APP_SECRET}
+            appId: ${FEISHU_APP_ID:}
+            appSecret: ${FEISHU_APP_SECRET:}
             outboundMessageType: auto
       ddio:
         accounts:
@@ -86,25 +134,47 @@ clawagent:
             name: DDIO Bot
             enabled: true
             approvalMode: auto
-            appId: ${DDIO_APP_ID}
-            appSecret: ${DDIO_APP_SECRET}
-            baseUrl: ${DDIO_BASE_URL}
+            appId: ${DDIO_APP_ID:}
+            appSecret: ${DDIO_APP_SECRET:}
+            baseUrl: ${DDIO_BASE_URL:}
       dingtalk:
         defaultAccount: main
         accounts:
           main:
             name: 钉钉机器人
-            enabled: true
+            enabled: false
             approvalMode: auto
             connectionMode: stream
-            agentId: ${DINGTALK_AGENT_ID}
-            appKey: ${DINGTALK_APP_KEY}
-            appSecret: ${DINGTALK_APP_SECRET}
+            agentId: ${DINGTALK_AGENT_ID:}
+            appKey: ${DINGTALK_APP_KEY:}
+            appSecret: ${DINGTALK_APP_SECRET:}
             outboundMessageType: markdown
   runtime:
     max-react-rounds: 15
     sanitization:
       enabled: true
+  agents:
+    policies:
+      coder:
+        enabled: false
+        permission-mode: custom
+        approved-tool-ids:
+          - builtin.filesystem.read_text_file
+          - builtin.filesystem.write_text_file
+          - builtin.execute.command
+      reviewer:
+        enabled: false
+        permission-mode: read-only
+        approved-tool-ids: []
+    worker:
+      enabled: false
+      mode: external-process
+      command: ""
+      args: []
+      max-concurrent: 2
+      acquire-timeout-ms: 5000
+      timeout-ms: 300000
+      max-output-bytes: 1048576
   automation:
     enabled: true
     poll-interval-seconds: 5
@@ -118,6 +188,7 @@ clawagent:
     approved-tool-ids: []
     allowed-roots:
       - "${clawagent.path.base}/workspace"
+      - "."
     recent-projects: []
     test-commands: []
     project-test-commands: {}
@@ -187,11 +258,23 @@ clawagent:
       execute:
         enabled: true
         env:
-          ALLOWED_ROOTS: "${clawagent.path.base}"
+          ALLOWED_ROOTS: "${clawagent.path.base},."
           DEFAULT_CWD: "${clawagent.path.base}/workspace"
           TIMEOUT_MS: "30000"
+          MAX_TIMEOUT_MS: "120000"
           PROCESS_WAIT_MS: "5000"
           MAX_OUTPUT_CHARS: "20000"
+          WORKER_ENABLED: "true"
+          WORKER_JAR: "claw-agent-worker/target/claw-agent-worker-1.0.0-SNAPSHOT.jar"
+          WORKER_JAVA: ""
+          WORKER_JVM_MAX_HEAP: "256m"
+          WORKER_MAX_OUTPUT_BYTES: "1048576"
+          WORKER_MAX_CPU_TIME_MS: "0"
+          WORKER_MAX_MEMORY_BYTES: "0"
+          WORKER_MAX_CONCURRENT: "2"
+          WORKER_ACQUIRE_TIMEOUT_MS: "5000"
+          WORKER_TERMINATION_GRACE_MS: "1500"
+          WORKER_BLOCKED_ENV_NAME_FRAGMENTS: "TOKEN,SECRET,PASSWORD,PASSWD,API_KEY,ACCESS_KEY,PRIVATE_KEY,CREDENTIAL,AUTHORIZATION,COOKIE"
           SENSITIVE_PATH_PATTERNS: "**/.env,.env,**/.env.*,.env.*,**/*.key,**/*.pem,**/*.p12,**/*.pfx,**/.ssh/**,.ssh/**,**/.git/**,.git/**"
       todo:
         enabled: true

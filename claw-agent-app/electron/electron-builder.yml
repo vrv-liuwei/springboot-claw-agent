@@ -8,7 +8,7 @@ files:
   - shared/**
   - package.json
 extraResources:
-  - from: ../claw-agent-server/target/claw-agent-server-0.1.0-SNAPSHOT.jar
+  - from: ../claw-agent-server/target/claw-agent-server-1.0.0-SNAPSHOT.jar
     to: server/claw-agent-server.jar
   - from: runtime/java17
     to: runtime/java17

@@ -31,6 +31,8 @@ public class FileSkillRegistry implements SkillRegistry {
     private final List<Path> roots;
     /** 统一工具注册表，启用的 Skill 会注册为 skill.* 工具。 */
     private final AgentToolRegistry toolRegistry;
+    /** Script Skill 的进程执行器；Spring 环境会注入 worker-backed 实现，普通环境使用默认直接执行。 */
+    private final SkillProcessExecutor processExecutor;
     /** 当前 JVM 内已加载的 Skill 注册状态，key 为 skillId。 */
     private final Map<String, SkillRegistration> skills = new LinkedHashMap<>();
 
@@ -43,8 +45,13 @@ public class FileSkillRegistry implements SkillRegistry {
     }
 
     public FileSkillRegistry(List<Path> roots, AgentToolRegistry toolRegistry) {
+        this(roots, toolRegistry, null);
+    }
+
+    public FileSkillRegistry(List<Path> roots, AgentToolRegistry toolRegistry, SkillProcessExecutor processExecutor) {
         this.roots = roots == null || roots.isEmpty() ? List.of(Path.of(".clawagent/skills")) : List.copyOf(roots);
         this.toolRegistry = toolRegistry;
+        this.processExecutor = processExecutor;
         load();
     }
 
@@ -290,7 +297,7 @@ public class FileSkillRegistry implements SkillRegistry {
             String toolId = "default".equals(normalizedToolName)
                     ? "skill." + manifest.id()
                     : prefix + normalizedToolName;
-            toolRegistry.registerOrReplace(new SkillAgentTool(manifest, normalizedToolName, toolId, dir));
+            toolRegistry.registerOrReplace(new SkillAgentTool(manifest, normalizedToolName, toolId, dir, processExecutor));
             log.info("skill tool registered skillId={} toolId={}", manifest.id(), toolId);
         }
     }

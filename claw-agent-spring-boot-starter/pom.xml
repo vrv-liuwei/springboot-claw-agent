@@ -48,6 +48,11 @@
         </dependency>
         <dependency>
             <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-intent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
             <artifactId>claw-agent-toolkit</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -64,6 +69,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

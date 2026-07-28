@@ -2,8 +2,11 @@ package com.github.clawagent.channel;
 
 import com.github.clawagent.core.ChannelDefinition;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Channel Stream/长连接生命周期门面。
@@ -54,6 +57,52 @@ public class ChannelStreamClientManager {
         }
     }
 
+    public ChannelStreamReloadResult restartRunningStreams(List<ChannelDefinition> channels) {
+        List<String> runningIds = new ArrayList<>(runningClients.keySet());
+        if (runningIds.isEmpty()) {
+            return ChannelStreamReloadResult.empty();
+        }
+        Map<String, ChannelDefinition> latestChannels = (channels == null ? List.<ChannelDefinition>of() : channels).stream()
+                .filter(channel -> channel != null)
+                .collect(Collectors.toMap(ChannelDefinition::id, channel -> channel, (left, right) -> right));
+        List<ChannelStreamStatus> statuses = new ArrayList<>();
+        int restarted = 0;
+        int stopped = 0;
+        int unsupported = 0;
+        int failed = 0;
+        for (String channelId : runningIds) {
+            ChannelDefinition channel = latestChannels.get(channelId);
+            if (channel == null) {
+                ChannelStreamStatus status = removeMissingChannelStream(channelId);
+                statuses.add(status);
+                failed++;
+                continue;
+            }
+            // Adapter 重新扫描后，运行表里的 handle 仍指向旧 SDK/client；能安全 stop 的才立即用新 adapter 重启。
+            ChannelStreamStatus stoppedStatus = stop(channel);
+            statuses.add(stoppedStatus);
+            if ("stopped".equals(stoppedStatus.status())) {
+                stopped++;
+                ChannelStreamStatus startedStatus = start(channel);
+                statuses.add(startedStatus);
+                if ("running".equals(startedStatus.status())) {
+                    restarted++;
+                } else if ("unsupported".equals(startedStatus.status())) {
+                    unsupported++;
+                } else if ("failed".equals(startedStatus.status())) {
+                    failed++;
+                }
+                continue;
+            }
+            if ("unsupported".equals(stoppedStatus.status())) {
+                unsupported++;
+            } else if ("failed".equals(stoppedStatus.status())) {
+                failed++;
+            }
+        }
+        return new ChannelStreamReloadResult(runningIds.size(), restarted, stopped, unsupported, failed, List.copyOf(statuses));
+    }
+
     public ChannelStreamStatus status(ChannelDefinition channel) {
         if (channel == null) {
             return ChannelStreamStatus.failed("", "", "", "Channel 不存在");
@@ -76,6 +125,18 @@ public class ChannelStreamClientManager {
         } catch (Exception e) {
             return ChannelStreamStatus.failed(channel.id(), safeType(channel), adapter.streamMode(channel), safeError("启动 Channel Stream 失败", e));
         }
+    }
+
+    private ChannelStreamStatus removeMissingChannelStream(String channelId) {
+        ChannelStreamHandle handle = runningClients.remove(channelId);
+        if (handle != null && handle.stopper() != null) {
+            try {
+                handle.stopper().stop();
+            } catch (Exception e) {
+                return ChannelStreamStatus.failed(channelId, "", handle.mode(), safeError("Channel 已删除，停止旧 Stream 失败", e));
+            }
+        }
+        return ChannelStreamStatus.failed(channelId, "", handle == null ? "" : handle.mode(), "Channel 配置不存在，已从运行表移除。");
     }
 
     private String streamMode(ChannelDefinition channel) {

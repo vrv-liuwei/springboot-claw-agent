@@ -8,6 +8,7 @@ import com.github.clawagent.core.ToolResult;
 import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.toolkit.execute.CommandOutputDecoder;
 import com.github.clawagent.toolkit.execute.ExecuteToolkitProperties;
+import com.github.clawagent.toolkit.execute.WorkerCommandExecutor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,8 +18,11 @@ import java.util.List;
 import java.util.Map;
 
 public class ProcessStartTool extends ProcessToolSupport implements AgentTool {
+    private final WorkerCommandExecutor workerExecutor;
+
     public ProcessStartTool(ManagedProcessStore store, ExecuteToolkitProperties properties) {
         super(store, properties);
+        this.workerExecutor = new WorkerCommandExecutor(this.properties);
     }
 
     @Override
@@ -46,6 +50,63 @@ public class ProcessStartTool extends ProcessToolSupport implements AgentTool {
             long processWaitMs = longArg(call, "processWaitMs", properties.getProcessWaitMs());
             Path logPath = resolveLogPath(call.arguments().get("logPath"), cwd);
             String healthUrl = healthUrl(call);
+            if (properties.isWorkerEnabled()) {
+                return startWithWorker(invocation, cwd, logPath, processWaitMs, healthUrl, context);
+            }
+            return startDirect(invocation, cwd, logPath, processWaitMs, healthUrl, context);
+        } catch (Exception e) {
+            return ToolResult.error(e.getMessage());
+        }
+    }
+
+    private ToolResult startWithWorker(CommandInvocation invocation, Path cwd, Path logPath, long processWaitMs,
+                                       String healthUrl, AgentContext context) throws Exception {
+        Files.createDirectories(logPath.getParent());
+        WorkerCommandExecutor.BackgroundStartResult result = workerExecutor.startBackground(
+                invocation.processCommand(), cwd, logPath, processWaitMs);
+        if (!result.alive() || result.pid() <= 0) {
+            return ToolResult.error("process exited during startup\n"
+                    + "pid: " + result.pid() + "\n"
+                    + "exitCode: " + (result.backgroundExitCode() == Integer.MIN_VALUE ? result.exitCode() : result.backgroundExitCode()) + "\n"
+                    + "command: " + invocation.commandLineText() + "\n"
+                    + "cwd: " + cwd + "\n"
+                    + "healthUrl: " + nullToDash(healthUrl) + "\n"
+                    + "logPath: " + logPath + "\n"
+                    + "workerIsolated: true\n"
+                    + "workerPoolWaitMs: " + result.workerPoolWaitMs() + "\n"
+                    + "workerEnvBlockedCount: " + result.workerEnvBlockedCount() + "\n"
+                    + "workerSandboxPath: " + result.workerSandboxPath() + "\n"
+                    + "workerSandboxKept: " + result.workerSandboxKept() + "\n"
+                    + "workerStderr: " + result.stderr() + "\n"
+                    + "logs:\n" + tail(logPath, properties.getMaxOutputChars()));
+        }
+
+        AgentTask task = context == null ? null : context.task();
+        // worker 启动后只返回后台进程 pid，后续 stop/status 通过 ProcessHandle 管理跨进程记录。
+        ManagedProcess managed = new ManagedProcess(result.pid(), null, invocation.processCommand(), cwd, logPath, Instant.now(),
+                task == null ? null : task.id(),
+                task == null ? null : task.sessionId(),
+                projectPath(task, cwd),
+                healthUrl);
+        store.put(managed);
+        return ToolResult.success("pid: " + result.pid() + "\n"
+                + "status: running\n"
+                + "command: " + invocation.commandLineText() + "\n"
+                + "cwd: " + cwd + "\n"
+                + "healthUrl: " + nullToDash(healthUrl) + "\n"
+                + "logPath: " + logPath + "\n"
+                + "processWaitMs: " + processWaitMs + "\n"
+                + "workerIsolated: true\n"
+                + "workerElapsedMs: " + result.elapsedMs() + "\n"
+                + "workerPoolWaitMs: " + result.workerPoolWaitMs() + "\n"
+                + "workerEnvBlockedCount: " + result.workerEnvBlockedCount() + "\n"
+                + "workerSandboxPath: " + result.workerSandboxPath() + "\n"
+                + "workerSandboxKept: " + result.workerSandboxKept() + "\n"
+                + "logs:\n" + tail(logPath, properties.getMaxOutputChars()));
+    }
+
+    private ToolResult startDirect(CommandInvocation invocation, Path cwd, Path logPath, long processWaitMs,
+                                   String healthUrl, AgentContext context) throws Exception {
             Files.createDirectories(logPath.getParent());
 
             ProcessBuilder builder = new ProcessBuilder(invocation.processCommand());
@@ -83,18 +144,17 @@ public class ProcessStartTool extends ProcessToolSupport implements AgentTool {
                     + "healthUrl: " + nullToDash(healthUrl) + "\n"
                     + "logPath: " + logPath + "\n"
                     + "processWaitMs: " + processWaitMs + "\n"
+                    + "workerIsolated: false\n"
                     + "logs:\n" + tail(logPath, properties.getMaxOutputChars()));
-        } catch (Exception e) {
-            return ToolResult.error(e.getMessage());
-        }
     }
 
     private Path resolveLogPath(String rawLogPath, Path cwd) {
         if (rawLogPath != null && !rawLogPath.isBlank()) {
             Path path = Path.of(rawLogPath.trim());
-            return path.isAbsolute() ? path.normalize() : cwd.resolve(path).normalize();
+            Path resolved = path.isAbsolute() ? path.normalize() : cwd.resolve(path).normalize();
+            return ensureAllowedPath(resolved, "logPath");
         }
-        return cwd.resolve(".clawagent-process-" + System.currentTimeMillis() + ".log").normalize();
+        return ensureAllowedPath(cwd.resolve(".clawagent-process-" + System.currentTimeMillis() + ".log"), "logPath");
     }
 
     private String tail(Path logPath, int maxChars) {

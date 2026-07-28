@@ -13,9 +13,12 @@ import com.github.clawagent.knowledge.KnowledgeService;
 import com.github.clawagent.server.dto.ResumeStateView;
 import com.github.clawagent.server.dto.ResumeTaskRequest;
 import com.github.clawagent.server.dto.ToolApprovalRequest;
+import com.github.clawagent.server.security.ApiTokenAuthInterceptor;
 import com.github.clawagent.server.service.AppWorkspaceService;
+import com.github.clawagent.server.service.TaskPolicyEnrichmentService;
 import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.TodoStore;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -50,27 +53,30 @@ public class TaskExecutionController {
     private final TodoStore todoStore;
     private final KnowledgeService knowledgeService;
     private final AppWorkspaceService appWorkspaceService;
+    private final TaskPolicyEnrichmentService taskPolicyEnrichmentService;
     /** 流式任务后台执行池；避免阻塞 Spring MVC 请求线程。 */
     private final ExecutorService streamExecutor = Executors.newCachedThreadPool();
 
     public TaskExecutionController(com.github.clawagent.runtime.AgentRuntime runtime,
                                    @Qualifier("todoStore") TodoStore todoStore,
                                    KnowledgeService knowledgeService,
-                                   AppWorkspaceService appWorkspaceService) {
+                                   AppWorkspaceService appWorkspaceService,
+                                   TaskPolicyEnrichmentService taskPolicyEnrichmentService) {
         this.runtime = runtime;
         this.todoStore = todoStore;
         this.knowledgeService = knowledgeService;
         this.appWorkspaceService = appWorkspaceService;
+        this.taskPolicyEnrichmentService = taskPolicyEnrichmentService;
     }
 
     /**
      * 同步提交任务，适合非流式 API 接入。
      */
     @PostMapping("/tasks")
-    public AgentResult submit(@RequestBody AgentRequest request) {
+    public AgentResult submit(@RequestBody AgentRequest request, HttpServletRequest servletRequest) {
         log.info("agent task submit received sessionId={} channelId={} userId={} input={}",
                 request.sessionId(), request.channelId(), request.userId(), preview(request.input()));
-        AgentResult result = runtime.submit(knowledgeService.enrichForModel(enrichWorkspace(request)));
+        AgentResult result = runtime.submit(knowledgeService.enrichForModel(enrichWorkspace(request, servletRequest)));
         log.info("agent task submit finished taskId={} status={}", result.taskId(), result.status());
         return result;
     }
@@ -79,10 +85,10 @@ public class TaskExecutionController {
      * 流式提交任务，向前端推送任务事件和模型增量。
      */
     @PostMapping("/tasks/stream")
-    public SseEmitter submitStream(@RequestBody AgentRequest request) {
+    public SseEmitter submitStream(@RequestBody AgentRequest request, HttpServletRequest servletRequest) {
         log.info("agent task stream submit received sessionId={} channelId={} userId={} input={}",
                 request.sessionId(), request.channelId(), request.userId(), preview(request.input()));
-        return streamAgentRequest(enrichWorkspace(request));
+        return streamAgentRequest(enrichWorkspace(request, servletRequest));
     }
 
     /**
@@ -91,7 +97,8 @@ public class TaskExecutionController {
     @PostMapping("/tasks/{taskId}/resume/stream")
     public SseEmitter resumeTaskStream(
             @PathVariable("taskId") String taskId,
-            @RequestBody(required = false) ResumeTaskRequest request) {
+            @RequestBody(required = false) ResumeTaskRequest request,
+            HttpServletRequest servletRequest) {
         AgentTask source = runtime.getTask(taskId);
         ResumeStateView resumeState = buildResumeState(source);
         Map<String, String> metadata = new LinkedHashMap<>(request == null || request.metadata() == null
@@ -117,7 +124,7 @@ public class TaskExecutionController {
                 metadata);
         log.info("agent task resume stream received sourceTaskId={} sessionId={} resumeTodoOrder={} input={}",
                 taskId, resumeRequest.sessionId(), metadata.get("runtime.resumeTodoOrder"), preview(input));
-        return streamAgentRequest(resumeRequest);
+        return streamAgentRequest(enrichWorkspace(resumeRequest, servletRequest));
     }
 
     /**
@@ -274,11 +281,12 @@ public class TaskExecutionController {
         List<TodoItem> todos = todoStore == null ? List.of() : todoStore.listTodoItems(source.sessionId(), "", 500);
         boolean resumeEligible = source.status() == TaskStatus.CONTINUATION_REQUIRED
                 || hasResumeMetadata(source);
-        String planTaskId = firstNonBlank(source.metadata().get("runtime.resumeFromTaskId"), source.id(), activeResumePlanTaskId(todos));
-        List<TodoItem> planTodos = todos.stream()
-                .filter(item -> planTaskId.equals(item.taskId()))
-                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
-                .toList();
+        List<TodoItem> planTodos = selectRelevantTodos(source, todos);
+        String planTaskId = firstNonBlank(
+                source.metadata().get("runtime.resumeFromTaskId"),
+                planTodos.stream().map(TodoItem::taskId).filter(value -> value != null && !value.isBlank()).findFirst().orElse(""),
+                source.id(),
+                activeResumePlanTaskId(todos));
         List<TodoItem> remaining = planTodos.stream()
                 .filter(this::isResumeTodo)
                 .toList();
@@ -316,6 +324,9 @@ public class TaskExecutionController {
                 "projectPath",
                 "workspace.projectPath",
                 "cwd",
+                "plan.id",
+                "plan.version",
+                "plan.status",
                 "approvalMode",
                 "toolPermissionMode",
                 "allowHighRiskTools",
@@ -389,9 +400,55 @@ public class TaskExecutionController {
         }
         return todos.stream()
                 .filter(this::isResumeTodo)
-                .min(Comparator.comparing(TodoItem::createdAt))
+                // 多个历史计划共用一个会话时，恢复点应取最近一组未完成 Todo。
+                .max(Comparator.comparing(TodoItem::createdAt))
                 .map(TodoItem::taskId)
                 .orElse("");
+    }
+
+    private List<TodoItem> selectRelevantTodos(AgentTask source, List<TodoItem> todos) {
+        if (todos == null || todos.isEmpty()) {
+            return List.of();
+        }
+        String planId = nullToEmpty(source.metadata().get("plan.id"));
+        if (!planId.isBlank()) {
+            List<TodoItem> planItems = todos.stream()
+                    .filter(item -> planId.equals(item.metadata().get("planId")))
+                    .toList();
+            if (!planItems.isEmpty()) {
+                return deduplicateTodos(planItems);
+            }
+        }
+        List<TodoItem> currentTaskItems = todos.stream()
+                .filter(item -> source.id().equals(item.taskId()))
+                .toList();
+        if (!currentTaskItems.isEmpty()) {
+            return deduplicateTodos(currentTaskItems);
+        }
+        String activeTaskId = todos.stream()
+                .filter(this::isResumeTodo)
+                .max(Comparator.comparing(TodoItem::createdAt))
+                .map(TodoItem::taskId)
+                .orElse("");
+        if (activeTaskId.isBlank()) {
+            return List.of();
+        }
+        return deduplicateTodos(todos.stream()
+                .filter(item -> activeTaskId.equals(item.taskId()))
+                .toList());
+    }
+
+    private List<TodoItem> deduplicateTodos(List<TodoItem> todos) {
+        Map<Integer, TodoItem> latestByOrder = new LinkedHashMap<>();
+        for (TodoItem item : todos) {
+            TodoItem current = latestByOrder.get(item.itemOrder());
+            if (current == null || item.updatedAt().isAfter(current.updatedAt())) {
+                latestByOrder.put(item.itemOrder(), item);
+            }
+        }
+        return latestByOrder.values().stream()
+                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
+                .toList();
     }
 
     private boolean isResumeTodo(TodoItem item) {
@@ -414,10 +471,15 @@ public class TaskExecutionController {
         return preview(builder.toString(), 3000);
     }
 
-    private AgentRequest enrichWorkspace(AgentRequest request) {
+    private AgentRequest enrichWorkspace(AgentRequest request, HttpServletRequest servletRequest) {
         Map<String, String> metadata = appWorkspaceService.enrichWorkspaceMetadata(
                 request == null ? "" : request.workspaceId(),
                 request == null ? Map.of() : request.metadata());
+        attachAuthenticatedPrincipal(metadata, servletRequest);
+        metadata = taskPolicyEnrichmentService.enrich(
+                request == null ? "" : request.channelId(),
+                request == null ? "" : request.userId(),
+                metadata);
         return new AgentRequest(
                 request.input(),
                 request.sessionId(),
@@ -426,11 +488,52 @@ public class TaskExecutionController {
                 metadata);
     }
 
+    private void attachAuthenticatedPrincipal(Map<String, String> metadata, HttpServletRequest request) {
+        if (metadata == null || request == null) {
+            return;
+        }
+        putAttribute(metadata, "auth.type", request, ApiTokenAuthInterceptor.ATTR_AUTH_TYPE);
+        putAttribute(metadata, "localUserId", request, ApiTokenAuthInterceptor.ATTR_USER_ID);
+        putAttribute(metadata, "auth.username", request, ApiTokenAuthInterceptor.ATTR_USERNAME);
+        if (request.getAttribute(ApiTokenAuthInterceptor.ATTR_TOKEN_ID) != null) {
+            putAttribute(metadata, "apiToken.id", request, ApiTokenAuthInterceptor.ATTR_TOKEN_ID);
+            putAttribute(metadata, "apiToken.ownerUserId", request, ApiTokenAuthInterceptor.ATTR_USER_ID);
+            putAttribute(metadata, "apiToken.ownerUsername", request, ApiTokenAuthInterceptor.ATTR_USERNAME);
+            putAttribute(metadata, "apiToken.permissionMode", request, ApiTokenAuthInterceptor.ATTR_TOKEN_PERMISSION_MODE);
+            putAttribute(metadata, "apiToken.approvedToolIds", request, ApiTokenAuthInterceptor.ATTR_TOKEN_APPROVED_TOOL_IDS);
+            putAttribute(metadata, "apiToken.scopes", request, ApiTokenAuthInterceptor.ATTR_TOKEN_SCOPES);
+        }
+        if (request.getAttribute(ApiTokenAuthInterceptor.ATTR_DEVICE_ID) != null) {
+            putAttribute(metadata, "device.id", request, ApiTokenAuthInterceptor.ATTR_DEVICE_ID);
+            putAttribute(metadata, "device.name", request, ApiTokenAuthInterceptor.ATTR_DEVICE_NAME);
+            putAttribute(metadata, "device.type", request, ApiTokenAuthInterceptor.ATTR_DEVICE_TYPE);
+            putAttribute(metadata, "device.permissionMode", request, ApiTokenAuthInterceptor.ATTR_DEVICE_PERMISSION_MODE);
+            putAttribute(metadata, "device.approvedToolIds", request, ApiTokenAuthInterceptor.ATTR_DEVICE_APPROVED_TOOL_IDS);
+            putAttribute(metadata, "device.boundUserId", request, ApiTokenAuthInterceptor.ATTR_DEVICE_BOUND_USER_ID);
+            putAttribute(metadata, "device.boundUsername", request, ApiTokenAuthInterceptor.ATTR_DEVICE_BOUND_USERNAME);
+        }
+    }
+
+    private void putAttribute(Map<String, String> metadata, String key, HttpServletRequest request, String attributeName) {
+        Object value = request.getAttribute(attributeName);
+        if (value != null && !String.valueOf(value).isBlank()) {
+            // 外部显式传入的身份字段优先，鉴权上下文只补默认身份归属。
+            metadata.putIfAbsent(key, String.valueOf(value).trim());
+        }
+    }
+
     private String firstNonBlank(String first, String second, String fallback) {
         if (first != null && !first.isBlank()) {
             return first.trim();
         }
         return second == null || second.isBlank() ? fallback : second.trim();
+    }
+
+    /**
+     * 按优先级从多个来源恢复任务标识，避免恢复请求因某个历史字段为空而丢失上下文。
+     */
+    private String firstNonBlank(String first, String second, String third, String fallback) {
+        return firstNonBlank(firstNonBlank(first, second, third), fallback);
     }
 
     private String firstNonBlank(String first, String fallback) {

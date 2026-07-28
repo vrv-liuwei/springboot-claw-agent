@@ -11,6 +11,8 @@ import com.github.clawagent.core.AutomationRun;
 import com.github.clawagent.core.AutomationRunStatus;
 import com.github.clawagent.core.AutomationScheduleType;
 import com.github.clawagent.core.AutomationStatus;
+import com.github.clawagent.core.PlanDraft;
+import com.github.clawagent.core.PlanItem;
 import com.github.clawagent.core.StepStatus;
 import com.github.clawagent.core.StepType;
 import com.github.clawagent.core.TaskStatus;
@@ -18,6 +20,7 @@ import com.github.clawagent.core.TodoItem;
 import com.github.clawagent.spi.AgentDataCleaner;
 import com.github.clawagent.spi.AgentEventStore;
 import com.github.clawagent.spi.AutomationStore;
+import com.github.clawagent.spi.PlanStore;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
 import com.github.clawagent.spi.TaskStore;
@@ -35,6 +38,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -44,7 +48,7 @@ import java.util.Properties;
  * SQLite 任务存储用于 ClawAgent 单机默认模式。
  * 这里直接用 JDBC，避免把 core/runtime 绑定到 Spring JDBC 或 JPA。
  */
-public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageStore, AgentEventStore, TodoStore, AutomationStore, AgentDataCleaner {
+public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageStore, AgentEventStore, TodoStore, PlanStore, AutomationStore, AgentDataCleaner {
     private final String jdbcUrl;
 
     public SqliteTaskStore(Path databasePath) {
@@ -79,6 +83,10 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             statement.executeUpdate("create table if not exists agent_todo_item (" +
                     "id text primary key, session_id text, task_id text, item_order integer, title text, description text, " +
                     "status text, metadata text, created_at text, updated_at text)");
+            statement.executeUpdate("create table if not exists agent_plan (" +
+                    "id text primary key, session_id text, task_id text, status text, outcome text, block_reason text, " +
+                    "version integer, title text, goal text, summary text, items text, assumptions text, risks text, " +
+                    "validation text, created_at text, updated_at text)");
             statement.executeUpdate("create table if not exists agent_automation (" +
                     "id text primary key, name text, prompt text, session_id text, channel_id text, user_id text, " +
                     "schedule_type text, cron_expression text, interval_seconds integer, timezone text, " +
@@ -174,6 +182,7 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     public void clearAllAgentData() {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             // 删除顺序从明细到会话，避免未来增加外键后出现约束问题。
+            statement.executeUpdate("delete from agent_plan");
             statement.executeUpdate("delete from agent_todo_item");
             statement.executeUpdate("delete from agent_event");
             statement.executeUpdate("delete from agent_step");
@@ -191,6 +200,7 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             connection.setAutoCommit(false);
             try {
                 // 单个会话删除要同步清理消息、事件、Todo 和任务，避免刷新后出现孤儿数据。
+                deleteBySessionId(connection, "agent_plan", sessionId);
                 deleteBySessionId(connection, "agent_todo_item", sessionId);
                 deleteBySessionId(connection, "agent_event", sessionId);
                 deleteTaskStepsBySessionId(connection, sessionId);
@@ -687,6 +697,58 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
     }
 
     @Override
+    public void savePlan(PlanDraft plan) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("insert or replace into agent_plan values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            bindPlan(ps, plan);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("保存计划失败：" + plan.id(), e);
+        }
+    }
+
+    @Override
+    public Optional<PlanDraft> findPlan(String planId) {
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement("select * from agent_plan where id = ?")) {
+            ps.setString(1, planId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(readPlan(rs));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询计划失败：" + planId, e);
+        }
+    }
+
+    @Override
+    public List<PlanDraft> listPlans(String sessionId, int limit) {
+        StringBuilder sql = new StringBuilder("select * from agent_plan where 1=1");
+        ArrayList<String> args = new ArrayList<>();
+        if (sessionId != null && !sessionId.isBlank()) {
+            sql.append(" and session_id = ?");
+            args.add(sessionId);
+        }
+        sql.append(" order by updated_at desc limit ?");
+        try (Connection connection = connect();
+             PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < args.size(); i++) {
+                ps.setString(i + 1, args.get(i));
+            }
+            ps.setInt(args.size() + 1, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                ArrayList<PlanDraft> plans = new ArrayList<>();
+                while (rs.next()) {
+                    plans.add(readPlan(rs));
+                }
+                return plans;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询计划列表失败", e);
+        }
+    }
+
+    @Override
     public void saveAutomation(AutomationDefinition automation) {
         try (Connection connection = connect();
              PreparedStatement ps = connection.prepareStatement("insert or replace into agent_automation values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
@@ -877,6 +939,25 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
         ps.setString(16, automation.updatedAt().toString());
     }
 
+    private void bindPlan(PreparedStatement ps, PlanDraft plan) throws SQLException {
+        ps.setString(1, plan.id());
+        ps.setString(2, plan.sessionId());
+        ps.setString(3, plan.taskId());
+        ps.setString(4, plan.status());
+        ps.setString(5, plan.outcome());
+        ps.setString(6, plan.blockReason());
+        ps.setInt(7, plan.version());
+        ps.setString(8, plan.title());
+        ps.setString(9, plan.goal());
+        ps.setString(10, plan.summary());
+        ps.setString(11, serializePlanItems(plan.items()));
+        ps.setString(12, serializeList(plan.assumptions()));
+        ps.setString(13, serializeList(plan.risks()));
+        ps.setString(14, serializeList(plan.validation()));
+        ps.setString(15, plan.createdAt().toString());
+        ps.setString(16, plan.updatedAt().toString());
+    }
+
     private AgentTask readTask(ResultSet rs) throws SQLException {
         return new AgentTask(
                 rs.getString("id"),
@@ -932,6 +1013,26 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
                 Instant.parse(rs.getString("updated_at")));
     }
 
+    private PlanDraft readPlan(ResultSet rs) throws SQLException {
+        return new PlanDraft(
+                rs.getString("id"),
+                rs.getString("session_id"),
+                rs.getString("task_id"),
+                rs.getString("status"),
+                rs.getString("outcome"),
+                rs.getString("block_reason"),
+                rs.getInt("version"),
+                rs.getString("title"),
+                rs.getString("goal"),
+                rs.getString("summary"),
+                parsePlanItems(rs.getString("items")),
+                parseList(rs.getString("assumptions")),
+                parseList(rs.getString("risks")),
+                parseList(rs.getString("validation")),
+                Instant.parse(rs.getString("created_at")),
+                Instant.parse(rs.getString("updated_at")));
+    }
+
     private AutomationDefinition readAutomation(ResultSet rs) throws SQLException {
         long interval = rs.getLong("interval_seconds");
         return new AutomationDefinition(
@@ -973,6 +1074,104 @@ public class SqliteTaskStore implements TaskStore, SessionStore, SessionMessageS
             return writer.toString();
         } catch (java.io.IOException e) {
             throw new IllegalStateException("序列化 Map 失败", e);
+        }
+    }
+
+    private String serializeList(List<String> values) {
+        Properties properties = new Properties();
+        List<String> safeValues = values == null ? List.of() : values;
+        properties.setProperty("count", String.valueOf(safeValues.size()));
+        for (int i = 0; i < safeValues.size(); i++) {
+            properties.setProperty("item." + i, safeValues.get(i) == null ? "" : safeValues.get(i));
+        }
+        return storeProperties(properties);
+    }
+
+    private List<String> parseList(String value) {
+        Properties properties = loadProperties(value);
+        int count = parseInt(properties.getProperty("count"), 0);
+        ArrayList<String> result = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            String item = properties.getProperty("item." + i, "");
+            if (!item.isBlank()) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    private String serializePlanItems(List<PlanItem> items) {
+        Properties properties = new Properties();
+        List<PlanItem> safeItems = items == null ? List.of() : items;
+        properties.setProperty("count", String.valueOf(safeItems.size()));
+        for (int i = 0; i < safeItems.size(); i++) {
+            PlanItem item = safeItems.get(i);
+            String prefix = "item." + i + ".";
+            properties.setProperty(prefix + "id", item.id());
+            properties.setProperty(prefix + "order", String.valueOf(item.itemOrder()));
+            properties.setProperty(prefix + "title", item.title() == null ? "" : item.title());
+            properties.setProperty(prefix + "description", item.description() == null ? "" : item.description());
+            properties.setProperty(prefix + "tools", String.join("\n", item.expectedTools()));
+            properties.setProperty(prefix + "files", String.join("\n", item.expectedFileChanges()));
+            properties.setProperty(prefix + "riskLevel", item.riskLevel());
+            properties.setProperty(prefix + "requiresApproval", String.valueOf(item.requiresApproval()));
+        }
+        return storeProperties(properties);
+    }
+
+    private List<PlanItem> parsePlanItems(String value) {
+        Properties properties = loadProperties(value);
+        int count = parseInt(properties.getProperty("count"), 0);
+        ArrayList<PlanItem> result = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            String prefix = "item." + i + ".";
+            result.add(new PlanItem(
+                    properties.getProperty(prefix + "id", ""),
+                    parseInt(properties.getProperty(prefix + "order"), i + 1),
+                    properties.getProperty(prefix + "title", ""),
+                    properties.getProperty(prefix + "description", ""),
+                    splitLines(properties.getProperty(prefix + "tools", "")),
+                    splitLines(properties.getProperty(prefix + "files", "")),
+                    properties.getProperty(prefix + "riskLevel", "low"),
+                    Boolean.parseBoolean(properties.getProperty(prefix + "requiresApproval", "false"))));
+        }
+        return result;
+    }
+
+    private List<String> splitLines(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return value.lines().filter(line -> !line.isBlank()).toList();
+    }
+
+    private int parseInt(String value, int fallback) {
+        try {
+            return value == null || value.isBlank() ? fallback : Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private String storeProperties(Properties properties) {
+        try (StringWriter writer = new StringWriter()) {
+            properties.store(writer, null);
+            return writer.toString();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("序列化属性失败", e);
+        }
+    }
+
+    private Properties loadProperties(String value) {
+        Properties properties = new Properties();
+        if (value == null || value.isBlank()) {
+            return properties;
+        }
+        try (StringReader reader = new StringReader(value)) {
+            properties.load(reader);
+            return properties;
+        } catch (java.io.IOException | IllegalArgumentException e) {
+            return properties;
         }
     }
 

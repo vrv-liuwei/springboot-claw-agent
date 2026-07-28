@@ -7,7 +7,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SERVER_URL,
-  isDefaultLocalServer,
   normalizeServerUrl,
   readClientConfig,
   writeClientConfig,
@@ -59,10 +58,11 @@ function parseArgs(argv) {
   return { options, rest };
 }
 
-function resolveServerUrl(options) {
-  if (options.server) return normalizeServerUrl(options.server);
-  if (process.env.CLAW_AGENT_SERVER_URL) return normalizeServerUrl(process.env.CLAW_AGENT_SERVER_URL);
-  return readClientConfig().serverUrl;
+function resolveServerConfig(options) {
+  // 命令行显式传入地址时视为远程服务，避免本机端口被误判为 App 托管服务。
+  if (options.server) return { serverUrl: normalizeServerUrl(options.server), connectionMode: 'remote' };
+  if (process.env.CLAW_AGENT_SERVER_URL) return { serverUrl: normalizeServerUrl(process.env.CLAW_AGENT_SERVER_URL), connectionMode: 'remote' };
+  return readClientConfig();
 }
 
 function existingPath(candidates) {
@@ -93,7 +93,7 @@ function resolveJavaExecutable() {
 function resolveServerJar() {
   return process.env.CLAW_AGENT_SERVER_JAR || existingPath([
     process.resourcesPath ? path.join(process.resourcesPath, 'server', 'claw-agent-server.jar') : '',
-    path.resolve(appRoot, '../claw-agent-server/target/claw-agent-server-0.1.0-SNAPSHOT.jar'),
+    path.resolve(appRoot, '../claw-agent-server/target/claw-agent-server-1.0.0-SNAPSHOT.jar'),
     path.resolve(__dirname, '../server/claw-agent-server.jar'),
     path.resolve(__dirname, '../../server/claw-agent-server.jar'),
   ]);
@@ -115,9 +115,9 @@ async function findFreePort(start = 17891) {
   throw new Error('找不到可用的 ClawAgent 本地服务端口。');
 }
 
-async function ensureServer(serverUrl) {
+async function ensureServer(serverUrl, connectionMode = 'local') {
   if (await isServerHealthy(serverUrl)) return serverUrl;
-  if (!isDefaultLocalServer(serverUrl)) {
+  if (connectionMode === 'remote') {
     throw new Error(`企业服务不可用：${serverUrl}`);
   }
   const jar = resolveServerJar();
@@ -231,7 +231,7 @@ export async function runCli(argv = process.argv.slice(2)) {
 
   if (command === 'config' && subcommand === 'server') {
     if (options.reset) {
-      const saved = writeClientConfig({ serverUrl: DEFAULT_SERVER_URL });
+      const saved = writeClientConfig({ serverUrl: DEFAULT_SERVER_URL, connectionMode: 'local' });
       console.log(options.json ? JSON.stringify(saved) : `服务器地址已重置：${saved.serverUrl}（local）`);
       return;
     }
@@ -241,10 +241,10 @@ export async function runCli(argv = process.argv.slice(2)) {
       return;
     }
     const normalized = normalizeServerUrl(tail[0]);
-    if (!options.noCheck && !isDefaultLocalServer(normalized) && !(await isServerHealthy(normalized))) {
+    if (!options.noCheck && !(await isServerHealthy(normalized))) {
       throw new Error(`企业服务不可用：${normalized}。如果只是预配置地址，请加 --no-check。`);
     }
-    const saved = writeClientConfig({ serverUrl: normalized });
+    const saved = writeClientConfig({ serverUrl: normalized, connectionMode: 'remote' });
     console.log(options.json ? JSON.stringify(saved) : `服务器地址已保存：${saved.serverUrl}`);
     return;
   }
@@ -255,11 +255,13 @@ export async function runCli(argv = process.argv.slice(2)) {
     return;
   }
 
-  const serverUrl = await ensureServer(resolveServerUrl(options));
+  const connectionConfig = resolveServerConfig(options);
+  const connectionMode = connectionConfig.connectionMode;
+  const serverUrl = await ensureServer(connectionConfig.serverUrl, connectionMode);
 
   if ((command === 'server' && subcommand === 'status') || command === 'status') {
     const runtime = await requestJson(serverUrl, API_PATHS.appRuntime);
-    const edition = isDefaultLocalServer(serverUrl) ? 'local' : 'remote';
+    const edition = connectionMode;
     console.log(options.json ? JSON.stringify({ ...runtime, serverUrl, edition }) : `ClawAgent 服务正常：${serverUrl}（${edition}）`);
     return;
   }

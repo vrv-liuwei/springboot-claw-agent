@@ -55,7 +55,7 @@ public class FeishuChannelAdapter implements ChannelAdapter, ChannelRuntimeAdapt
     @Override
     public ChannelInboundPayloadResult adaptInbound(ChannelDefinition channel, String channelId, Map<String, Object> rawPayload) {
         // 当前 ChannelAdapter SPI 只能返回消息，URL challenge 仍由 HTTP 层的 adaptWithResponse 处理。
-        ChannelInboundPayloadResult result = FeishuInboundAdapter.adapt(channel, type(), rawPayload);
+        ChannelInboundPayloadResult result = FeishuInboundAdapter.adapt(channel, channelId, rawPayload);
         if (result.hasImmediateResponse()) {
             return result;
         }

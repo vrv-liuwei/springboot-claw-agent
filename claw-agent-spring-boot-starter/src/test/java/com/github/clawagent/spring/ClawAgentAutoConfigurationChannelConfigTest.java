@@ -45,11 +45,13 @@ class ClawAgentAutoConfigurationChannelConfigTest {
                 """);
 
         List<ChannelDefinition> channels = new ClawAgentAutoConfiguration().configuredChannels(properties);
-        ChannelDefinition feishu = find(channels, "feishu-main");
+        ChannelDefinition feishu = find(channels, "feishu");
         ChannelDefinition ddio = find(channels, "ddio-main");
 
         assertEquals("feishu", feishu.type());
         assertTrue(feishu.enabled());
+        assertEquals("main", feishu.metadata().get("channel.accountId"));
+        assertEquals("true", feishu.metadata().get("channel.isDefaultAccount"));
         assertEquals("cli_yaml", feishu.metadata().get("appId"));
         assertEquals("yaml-secret", feishu.metadata().get("appSecret"));
         assertEquals("FEISHU_MAIN_APP_SECRET", feishu.metadata().get("appSecretEnv"));

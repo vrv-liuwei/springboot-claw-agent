@@ -18,6 +18,16 @@
         </dependency>
         <dependency>
             <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-intent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-channel</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
             <artifactId>claw-agent-channel-feishu</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -25,6 +35,17 @@
             <groupId>com.github.clawagent</groupId>
             <artifactId>claw-agent-channel-dingtalk</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-channel-ddio</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.clawagent</groupId>
+            <artifactId>claw-agent-worker</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -40,6 +61,11 @@
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

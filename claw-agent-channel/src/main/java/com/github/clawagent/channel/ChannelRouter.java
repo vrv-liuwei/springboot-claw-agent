@@ -5,6 +5,11 @@ import com.github.clawagent.core.AgentResult;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.core.ChannelInboundMessage;
 import com.github.clawagent.core.ChannelInboundResult;
+import com.github.clawagent.intent.IntentRequest;
+import com.github.clawagent.intent.IntentRouteResult;
+import com.github.clawagent.intent.IntentRoutingService;
+import com.github.clawagent.intent.PendingActionResult;
+import com.github.clawagent.intent.PendingActionService;
 import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.spi.ChannelRegistry;
 import org.slf4j.Logger;
@@ -24,6 +29,9 @@ public class ChannelRouter {
     private final ChannelRegistry channelRegistry;
     private final ChannelSessionMapper sessionMapper;
     private final ChannelOutboundClient outboundClient;
+    private final IntentRoutingService intentRoutingService;
+    private final PendingActionService pendingActionService;
+    private final ChannelUserBindingResolver userBindingResolver;
 
     public ChannelRouter(AgentRuntime runtime, ChannelRegistry channelRegistry, ChannelSessionMapper sessionMapper) {
         this(runtime, channelRegistry, sessionMapper, null);
@@ -31,10 +39,27 @@ public class ChannelRouter {
 
     public ChannelRouter(AgentRuntime runtime, ChannelRegistry channelRegistry, ChannelSessionMapper sessionMapper,
                          ChannelOutboundClient outboundClient) {
+        this(runtime, channelRegistry, sessionMapper, outboundClient, null, null);
+    }
+
+    public ChannelRouter(AgentRuntime runtime, ChannelRegistry channelRegistry, ChannelSessionMapper sessionMapper,
+                         ChannelOutboundClient outboundClient, IntentRoutingService intentRoutingService,
+                         PendingActionService pendingActionService) {
+        this(runtime, channelRegistry, sessionMapper, outboundClient, intentRoutingService, pendingActionService,
+                ChannelUserBindingResolver.none());
+    }
+
+    public ChannelRouter(AgentRuntime runtime, ChannelRegistry channelRegistry, ChannelSessionMapper sessionMapper,
+                         ChannelOutboundClient outboundClient, IntentRoutingService intentRoutingService,
+                         PendingActionService pendingActionService,
+                         ChannelUserBindingResolver userBindingResolver) {
         this.runtime = runtime;
         this.channelRegistry = channelRegistry;
         this.sessionMapper = sessionMapper;
         this.outboundClient = outboundClient;
+        this.intentRoutingService = intentRoutingService;
+        this.pendingActionService = pendingActionService;
+        this.userBindingResolver = userBindingResolver == null ? ChannelUserBindingResolver.none() : userBindingResolver;
     }
 
     public ChannelInboundResult receive(ChannelInboundMessage message) {
@@ -64,10 +89,39 @@ public class ChannelRouter {
         String externalUserId = firstNonBlank(safeMessage.externalUserId(), "external");
         String sessionId = sessionMapper.stableSessionId(channel.id(), conversationId);
         Map<String, String> metadata = channelRequestMetadata(channel, safeMessage, conversationId, externalUserId);
+        Map<String, String> resolvedMetadata = userBindingResolver.resolve(channel, safeMessage, metadata);
+        metadata = new LinkedHashMap<>(resolvedMetadata == null ? metadata : resolvedMetadata);
+        // IM 通道没有命令行交互，先把“确认执行/取消执行”从普通文本中截获，避免确认语句再次进入 LLM。
+        PendingActionResult pendingResult = pendingActionService == null
+                ? PendingActionResult.none()
+                : pendingActionService.handleUserInput(sessionId, channel.id(), externalUserId, text);
+        if (pendingResult.handled()) {
+            sendOutbound(channel, safeMessage, conversationId, externalUserId, pendingResult.answer());
+            return new ChannelInboundResult(channel.id(), sessionId, pendingResult.action() == null ? "" : pendingResult.action().actionId(), "COMPLETED", pendingResult.answer());
+        }
+        if (intentRoutingService != null) {
+            // 系统固定流程优先走意图路由；只有未命中或需要模型补充上下文时才进入 AgentRuntime。
+            IntentRouteResult route = intentRoutingService.route(new IntentRequest(text, sessionId, channel.id(), externalUserId, metadata));
+            if (route.handled()) {
+                sendOutbound(channel, safeMessage, conversationId, externalUserId, route.answer());
+                return new ChannelInboundResult(channel.id(), sessionId, route.intentId(), "COMPLETED", route.answer());
+            }
+            if (route.passToModel()) {
+                // 文档/知识库类意图只补充 metadata，后续由 Runtime 拦截器和 KnowledgeService 完成上下文增强。
+                metadata = new LinkedHashMap<>(metadata);
+                metadata.putAll(route.metadata());
+            }
+        }
+        // 普通对话和需要模型回答的意图统一从这里进入主 Agent 执行链路。
         AgentResult result = runtime.submit(new AgentRequest(text, sessionId, channel.id(), externalUserId, metadata));
+        sendOutbound(channel, safeMessage, conversationId, externalUserId, result.answer());
+        return new ChannelInboundResult(channel.id(), sessionId, result.taskId(), result.status().name(), result.answer());
+    }
+
+    private void sendOutbound(ChannelDefinition channel, ChannelInboundMessage safeMessage, String conversationId, String externalUserId, String answer) {
         if (outboundClient != null) {
             // Channel 已启用时入站和出站使用同一个开关，避免配置出现单向启用但业务不可用。
-            ChannelSendResult sendResult = outboundClient.sendTextDetailed(channel, safeMessage, result.answer());
+            ChannelSendResult sendResult = outboundClient.sendTextDetailed(channel, safeMessage, answer);
             if (sendResult.sent()) {
                 log.info("channel outbound sent channelId={} channelType={} conversationId={} userId={} status={} details={}",
                         channel.id(), channel.type(), conversationId, externalUserId, sendResult.status(), sendResult.details());
@@ -76,7 +130,6 @@ public class ChannelRouter {
                         channel.id(), channel.type(), conversationId, externalUserId, sendResult.status(), sendResult.message(), sendResult.details());
             }
         }
-        return new ChannelInboundResult(channel.id(), sessionId, result.taskId(), result.status().name(), result.answer());
     }
 
     private Map<String, String> channelRequestMetadata(

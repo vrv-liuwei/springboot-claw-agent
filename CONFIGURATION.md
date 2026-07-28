@@ -107,9 +107,32 @@ ReAct、Planner、Tool Calling 阶段仍然只处理文本。原生图片只在�
 - 附件解析后的模型补充上下文写入 `metadata.attachments.modelContext`。
 - 若只有文件没有文字输入，知识库增强会按附件文档做摘要式上下文补充。
 
-## 4. DDIO 通道配置
+## 4. 系统意图和统一确认
 
-## 4. Feishu 出站消息类型
+系统意图配置位于 `claw-agent-intent/src/main/resources/clawagent/intents/system-intents.yml`。通道消息进入 `ChannelRouter` 后，会先检查当前会话是否存在待确认操作，再进行系统意图匹配；未命中时才进入普通 Agent Runtime。
+
+内置意图覆盖：
+
+- 会话指令：`/clear`、`/compact`、`/context`、`/status`、命令列表。
+- 计划流程：生成计划、确认计划、取消计划。
+- 工作区查看：只允许查看当前/最近工作区，不开放 IM 侧切换工作区。
+- 文档流程：文档列表、下载提示、附件文档总结、附件文档问答、知识库检索。
+
+风险交互规则：
+
+- `risk: low`：命中后直接执行 handler 或直接进入模型上下文。
+- `risk: medium`：创建 `PendingAction`，用户回复 `确认执行` 后执行。
+- `risk: high`：创建 `PendingAction`，用户必须回复完整确认文本，例如 `确认执行：工具调用 builtin.execute.command`。
+
+统一 PendingAction 类型：
+
+- `INTENT_CONFIRMATION`：系统意图确认。
+- `TOOL_APPROVAL`：Runtime 工具审批。
+- `PLAN_APPROVAL`：计划确认。
+
+文档意图不单独实现文件解析。通道或后台入口只需要把附件写入 `metadata.attachments`，现有 `AttachmentService` 会解析文件并写入知识库，`KnowledgeService` 再按 `knowledge.intent` / `knowledge.scope` 给模型补充上下文。
+
+## 5. Feishu 出站消息类型
 
 Feishu 出站仍复用统一 Channel 回写链路，通过 `outboundMessageType` 控制消息类型：
 
@@ -170,9 +193,9 @@ clawagent:
 
 卡片 JSON 可放在 `metadata.feishu.cardJson` / `metadata.cardJson`，内容会作为飞书 `interactive` 消息的 `content` 发送。
 
-## 5. DDIO 通道配置
+## 6. DDIO 通道配置
 
-### 5.1 application.yml 配置方式
+### 6.1 application.yml 配置方式
 
 ```yaml
 clawagent:
@@ -198,7 +221,7 @@ clawagent:
 - `baseUrl`：DDIO 平台 BaseURL，例如 `https://192.168.0.180:10443`。
 - `channel.ddio.chatScene`：出站会话类型，常用值为 `user`；群或频道场景可用 `group`。
 
-### 5.2 channels.json 配置方式
+### 6.2 channels.json 配置方式
 
 运行目录为服务启动目录时，文件路径为：
 
@@ -231,7 +254,7 @@ clawagent:
 
 默认账号会注册成通道 ID `ddio`。非默认账号会注册成 `ddio-账号名`。
 
-### 5.3 DDIO 公众号回调地址
+### 6.3 DDIO 公众号回调地址
 
 服务端 DDIO 兼容回调入口：
 
@@ -266,7 +289,7 @@ ACK 格式：
 http://example.com/ddio/message
 ```
 
-## 6. DDIO 消息和媒体处理
+## 7. DDIO 消息和媒体处理
 
 DDIO 文本出站使用接口：
 
@@ -295,7 +318,7 @@ DDIO 入站媒体消息会统一转成 `metadata.attachments`：
 
 媒体下载后会在本地解密并保存到 `.clawagent/media/inbound/ddio/yyyyMMdd/`，随后交给统一附件链路处理。
 
-## 7. 本地编译命令
+## 8. 本地编译命令
 
 本项目需要 JDK 17 编译。当前 Windows 环境如果默认 `JAVA_HOME` 是 JDK 8，需要先切到 JDK 17。
 

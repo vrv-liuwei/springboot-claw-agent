@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('clawAgentApp', {
     ipcRenderer.on('clawagent:open-settings', callback);
   },
   selectDirectory: () => ipcRenderer.invoke('clawagent:select-directory'),
+  getClientConfig: () => ipcRenderer.invoke('clawagent:get-client-config'),
+  setServerUrl: (serverUrl, options) => ipcRenderer.invoke('clawagent:set-server-url', serverUrl, options),
 });

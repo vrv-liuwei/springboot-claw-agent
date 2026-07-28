@@ -5,6 +5,13 @@ import com.github.clawagent.core.AgentEvent;
 import com.github.clawagent.core.AgentMessage;
 import com.github.clawagent.core.AgentRequest;
 import com.github.clawagent.core.AgentResult;
+import com.github.clawagent.intent.IntentRisk;
+import com.github.clawagent.intent.PendingAction;
+import com.github.clawagent.intent.PendingActionCreateRequest;
+import com.github.clawagent.intent.PendingActionExecutor;
+import com.github.clawagent.intent.PendingActionResult;
+import com.github.clawagent.intent.PendingActionService;
+import com.github.clawagent.intent.PendingActionType;
 import com.github.clawagent.core.AgentSession;
 import com.github.clawagent.core.AgentStep;
 import com.github.clawagent.core.AgentTask;
@@ -57,6 +64,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -113,6 +121,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final List<AgentCallback> callbacks;
     /** 已收到取消请求的任务 ID。运行线程会在规划、工具和最终回复边界协作式检查。 */
     private final Set<String> cancelledTaskIds = ConcurrentHashMap.newKeySet();
+    /** 正在执行的任务线程。取消时会同步打断线程，唤醒模型请求、长工具调用或并发等待。 */
+    private final Map<String, Thread> activeTaskThreads = new ConcurrentHashMap<>();
     private final int maxReactRounds;
     /** Runtime 横切拦截器链，按 order 顺序处理脱敏、审计规范化、合规过滤等扩展逻辑。 */
     private final List<AgentRuntimeInterceptor> runtimeInterceptors;
@@ -122,6 +132,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
     private final ThreadLocal<TodoItem> activeTodo = new ThreadLocal<>();
     /** 等待前端审批的工具调用；当前先用内存态保证本地 Web Agent 的审批阻塞流程跑通。 */
     private final Map<String, PendingToolApproval> pendingApprovals = new ConcurrentHashMap<>();
+    /** 统一待确认动作服务，用于把工具审批同步暴露给 IM 通道的“确认执行”文本流程。 */
+    private final PendingActionService pendingActionService;
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, AgentEventStore eventStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks) {
         this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
@@ -168,6 +180,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, MemoryContextBuilder memoryContextBuilder, MemoryCandidateProcessor memoryCandidateProcessor, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors) {
+        this(planner, responseGenerator, toolRegistry, taskStore, sessionStore, messageStore, sessionSummarizer,
+                memoryPromoters, memoryContextBuilder, memoryCandidateProcessor, eventStore, todoStore, toolGuards,
+                callbacks, maxReactRounds, runtimeInterceptors, null);
+    }
+
+    public DefaultAgentRuntime(AgentPlanner planner, AgentResponseGenerator responseGenerator, AgentToolRegistry toolRegistry, TaskStore taskStore, SessionStore sessionStore, SessionMessageStore messageStore, SessionSummarizer sessionSummarizer, List<MemoryPromoter> memoryPromoters, MemoryContextBuilder memoryContextBuilder, MemoryCandidateProcessor memoryCandidateProcessor, AgentEventStore eventStore, TodoStore todoStore, List<ToolExecutionGuard> toolGuards, List<AgentCallback> callbacks, int maxReactRounds, List<AgentRuntimeInterceptor> runtimeInterceptors, PendingActionService pendingActionService) {
         this.planner = planner;
         this.responseGenerator = responseGenerator;
         this.toolRegistry = toolRegistry;
@@ -189,6 +207,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
                 .filter(interceptor -> interceptor != null)
                 .sorted(Comparator.comparingInt(AgentRuntimeInterceptor::order))
                 .toList();
+        this.pendingActionService = pendingActionService;
     }
 
     private static MemoryCandidateProcessor defaultMemoryCandidateProcessor(SessionStore sessionStore,
@@ -237,6 +256,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         attachSessionContext(task);
         task.markStatus(TaskStatus.RUNNING);
         taskStore.saveTask(task);
+        activeTaskThreads.put(task.id(), Thread.currentThread());
         String traceId = UUID.randomUUID().toString();
         putMdc(traceId, task);
         saveMessage(task.sessionId(), task.id(), "user", task.input(), messageMetadata(task.metadata()));
@@ -326,6 +346,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return new AgentResult(task.id(), "执行失败：" + e.getMessage(), task.status(), task.sessionId());
         } finally {
             cancelledTaskIds.remove(task.id());
+            activeTaskThreads.remove(task.id(), Thread.currentThread());
             MDC.clear();
             activeCallbacks.remove();
             activeTodo.remove();
@@ -408,14 +429,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
             return "";
         }
         List<TodoItem> items = todoStore.listTodoItems(task.sessionId(), "", 200);
-        String activePlanTaskId = activeIncompletePlanTaskId(items);
-        if (activePlanTaskId.isBlank()) {
-            return "";
-        }
-        List<TodoItem> latestPlanItems = items.stream()
-                .filter(item -> activePlanTaskId.equals(item.taskId()))
-                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
-                .toList();
+        List<TodoItem> latestPlanItems = selectRelevantTodos(task, items);
         List<TodoItem> incompleteItems = latestPlanItems.stream()
                 .filter(item -> "pending".equalsIgnoreCase(item.status()) || "running".equalsIgnoreCase(item.status()))
                 .toList();
@@ -541,6 +555,11 @@ public class DefaultAgentRuntime implements AgentRuntime {
             for (Future<ToolExecutionOutput> future : futures) {
                 try {
                     outputs.add(future.get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    futures.forEach(item -> item.cancel(true));
+                    checkTaskCancelled(task);
+                    throw new TaskCancelledException("并发工具等待被中断");
                 } catch (Exception e) {
                     throw new IllegalStateException("并发工具执行失败：" + e.getMessage(), e);
                 }
@@ -684,6 +703,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
         taskStore.updateTask(task);
         Map<String, String> details = toolEventDetails(task, step, call, tool, null, guardError.getMessage(), elapsedMs(startedAt), startedAt);
         details.put("approvalKey", approvalKey);
+        // 仍保留原 pendingApprovals 阻塞机制，同时注册 PendingAction，保证 Web 审批和 IM 文本确认走同一套状态。
+        PendingAction pendingAction = createToolPendingAction(task, step, call, guardError.getMessage(), pending);
+        if (pendingAction != null) {
+            details.put("pendingActionId", pendingAction.actionId());
+            details.put("confirmText", pendingAction.confirmText());
+        }
         saveEvent(task, "WARN", "tool.approval_requested", "工具调用等待用户审批", details);
         emit("tool.approval_requested", task.id(), "工具调用等待用户审批", streamToolDetails(task, details));
         log.warn("agent tool waiting approval taskId={} stepId={} toolId={} reason={}",
@@ -735,6 +760,41 @@ public class DefaultAgentRuntime implements AgentRuntime {
         return nullToEmpty(taskId) + ":" + nullToEmpty(stepId);
     }
 
+    private PendingAction createToolPendingAction(AgentTask task, AgentStep step, ToolCall call, String reason, PendingToolApproval pending) {
+        if (pendingActionService == null) {
+            return null;
+        }
+        // 工具审批统一按高风险处理，需要用户回复完整确认文本，避免一句泛化确认误放行命令类工具。
+        return pendingActionService.create(new PendingActionCreateRequest(
+                PendingActionType.TOOL_APPROVAL,
+                "工具调用 " + call.toolId(),
+                reason,
+                IntentRisk.HIGH,
+                task.sessionId(),
+                task.channelId(),
+                task.userId(),
+                task.id(),
+                step.id(),
+                call.toolId(),
+                Map.of("approvalKey", approvalKey(task.id(), step.id()), "toolId", call.toolId()),
+                Duration.ofMinutes(10)),
+                new PendingActionExecutor() {
+                    @Override
+                    public String confirm(PendingAction action, String input) {
+                        pending.future().complete(true);
+                        return "已确认工具调用：" + call.toolId();
+                    }
+
+                    @Override
+                    public String reject(PendingAction action, String rejectReason) {
+                        AgentTask current = getTask(task.id());
+                        current.metadata().put("lastApprovalRejectReason", nullToEmpty(rejectReason).isBlank() ? "用户拒绝审批" : rejectReason);
+                        taskStore.updateTask(current);
+                        pending.future().complete(false);
+                        return "已拒绝工具调用：" + call.toolId();
+                    }
+                });
+    }
     private boolean containsMetadataToken(String value, String expected) {
         if (value == null || value.isBlank() || expected == null || expected.isBlank()) {
             return false;
@@ -849,16 +909,29 @@ public class DefaultAgentRuntime implements AgentRuntime {
         }
         cancelledTaskIds.add(taskId);
         releasePendingApprovals(taskId, false);
+        Thread activeThread = activeTaskThreads.get(taskId);
+        if (activeThread != null) {
+            // 模型请求或长阻塞工具不一定会主动轮询取消标记，先打断运行线程让它尽快回到取消分支。
+            activeThread.interrupt();
+        }
         task.markStatus(TaskStatus.CANCELLED);
         taskStore.updateTask(task);
         saveEvent(task, "WARN", "task.cancel.requested", "任务取消请求已接收", Map.of(
-                "status", task.status().name()));
-        log.warn("agent task cancel requested taskId={}", taskId);
+                "status", task.status().name(),
+                "threadInterrupted", String.valueOf(activeThread != null)));
+        log.warn("agent task cancel requested taskId={} threadInterrupted={}", taskId, activeThread != null);
         return task;
     }
 
     @Override
     public AgentTask approveToolCall(String taskId, String stepId, String toolId) {
+        if (pendingActionService != null) {
+            // 后台按钮审批时优先关闭统一 PendingAction，防止 IM 端还残留同一个待确认动作。
+            PendingActionResult result = pendingActionService.confirmByTarget(PendingActionType.TOOL_APPROVAL, taskId, stepId, toolId, "确认执行：" + toolId);
+            if (result.handled()) {
+                return getTask(taskId);
+            }
+        }
         String approvalKey = approvalKey(taskId, stepId);
         PendingToolApproval pending = pendingApprovals.get(approvalKey);
         if (pending == null) {
@@ -873,6 +946,13 @@ public class DefaultAgentRuntime implements AgentRuntime {
 
     @Override
     public AgentTask rejectToolCall(String taskId, String stepId, String toolId, String reason) {
+        if (pendingActionService != null) {
+            // 拒绝路径同样先同步 PendingAction 状态，再回退到旧的 pendingApprovals 阻塞对象。
+            PendingActionResult result = pendingActionService.rejectByTarget(PendingActionType.TOOL_APPROVAL, taskId, stepId, toolId, reason);
+            if (result.handled()) {
+                return getTask(taskId);
+            }
+        }
         String approvalKey = approvalKey(taskId, stepId);
         PendingToolApproval pending = pendingApprovals.get(approvalKey);
         if (pending == null) {
@@ -1479,24 +1559,64 @@ public class DefaultAgentRuntime implements AgentRuntime {
         } catch (NumberFormatException e) {
             return null;
         }
-        List<TodoItem> items = todoStore.listTodoItems(task.sessionId(), "", 200);
-        String latestPlanTaskId = activeIncompletePlanTaskId(items);
+        List<TodoItem> items = selectRelevantTodos(task, todoStore.listTodoItems(task.sessionId(), "", 200));
         return items.stream()
-                .filter(item -> latestPlanTaskId.equals(item.taskId()))
                 .filter(item -> item.itemOrder() == order)
                 .findFirst()
                 .orElse(null);
     }
 
-    private String activeIncompletePlanTaskId(List<TodoItem> items) {
+    static List<TodoItem> selectRelevantTodos(AgentTask task, List<TodoItem> items) {
         if (items == null || items.isEmpty()) {
-            return "";
+            return List.of();
         }
-        return items.stream()
-                .filter(this::isResumableTodo)
-                .min(Comparator.comparing(TodoItem::createdAt))
+        String planId = task == null ? "" : nullToEmptyStatic(task.metadata().get("plan.id"));
+        if (!planId.isBlank()) {
+            List<TodoItem> planItems = items.stream()
+                    .filter(item -> planId.equals(item.metadata().get("planId")))
+                    .toList();
+            if (!planItems.isEmpty()) {
+                return deduplicateTodos(planItems);
+            }
+        }
+        String taskId = task == null ? "" : nullToEmptyStatic(task.id());
+        if (!taskId.isBlank()) {
+            List<TodoItem> currentTaskItems = items.stream()
+                    .filter(item -> taskId.equals(item.taskId()))
+                    .toList();
+            if (!currentTaskItems.isEmpty()) {
+                return deduplicateTodos(currentTaskItems);
+            }
+        }
+        String activeTaskId = items.stream()
+                .filter(DefaultAgentRuntime::isResumableTodo)
+                // 会话里存在多个历史计划时，恢复必须从最近一组未完成 Todo 开始，不能取最早任务。
+                .max(Comparator.comparing(TodoItem::createdAt))
                 .map(TodoItem::taskId)
                 .orElse("");
+        if (activeTaskId.isBlank()) {
+            return List.of();
+        }
+        return deduplicateTodos(items.stream()
+                .filter(item -> activeTaskId.equals(item.taskId()))
+                .toList());
+    }
+
+    private static List<TodoItem> deduplicateTodos(List<TodoItem> items) {
+        Map<Integer, TodoItem> latestByOrder = new LinkedHashMap<>();
+        for (TodoItem item : items) {
+            TodoItem current = latestByOrder.get(item.itemOrder());
+            if (current == null || item.updatedAt().isAfter(current.updatedAt())) {
+                latestByOrder.put(item.itemOrder(), item);
+            }
+        }
+        return latestByOrder.values().stream()
+                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
+                .toList();
+    }
+
+    private static String nullToEmptyStatic(String value) {
+        return value == null ? "" : value;
     }
 
     private boolean isIncompleteTodo(TodoItem item) {
@@ -1504,7 +1624,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         return "pending".equals(status) || "running".equals(status);
     }
 
-    private boolean isResumableTodo(TodoItem item) {
+    private static boolean isResumableTodo(TodoItem item) {
         String status = item.status() == null ? "" : item.status().toLowerCase(Locale.ROOT);
         return "pending".equals(status) || "running".equals(status) || "failed".equals(status);
     }
@@ -1621,14 +1741,10 @@ public class DefaultAgentRuntime implements AgentRuntime {
     }
 
     private void attachResumeCheckpoint(AgentTask task, List<TodoItem> todos) {
-        String activePlanTaskId = activeIncompletePlanTaskId(todos);
-        if (activePlanTaskId.isBlank()) {
+        List<TodoItem> activeItems = selectRelevantTodos(task, todos);
+        if (activeItems.isEmpty() || activeItems.stream().noneMatch(DefaultAgentRuntime::isResumableTodo)) {
             return;
         }
-        List<TodoItem> activeItems = todos.stream()
-                .filter(item -> activePlanTaskId.equals(item.taskId()))
-                .sorted(Comparator.comparingInt(TodoItem::itemOrder))
-                .toList();
         TodoItem current = activeItems.stream()
                 .filter(item -> "running".equalsIgnoreCase(item.status()))
                 .findFirst()
@@ -1640,6 +1756,7 @@ public class DefaultAgentRuntime implements AgentRuntime {
         if (current == null) {
             return;
         }
+        String activePlanTaskId = activeItems.get(0).taskId();
         String checkpoint = "resumeFromTaskId=" + activePlanTaskId + "\n"
                 + "currentTodoOrder=" + current.itemOrder() + "\n"
                 + "currentTodoId=" + current.id() + "\n"

@@ -4,6 +4,7 @@ import {
   Check,
   CheckCircle,
   ChevronDown,
+  ChevronRight,
   Copy,
   ChevronUp,
   Circle,
@@ -60,17 +61,21 @@ import type {
   ChannelInboundResult,
   ChannelOutboundTestResponse,
   ChannelStreamStatus,
+  ChannelUserBindingView,
   CostConfigView,
   CostRuleView,
   FailureAnalysisView,
   FileChangeView,
   FileReviewView,
   DevelopmentTaskSummary,
+  DevicePairingCodeResponse,
   DeviceView,
   HealthStatus,
   KnowledgeDocument,
   KnowledgeProviderView,
   LocalHealthView,
+  LocalUserSessionView,
+  LocalUserView,
   KnowledgeSearchHit,
   MemoryHitLog,
   MemoryItem,
@@ -83,6 +88,10 @@ import type {
   ModelConfigUpsertRequest,
   McpServerRegistration,
   ModelConfigUpdate,
+  PlanDraft,
+  PlanItem,
+  PlanRevisionSummaryView,
+  PlanTemplateView,
   PolicyConfigUpdate,
   ResumeStateView,
   RuntimeConfigSnapshot,
@@ -104,6 +113,9 @@ const AGENT_AVATAR_URL = '/admin/brand/clawagent-avatar.svg';
 const USER_AVATAR_URL = '/admin/brand/user-avatar.svg';
 const CHAT_HISTORY_PAGE_SIZE = 100;
 const TASK_SEARCH_FILTER_STORAGE_KEY = 'clawagent.taskSearch.filter';
+const AUTH_SESSION_STORAGE_KEY = 'clawagent.auth.sessionToken';
+const AUTH_USER_ID_STORAGE_KEY = 'clawagent.auth.userId';
+const AUTH_USERNAME_STORAGE_KEY = 'clawagent.auth.username';
 const AUTOMATION_RETRY_MAX_ATTEMPTS = 'retry.maxAttempts';
 const AUTOMATION_RETRY_BACKOFF_SECONDS = 'retry.backoffSeconds';
 const AUTOMATION_RETRY_PAUSE_AFTER_EXHAUSTED = 'retry.pauseAfterExhausted';
@@ -115,6 +127,7 @@ const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { id: 'context', title: '查看上下文占用', description: '查看上下文版本、活跃消息数和 Token 估算' },
   { id: 'status', title: '查看运行状态', description: '汇总会话、任务、权限、MCP、工具和 Todo 状态' },
   { id: 'resume', title: '恢复任务', description: '从最近一个可恢复任务继续执行' },
+  { id: 'plan', title: '计划模式', description: '先生成执行计划，再按步骤运行', hint: '实现一个功能并验证' },
   { id: 'workspace', title: '查看或切换工作区', description: '查看当前项目目录；带路径时切换当前聊天项目目录', hint: 'D:\\workspace\\project' },
   { id: 'approval', title: '权限模式', description: '查看或切换 ask/auto/full/custom 权限模式', hint: 'auto' },
   { id: 'mcp', title: 'MCP 状态', description: '查看 MCP 服务连接状态' },
@@ -239,6 +252,13 @@ type AuditEventFilter = {
   type: string;
   sessionId: string;
   taskId: string;
+  userId: string;
+  channelId: string;
+  toolId: string;
+  riskLevel: string;
+  detailKey: string;
+  detailValue: string;
+  q: string;
   limit: number;
 };
 
@@ -280,6 +300,8 @@ type ChatMessage = {
   requestInput?: string;
   attachments?: ChatAttachment[];
   taskId?: string;
+  planId?: string;
+  plan?: PlanDraft;
   status?: string;
   progress?: string;
   createdAt: number;
@@ -334,6 +356,7 @@ type SlashCommandId =
   | 'context'
   | 'status'
   | 'resume'
+  | 'plan'
   | 'workspace'
   | 'approval'
   | 'mcp'
@@ -418,6 +441,13 @@ function defaultAuditEventFilter(): AuditEventFilter {
     type: '',
     sessionId: '',
     taskId: '',
+    userId: '',
+    channelId: '',
+    toolId: '',
+    riskLevel: '',
+    detailKey: '',
+    detailValue: '',
+    q: '',
     limit: 100,
   };
 }
@@ -1402,6 +1432,7 @@ export function App() {
   const [channelSaving, setChannelSaving] = useState(false);
   const [channelAdapterReloading, setChannelAdapterReloading] = useState(false);
   const [channelAdapterUploading, setChannelAdapterUploading] = useState(false);
+  const [channelAdapterDeleting, setChannelAdapterDeleting] = useState<string>();
   const [channelMessage, setChannelMessage] = useState<string>();
   const [channelTestText, setChannelTestText] = useState('测试通道入站消息');
   const [channelTestResult, setChannelTestResult] = useState<ChannelInboundResult>();
@@ -1410,15 +1441,41 @@ export function App() {
   const [channelOutboundResult, setChannelOutboundResult] = useState<ChannelOutboundTestResponse>();
   const [channelHealth, setChannelHealth] = useState<ChannelConnectivityStatus>();
   const [channelStreamStatus, setChannelStreamStatus] = useState<ChannelStreamStatus>();
+  const [channelUserBindings, setChannelUserBindings] = useState<ChannelUserBindingView[]>([]);
+  const [channelBindingExternalUserId, setChannelBindingExternalUserId] = useState('');
+  const [channelBindingExternalUsername, setChannelBindingExternalUsername] = useState('');
+  const [channelBindingLocalUserId, setChannelBindingLocalUserId] = useState('');
+  const [channelBindingLoading, setChannelBindingLoading] = useState(false);
   const [apiTokens, setApiTokens] = useState<ApiTokenView[]>([]);
   const [apiTokenName, setApiTokenName] = useState('Default API Token');
   const [apiTokenLoading, setApiTokenLoading] = useState(false);
   const [apiTokenSaving, setApiTokenSaving] = useState(false);
   const [apiTokenMessage, setApiTokenMessage] = useState<string>();
   const [createdApiToken, setCreatedApiToken] = useState<ApiTokenCreateResponse>();
+  const [localUsers, setLocalUsers] = useState<LocalUserView[]>([]);
+  const [currentLocalUser, setCurrentLocalUser] = useState<LocalUserView>();
+  const [currentLocalSession, setCurrentLocalSession] = useState<LocalUserSessionView>();
+  const [localSessionToken, setLocalSessionToken] = useState(() => window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY) || '');
+  const [localLoginUsername, setLocalLoginUsername] = useState('');
+  const [localLoginPassword, setLocalLoginPassword] = useState('');
+  const [localUserUsername, setLocalUserUsername] = useState('');
+  const [localUserPassword, setLocalUserPassword] = useState('');
+  const [localUserDisplayName, setLocalUserDisplayName] = useState('');
+  const [localUserRole, setLocalUserRole] = useState('user');
+  const [localUserPermissionMode, setLocalUserPermissionMode] = useState('ask');
+  const [localUserApprovedToolIds, setLocalUserApprovedToolIds] = useState('');
+  const [localUserLoading, setLocalUserLoading] = useState(false);
+  const [localUserSaving, setLocalUserSaving] = useState(false);
+  const [localUserMessage, setLocalUserMessage] = useState<string>();
+  const [localUserSessions, setLocalUserSessions] = useState<LocalUserSessionView[]>([]);
+  const [localUserSessionLoading, setLocalUserSessionLoading] = useState(false);
   const [devices, setDevices] = useState<DeviceView[]>([]);
   const [deviceName, setDeviceName] = useState('Local Device');
   const [deviceType, setDeviceType] = useState('desktop');
+  const [devicePermissionMode, setDevicePermissionMode] = useState('ask');
+  const [deviceApprovedToolIds, setDeviceApprovedToolIds] = useState('');
+  const [devicePairingTtlSeconds, setDevicePairingTtlSeconds] = useState(600);
+  const [createdDevicePairing, setCreatedDevicePairing] = useState<DevicePairingCodeResponse>();
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceSaving, setDeviceSaving] = useState(false);
   const [deviceMessage, setDeviceMessage] = useState<string>();
@@ -1488,6 +1545,11 @@ export function App() {
   const [toolCallsByTaskId, setToolCallsByTaskId] = useState<Record<string, ToolCallView[]>>({});
   const [resumeStateByTaskId, setResumeStateByTaskId] = useState<Record<string, ResumeStateView>>({});
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [planMode, setPlanMode] = useState(() => window.localStorage.getItem('clawagent.chat.planMode') === 'true');
+  const [planBusyId, setPlanBusyId] = useState<string>();
+  const [autoRunPlan, setAutoRunPlan] = useState<{ planId: string; messageId: string }>();
+  const [planTemplates, setPlanTemplates] = useState<PlanTemplateView[]>([]);
+  const [selectedPlanTemplateId, setSelectedPlanTemplateId] = useState(() => window.localStorage.getItem('clawagent.chat.planTemplateId') || '');
   const [chatHistoryHasMore, setChatHistoryHasMore] = useState(false);
   const [chatHistoryLoading, setChatHistoryLoading] = useState(false);
   const [input, setInput] = useState('');
@@ -1500,6 +1562,7 @@ export function App() {
   const runningTaskRef = useRef<string>();
   const todoPollerRef = useRef<number>();
   const resumeStateLoadingTaskIdsRef = useRef<Set<string>>(new Set());
+  const authDataLoadedRef = useRef(false);
   const attachmentPreviewUrlsRef = useRef<string[]>([]);
 
   const selectedSession = useMemo(
@@ -1533,13 +1596,16 @@ export function App() {
 
   const restoreSessionMessages = useCallback(async (sessionId: string) => {
     // 聊天窗口默认恢复最近一页；更早消息由顶部滚动继续加载，避免一次性拉全量历史。
-    const history = await api.sessionMessages(sessionId, CHAT_HISTORY_PAGE_SIZE);
+    const [history, sessionPlans] = await Promise.all([
+      api.sessionMessages(sessionId, CHAT_HISTORY_PAGE_SIZE),
+      api.plans(sessionId, CHAT_HISTORY_PAGE_SIZE).catch(() => [] as PlanDraft[]),
+    ]);
     setChatHistoryHasMore(history.length === CHAT_HISTORY_PAGE_SIZE);
-    if (!history.length) {
+    if (!history.length && !sessionPlans.length) {
       setChatMessages([createAssistantMessage('已恢复最近会话。')]);
       return;
     }
-    setChatMessages(history.map(agentMessageToChatMessage));
+    setChatMessages(mergePlanMessages(history.map(agentMessageToChatMessage), sessionPlans));
   }, []);
 
   const loadOlderChatMessages = useCallback(async () => {
@@ -1680,25 +1746,45 @@ export function App() {
     }
   }, []);
 
+  const refreshChannelUserBindings = useCallback(async (channelId = channelDraft.id) => {
+    const normalizedChannelId = channelId?.trim();
+    if (!normalizedChannelId) {
+      setChannelUserBindings([]);
+      return;
+    }
+    setChannelBindingLoading(true);
+    try {
+      setChannelUserBindings(await api.channelUserBindings(normalizedChannelId));
+    } catch (err) {
+      setChannelMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBindingLoading(false);
+    }
+  }, [channelDraft.id]);
+
   const refreshChannels = useCallback(async () => {
     setChannelLoading(true);
     setChannelMessage(undefined);
     try {
-      const [data, adapters] = await Promise.all([api.channels(), api.channelAdapters()]);
+      const [data, adapters, users] = await Promise.all([
+        api.channels(),
+        api.channelAdapters(),
+        api.localUsers().catch(() => [] as LocalUserView[]),
+      ]);
+      const nextDraft = channelDraft.id
+        ? data.find((channel) => channel.id === channelDraft.id) || channelDraft
+        : data[0] || defaultChannelDraft();
       setChannels(data);
       setChannelAdapters(adapters);
-      setChannelDraft((current) => {
-        if (current.id) {
-          return data.find((channel) => channel.id === current.id) || current;
-        }
-        return data[0] || defaultChannelDraft();
-      });
+      setLocalUsers(users);
+      setChannelDraft(nextDraft);
+      await refreshChannelUserBindings(nextDraft.id);
     } catch (err) {
       setChannelMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setChannelLoading(false);
     }
-  }, []);
+  }, [channelDraft, refreshChannelUserBindings]);
 
   const reloadChannelAdapters = useCallback(async () => {
     setChannelAdapterReloading(true);
@@ -1728,6 +1814,20 @@ export function App() {
     }
   }, []);
 
+  const deleteChannelAdapter = useCallback(async (filename: string) => {
+    setChannelAdapterDeleting(filename);
+    setChannelMessage(undefined);
+    try {
+      const result = await api.deleteChannelAdapter(filename);
+      setChannelAdapters(result.reload?.adapters || []);
+      setChannelMessage(`Adapter jar 已删除：${filename}。${result.streamSwitchHint || ''}`);
+    } catch (err) {
+      setChannelMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelAdapterDeleting(undefined);
+    }
+  }, []);
+
   const selectChannel = useCallback((channel: ChannelDefinition) => {
     setChannelDraft({
       ...channel,
@@ -1738,7 +1838,11 @@ export function App() {
     setChannelOutboundResult(undefined);
     setChannelHealth(undefined);
     setChannelStreamStatus(undefined);
-  }, []);
+    setChannelBindingExternalUserId('');
+    setChannelBindingExternalUsername('');
+    setChannelBindingLocalUserId('');
+    void refreshChannelUserBindings(channel.id);
+  }, [refreshChannelUserBindings]);
 
   const newChannel = useCallback(() => {
     setChannelDraft(defaultChannelDraft());
@@ -1747,6 +1851,10 @@ export function App() {
     setChannelOutboundConversationId('');
     setChannelHealth(undefined);
     setChannelStreamStatus(undefined);
+    setChannelUserBindings([]);
+    setChannelBindingExternalUserId('');
+    setChannelBindingExternalUsername('');
+    setChannelBindingLocalUserId('');
   }, []);
 
   const saveChannel = useCallback(async () => {
@@ -1771,6 +1879,7 @@ export function App() {
       setChannelStreamStatus(undefined);
       setChannelOutboundResult(undefined);
       await refreshChannels();
+      await refreshChannelUserBindings(saved.id);
       setChannelMessage(`通道 ${saved.id} 已保存。`);
     } catch (err) {
       setChannelMessage(err instanceof Error ? err.message : String(err));
@@ -1792,6 +1901,7 @@ export function App() {
       setChannelHealth(undefined);
       setChannelStreamStatus(undefined);
       setChannelOutboundResult(undefined);
+      setChannelUserBindings([]);
       await refreshChannels();
       setChannelMessage(`通道 ${channelId} 已删除。`);
     } catch (err) {
@@ -1800,6 +1910,62 @@ export function App() {
       setChannelSaving(false);
     }
   }, [refreshChannels]);
+
+  const bindChannelUser = useCallback(async () => {
+    const channelId = channelDraft.id?.trim();
+    const externalUserId = channelBindingExternalUserId.trim();
+    const localUserId = channelBindingLocalUserId.trim();
+    if (!channelId) {
+      setChannelMessage('请先选择或保存一个通道。');
+      return;
+    }
+    if (!externalUserId || !localUserId) {
+      setChannelMessage('外部用户 ID 和本地用户不能为空。');
+      return;
+    }
+    const localUser = localUsers.find((user) => user.id === localUserId || user.username === localUserId);
+    setChannelBindingLoading(true);
+    setChannelMessage(undefined);
+    try {
+      await api.bindChannelUser(channelId, {
+        externalUserId,
+        externalUsername: channelBindingExternalUsername.trim() || undefined,
+        localUserId,
+        localUsername: localUser?.username || localUser?.displayName || localUserId,
+      });
+      await refreshChannelUserBindings(channelId);
+      setChannelBindingExternalUserId('');
+      setChannelBindingExternalUsername('');
+      setChannelMessage(`外部用户 ${externalUserId} 已绑定到本地用户 ${localUser?.username || localUserId}。`);
+    } catch (err) {
+      setChannelMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBindingLoading(false);
+    }
+  }, [
+    channelBindingExternalUserId,
+    channelBindingExternalUsername,
+    channelBindingLocalUserId,
+    channelDraft.id,
+    localUsers,
+    refreshChannelUserBindings,
+  ]);
+
+  const unbindChannelUser = useCallback(async (externalUserId: string) => {
+    const channelId = channelDraft.id?.trim();
+    if (!channelId || !externalUserId) return;
+    setChannelBindingLoading(true);
+    setChannelMessage(undefined);
+    try {
+      await api.unbindChannelUser(channelId, externalUserId);
+      await refreshChannelUserBindings(channelId);
+      setChannelMessage(`外部用户 ${externalUserId} 已解绑。`);
+    } catch (err) {
+      setChannelMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChannelBindingLoading(false);
+    }
+  }, [channelDraft.id, refreshChannelUserBindings]);
 
   const submitChannelTest = useCallback(async () => {
     if (!channelDraft.id?.trim()) {
@@ -1942,6 +2108,10 @@ export function App() {
     try {
       const response = await api.createApiToken({
         name: apiTokenName,
+        ownerUserId: currentLocalUser?.id,
+        ownerUsername: currentLocalUser?.username,
+        permissionMode: currentLocalUser?.metadata?.permissionMode || currentLocalUser?.metadata?.toolPermissionMode || 'ask',
+        approvedToolIds: splitConfigLines((currentLocalUser?.metadata?.approvedToolIds || currentLocalUser?.metadata?.toolIds || '').replace(/,/g, '\n')),
         metadata: { source: 'admin' },
       });
       setCreatedApiToken(response);
@@ -1952,24 +2122,224 @@ export function App() {
     } finally {
       setApiTokenSaving(false);
     }
-  }, [apiTokenName, refreshApiTokens]);
+  }, [apiTokenName, currentLocalUser?.id, currentLocalUser?.metadata, currentLocalUser?.username, refreshApiTokens]);
 
-  const revokeApiToken = useCallback(async (tokenId: string) => {
-    if (!window.confirm('确定撤销这个 API Token？')) {
+  const deleteApiToken = useCallback(async (tokenId: string) => {
+    if (!window.confirm('确定删除这个 API Token？删除后无法继续使用。')) {
       return;
     }
     setApiTokenSaving(true);
     setApiTokenMessage(undefined);
     try {
-      await api.revokeApiToken(tokenId);
+      await api.deleteApiToken(tokenId);
       await refreshApiTokens();
-      setApiTokenMessage('API Token 已撤销。');
+      setApiTokenMessage('API Token 已删除。');
     } catch (err) {
       setApiTokenMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setApiTokenSaving(false);
     }
   }, [refreshApiTokens]);
+
+  const refreshLocalUsers = useCallback(async () => {
+    setLocalUserLoading(true);
+    setLocalUserMessage(undefined);
+    try {
+      setLocalUsers(await api.localUsers());
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserLoading(false);
+    }
+  }, []);
+
+  const refreshLocalUserSessions = useCallback(async () => {
+    setLocalUserSessionLoading(true);
+    setLocalUserMessage(undefined);
+    try {
+      setLocalUserSessions(await api.localUserSessions());
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSessionLoading(false);
+    }
+  }, []);
+
+  const refreshCurrentLocalUser = useCallback(async (sessionToken = localSessionToken) => {
+    const token = sessionToken.trim();
+    if (!token) {
+      setCurrentLocalUser(undefined);
+      setCurrentLocalSession(undefined);
+      return;
+    }
+    try {
+      const current = await api.currentLocalUser(token);
+      if (current.user?.id) window.localStorage.setItem(AUTH_USER_ID_STORAGE_KEY, current.user.id);
+      if (current.user?.username) window.localStorage.setItem(AUTH_USERNAME_STORAGE_KEY, current.user.username);
+      setCurrentLocalUser(current.user);
+      setCurrentLocalSession(current.session);
+    } catch (err) {
+      // 本地 session 失效时立即清理，避免后续任务继续带过期身份。
+      window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_USER_ID_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_USERNAME_STORAGE_KEY);
+      setLocalSessionToken('');
+      setCurrentLocalUser(undefined);
+      setCurrentLocalSession(undefined);
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    }
+  }, [localSessionToken]);
+
+  const loginLocalUser = useCallback(async () => {
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      const response = await api.loginLocalUser({ username: localLoginUsername, password: localLoginPassword });
+      const token = response.sessionToken || '';
+      window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, token);
+      if (response.user?.id) window.localStorage.setItem(AUTH_USER_ID_STORAGE_KEY, response.user.id);
+      if (response.user?.username) window.localStorage.setItem(AUTH_USERNAME_STORAGE_KEY, response.user.username);
+      setLocalSessionToken(token);
+      setCurrentLocalUser(response.user);
+      setCurrentLocalSession(response.session);
+      setLocalLoginPassword('');
+      await refreshLocalUserSessions();
+      setLocalUserMessage('本地用户已登录，后续 WebUI 任务会使用该用户身份。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [localLoginPassword, localLoginUsername, refreshLocalUserSessions]);
+
+  const logoutLocalUser = useCallback(async () => {
+    const token = localSessionToken.trim();
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      if (token) {
+        await api.logoutLocalUser(token);
+      }
+      window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_USER_ID_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_USERNAME_STORAGE_KEY);
+      setLocalSessionToken('');
+      setCurrentLocalUser(undefined);
+      setCurrentLocalSession(undefined);
+      await refreshLocalUserSessions();
+      setLocalUserMessage('本地用户已退出。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [localSessionToken, refreshLocalUserSessions]);
+
+  const createLocalUser = useCallback(async () => {
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      const approvedToolIds = splitConfigLines(localUserApprovedToolIds);
+      const firstUser = localUsers.length === 0;
+      const request = {
+        username: localUserUsername,
+        password: localUserPassword,
+        displayName: localUserDisplayName,
+        role: firstUser ? 'owner' : localUserRole,
+        metadata: {
+          source: 'admin',
+          permissionMode: localUserPermissionMode,
+          ...(approvedToolIds.length ? { approvedToolIds: approvedToolIds.join(',') } : {}),
+        },
+      };
+      // 首个本地用户走 setup 接口，只允许在用户表为空时创建 owner。
+      await (firstUser ? api.setupOwner(request) : api.createLocalUser(request));
+      // 密码只用于本次提交，成功后立即从页面状态清掉。
+      setLocalUserPassword('');
+      await refreshLocalUsers();
+      setLocalUserMessage(firstUser ? '本地 owner 已初始化。' : '本地用户已创建。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [localUserApprovedToolIds, localUserDisplayName, localUserPassword, localUserPermissionMode, localUserRole, localUserUsername, localUsers.length, refreshLocalUsers]);
+
+  const updateLocalUserPermissions = useCallback(async (user: LocalUserView) => {
+    const currentMode = user.metadata?.permissionMode || user.metadata?.toolPermissionMode || 'ask';
+    const mode = window.prompt('请输入权限模式：ask / auto / custom / read-only / full / full-access', currentMode);
+    if (!mode) {
+      return;
+    }
+    const currentTools = (user.metadata?.approvedToolIds || user.metadata?.toolIds || '').replace(/,/g, '\n');
+    const toolIds = window.prompt('请输入工具白名单，多个工具用逗号或换行分隔', currentTools);
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      await api.updateLocalUserPermissions(user.id, {
+        permissionMode: mode,
+        approvedToolIds: splitConfigLines((toolIds || '').replace(/,/g, '\n')),
+      });
+      await refreshLocalUsers();
+      setLocalUserMessage('本地用户权限已更新。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [refreshLocalUsers]);
+
+  const changeLocalUserPassword = useCallback(async (userId: string) => {
+    const password = window.prompt('请输入新密码，至少 6 位');
+    if (!password) {
+      return;
+    }
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      await api.changeLocalUserPassword(userId, { password });
+      await refreshLocalUsers();
+      setLocalUserMessage('本地用户密码已更新。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [refreshLocalUsers]);
+
+  const disableLocalUser = useCallback(async (userId: string) => {
+    if (!window.confirm('确定禁用这个本地用户？')) {
+      return;
+    }
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      await api.disableLocalUser(userId);
+      await refreshLocalUsers();
+      setLocalUserMessage('本地用户已禁用。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [refreshLocalUsers]);
+
+  const revokeLocalUserSession = useCallback(async (sessionId: string) => {
+    if (!window.confirm('确定撤销这个本地登录会话？')) {
+      return;
+    }
+    setLocalUserSaving(true);
+    setLocalUserMessage(undefined);
+    try {
+      await api.revokeLocalUserSession(sessionId);
+      await refreshLocalUserSessions();
+      setLocalUserMessage('本地登录会话已撤销。');
+    } catch (err) {
+      setLocalUserMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLocalUserSaving(false);
+    }
+  }, [refreshLocalUserSessions]);
 
   const refreshDevices = useCallback(async () => {
     setDeviceLoading(true);
@@ -1990,7 +2360,9 @@ export function App() {
       await api.registerDevice({
         name: deviceName,
         type: deviceType,
-        metadata: { source: 'admin' },
+        permissionMode: devicePermissionMode,
+        approvedToolIds: splitConfigLines(deviceApprovedToolIds),
+        metadata: { source: 'admin', registration: 'manual' },
       });
       await refreshDevices();
       setDeviceMessage('设备已登记。');
@@ -1999,7 +2371,30 @@ export function App() {
     } finally {
       setDeviceSaving(false);
     }
-  }, [deviceName, deviceType, refreshDevices]);
+  }, [deviceApprovedToolIds, deviceName, devicePermissionMode, deviceType, refreshDevices]);
+
+  const createDevicePairingCode = useCallback(async () => {
+    setDeviceSaving(true);
+    setDeviceMessage(undefined);
+    setCreatedDevicePairing(undefined);
+    try {
+      const response = await api.createDevicePairingCode({
+        name: deviceName,
+        type: deviceType,
+        ttlSeconds: devicePairingTtlSeconds,
+        permissionMode: devicePermissionMode,
+        approvedToolIds: splitConfigLines(deviceApprovedToolIds),
+        metadata: { source: 'admin', registration: 'pairing' },
+      });
+      setCreatedDevicePairing(response);
+      await refreshDevices();
+      setDeviceMessage('设备配对码已创建，过期前可在客户端完成配对。');
+    } catch (err) {
+      setDeviceMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeviceSaving(false);
+    }
+  }, [deviceApprovedToolIds, deviceName, devicePairingTtlSeconds, devicePermissionMode, deviceType, refreshDevices]);
 
   const heartbeatDevice = useCallback(async (deviceId: string) => {
     setDeviceSaving(true);
@@ -2025,6 +2420,67 @@ export function App() {
       await api.revokeDevice(deviceId);
       await refreshDevices();
       setDeviceMessage('设备已撤销。');
+    } catch (err) {
+      setDeviceMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeviceSaving(false);
+    }
+  }, [refreshDevices]);
+
+  const updateDevicePermissions = useCallback(async (deviceId: string) => {
+    const permissionMode = window.prompt('权限模式：ask / auto / custom / read-only / full-access', 'ask');
+    if (!permissionMode) {
+      return;
+    }
+    const toolIds = window.prompt('高危工具白名单，多个工具 ID 用逗号或换行分隔', '');
+    setDeviceSaving(true);
+    setDeviceMessage(undefined);
+    try {
+      await api.updateDevicePermissions(deviceId, {
+        permissionMode,
+        approvedToolIds: splitConfigLines((toolIds || '').replace(/,/g, '\n')),
+      });
+      await refreshDevices();
+      setDeviceMessage('设备权限绑定已更新。');
+    } catch (err) {
+      setDeviceMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeviceSaving(false);
+    }
+  }, [refreshDevices]);
+
+  const rotateDeviceSecret = useCallback(async (deviceId: string) => {
+    if (!window.confirm('确认轮换设备密钥？旧密钥会立即失效。')) {
+      return;
+    }
+    setDeviceSaving(true);
+    setDeviceMessage(undefined);
+    try {
+      const response = await api.rotateDeviceSecret(deviceId);
+      await refreshDevices();
+      setDeviceMessage(`设备密钥已轮换，请立即保存：${response.deviceSecret || ''}`);
+    } catch (err) {
+      setDeviceMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeviceSaving(false);
+    }
+  }, [refreshDevices]);
+
+  const bindDeviceUser = useCallback(async (deviceId: string) => {
+    const userId = window.prompt('绑定本地用户 ID；留空表示解绑', '');
+    if (userId === null) {
+      return;
+    }
+    const username = userId ? window.prompt('展示用户名，可留空', '') : '';
+    setDeviceSaving(true);
+    setDeviceMessage(undefined);
+    try {
+      await api.bindDeviceUser(deviceId, {
+        userId,
+        username: username || '',
+      });
+      await refreshDevices();
+      setDeviceMessage(userId ? '设备用户绑定已更新。' : '设备用户绑定已解除。');
     } catch (err) {
       setDeviceMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -2466,16 +2922,29 @@ export function App() {
   }, [active, channelLoading, channels.length, refreshChannels]);
 
   useEffect(() => {
-    if (active === 'auth' && !apiTokens.length && !apiTokenLoading) {
-      void refreshApiTokens();
+    if (active !== 'auth' || authDataLoadedRef.current) {
+      return;
     }
-  }, [active, apiTokenLoading, apiTokens.length, refreshApiTokens]);
+    authDataLoadedRef.current = true;
+    // 授权数据允许为空；只在首次进入授权页自动加载一次，避免空列表触发重复请求。
+    void Promise.all([
+      refreshApiTokens(),
+      refreshLocalUsers(),
+      refreshLocalUserSessions(),
+    ]);
+  }, [active, refreshApiTokens, refreshLocalUserSessions, refreshLocalUsers]);
 
   useEffect(() => {
-    if (active === 'devices' && !devices.length && !deviceLoading) {
+    if (localSessionToken && !currentLocalUser && !currentLocalSession) {
+      void refreshCurrentLocalUser(localSessionToken);
+    }
+  }, [currentLocalSession, currentLocalUser, localSessionToken, refreshCurrentLocalUser]);
+
+  useEffect(() => {
+    if (active === 'devices' && !devices.length) {
       void refreshDevices();
     }
-  }, [active, deviceLoading, devices.length, refreshDevices]);
+  }, [active, devices.length, refreshDevices]);
 
   useEffect(() => {
     window.localStorage.setItem('clawagent.approval.allowHighRiskTools', String(approvalSettings.allowHighRiskTools));
@@ -2539,6 +3008,22 @@ export function App() {
       // custom 只使用显式工具白名单，auto/full 才自动放行高危工具。
       allowHighRiskTools: allowHighRiskForMode(mode),
     }));
+  }, []);
+
+  const changePlanMode = useCallback((enabled: boolean) => {
+    setPlanMode(enabled);
+    window.localStorage.setItem('clawagent.chat.planMode', String(enabled));
+  }, []);
+
+  const changePlanTemplate = useCallback((templateId: string) => {
+    setSelectedPlanTemplateId(templateId);
+    window.localStorage.setItem('clawagent.chat.planTemplateId', templateId);
+  }, []);
+
+  useEffect(() => {
+    api.planTemplates()
+      .then(setPlanTemplates)
+      .catch(() => setPlanTemplates([]));
   }, []);
 
   const toggleApprovedTool = useCallback((toolId: string) => {
@@ -2772,6 +3257,214 @@ export function App() {
     });
   }, []);
 
+  const effectiveLocalUserId = useCallback(() => (
+    currentLocalUser?.id
+      || currentLocalUser?.username
+      || window.localStorage.getItem(AUTH_USER_ID_STORAGE_KEY)
+      || 'console'
+  ), [currentLocalUser?.id, currentLocalUser?.username]);
+
+  const planExecutionMetadata = useCallback(() => {
+    const requestProjectPath = activeProjectPath.trim();
+    const configuredApprovedToolIds = approvalMode === 'custom' ? approvalSettings.approvedToolIds : [];
+    const approvedToolIds = approvalSettings.allowHighRiskTools
+      ? highRiskTools.map((tool) => tool.id)
+      : configuredApprovedToolIds;
+    return {
+      approvalMode,
+      toolPermissionMode: approvalMode,
+      allowHighRiskTools: String(approvalSettings.allowHighRiskTools),
+      ...(currentLocalUser?.id ? { localUserId: currentLocalUser.id } : {}),
+      ...(currentLocalUser?.username ? { 'auth.username': currentLocalUser.username } : {}),
+      ...(requestProjectPath ? {
+        activeProjectPath: requestProjectPath,
+        projectPath: requestProjectPath,
+        'workspace.projectPath': requestProjectPath,
+      } : {}),
+      ...(selectedKnowledgeDocumentIds.length ? {
+        'knowledge.enabled': 'true',
+        'knowledge.documentIds': JSON.stringify(selectedKnowledgeDocumentIds),
+        'knowledge.scope': 'selected_documents',
+      } : {}),
+      ...(approvedToolIds.length ? { approvedToolIds: approvedToolIds.join(',') } : {}),
+    };
+  }, [activeProjectPath, approvalMode, approvalSettings.allowHighRiskTools, approvalSettings.approvedToolIds, currentLocalUser?.id, currentLocalUser?.username, highRiskTools, selectedKnowledgeDocumentIds]);
+
+  const updatePlanMessages = useCallback((plan: PlanDraft) => {
+    setChatMessages((current) => current.map((message) => (
+      message.planId === plan.id
+        ? { ...message, plan, status: planStatusText(plan.status), finishedAt: Date.now() }
+        : message
+    )));
+  }, []);
+
+  const createPlanFromText = useCallback(async (rawText?: string, visibleInput?: string) => {
+    if (running) {
+      await cancelRunningTask();
+      return;
+    }
+    const text = normalizeEscapedNewlines(rawText ?? input).trim();
+    if (!text || !currentSessionId) return;
+    const requestProjectPath = activeProjectPath.trim();
+    if (requestProjectPath) {
+      rememberActiveProjectPath(requestProjectPath);
+    }
+    if (rawText === undefined) {
+      setInput('');
+    }
+    setRunning(true);
+    setPlanBusyId('create');
+    const startedAt = Date.now();
+    const userMessage = createUserMessage(visibleInput || text);
+    const assistant = createAssistantMessage('', '正在生成计划...');
+    setChatMessages((current) => [...current, userMessage, assistant]);
+    try {
+      const plan = await api.createPlan({
+        input: text,
+        sessionId: currentSessionId,
+        mode: 'grounded',
+        templateId: selectedPlanTemplateId || undefined,
+        metadata: planExecutionMetadata(),
+      });
+      updateMessage(assistant.id, {
+        planId: plan.id,
+        plan,
+        status: planStatusText(plan.status),
+        progress: '',
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+      setAutoRunPlan({ planId: plan.id, messageId: assistant.id });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      updateMessage(assistant.id, {
+        content: `计划生成失败：${message}`,
+        status: '失败',
+        progress: '',
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+    } finally {
+      setRunning(false);
+      setPlanBusyId(undefined);
+    }
+  }, [activeProjectPath, cancelRunningTask, currentSessionId, input, planExecutionMetadata, rememberActiveProjectPath, running, selectedPlanTemplateId, updateMessage]);
+
+  const revisePlan = useCallback(async (planId: string, feedback: string) => {
+    const normalized = feedback.trim();
+    if (!normalized) return;
+    setPlanBusyId(planId);
+    try {
+      updatePlanMessages(await api.revisePlan(planId, { feedback: normalized }));
+    } finally {
+      setPlanBusyId(undefined);
+    }
+  }, [updatePlanMessages]);
+
+  const cancelPlan = useCallback(async (planId: string) => {
+    setPlanBusyId(planId);
+    try {
+      updatePlanMessages(await api.cancelPlan(planId));
+    } finally {
+      setPlanBusyId(undefined);
+    }
+  }, [updatePlanMessages]);
+
+  const runPlan = useCallback(async (
+    planId: string,
+    options: { force?: boolean; messageId?: string } = {},
+  ) => {
+    if (running && !options.force) {
+      await cancelRunningTask();
+      return;
+    }
+    if (!currentSessionId) return;
+    setRunning(true);
+    setPlanBusyId(planId);
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const existingPlanMessage = options.messageId
+      ? chatMessages.find((message) => message.id === options.messageId)
+      : chatMessages.find((message) => message.planId === planId);
+    const assistantId = options.messageId || existingPlanMessage?.id || createAssistantMessage('', '正在执行计划...').id;
+    if (options.messageId || existingPlanMessage) {
+      updateMessage(assistantId, {
+        content: '',
+        progress: '正在执行计划...',
+        status: '执行中',
+        finishedAt: undefined,
+        durationMs: undefined,
+        toolsCollapsed: false,
+      });
+    } else {
+      const assistant = createAssistantMessage('', '正在执行计划...');
+      assistant.id = assistantId;
+      assistant.planId = planId;
+      setChatMessages((current) => [...current, assistant]);
+    }
+    startTodoPolling(currentSessionId);
+    try {
+      let plan = await api.plan(planId);
+      if ((plan.status || '').toUpperCase() === 'DRAFT') {
+        // 兼容旧数据中的 DRAFT；新计划创建后已经是可执行状态。
+        plan = await api.approvePlan(planId);
+        updatePlanMessages(plan);
+      }
+      updateMessage(assistantId, {
+        plan,
+        planId,
+        status: planStatusText(plan.status),
+        progress: '正在启动计划执行...',
+      });
+      const response = await api.runPlanStream(planId, {
+        channelId: 'webui',
+        userId: effectiveLocalUserId(),
+        metadata: planExecutionMetadata(),
+      }, controller.signal, localSessionToken);
+      if (!response.ok || !response.body) {
+        throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+      }
+      await readSseStream(response.body, (event) => handleStreamEvent(event, assistantId, startedAt));
+      const latestPlan = await api.plan(planId).catch(() => undefined);
+      if (latestPlan) {
+        updatePlanMessages(latestPlan);
+        updateMessage(assistantId, { plan: latestPlan, status: planStatusText(latestPlan.status) });
+      }
+      const finishedTaskId = runningTaskRef.current || existingPlanMessage?.taskId;
+      if (finishedTaskId) {
+        const usage = await api.taskTokenUsage(finishedTaskId).catch(() => undefined);
+        if (usage) updateMessage(assistantId, { tokenUsage: usage });
+      }
+      await refreshAfterChatTask(currentSessionId, false);
+    } catch (err) {
+      const message = controller.signal.aborted ? '计划执行已请求停止。' : `计划执行失败：${err instanceof Error ? err.message : String(err)}`;
+      updateMessage(assistantId, {
+        content: message,
+        status: controller.signal.aborted ? '已停止' : '失败',
+        progress: '',
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+        toolsCollapsed: true,
+      });
+    } finally {
+      setRunning(false);
+      setPlanBusyId(undefined);
+      abortRef.current = undefined;
+      runningTaskRef.current = undefined;
+      await stopTodoPolling(currentSessionId);
+    }
+  }, [cancelRunningTask, chatMessages, currentSessionId, effectiveLocalUserId, handleStreamEvent, localSessionToken, planExecutionMetadata, refreshAfterChatTask, running, startTodoPolling, stopTodoPolling, updateMessage, updatePlanMessages]);
+
+  useEffect(() => {
+    if (!autoRunPlan || running) {
+      return;
+    }
+    const next = autoRunPlan;
+    setAutoRunPlan(undefined);
+    void runPlan(next.planId, { force: true, messageId: next.messageId });
+  }, [autoRunPlan, running, runPlan]);
+
   const submitRequest = useCallback(async (options: SubmitOptions = {}) => {
     if (running) {
       await cancelRunningTask();
@@ -2802,15 +3495,16 @@ export function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      const requestUserId = effectiveLocalUserId();
       let parsedAttachments: AttachmentParseResult[] = [];
       if (submittedAttachments.length) {
         // 附件上传后只回传轻量 metadata 和 knowledgeDocumentId，正文由后端知识库检索按需注入模型上下文。
-        const parsed = await api.parseAttachments(submittedAttachments.map((attachment) => attachment.file), 'console', controller.signal);
+        const parsed = await api.parseAttachments(submittedAttachments.map((attachment) => attachment.file), requestUserId, controller.signal);
         parsedAttachments = parsed.attachments || [];
         updateMessage(userMessage.id, { attachments: toChatAttachments(submittedAttachments, parsedAttachments) });
         const [documents, vectorStatus] = await Promise.all([
-          api.knowledgeDocuments('console').catch(() => knowledgeDocuments),
-          api.knowledgeVectorStatus('console').catch(() => knowledgeVectorStatus),
+          api.knowledgeDocuments(requestUserId).catch(() => knowledgeDocuments),
+          api.knowledgeVectorStatus(requestUserId).catch(() => knowledgeVectorStatus),
         ]);
         setKnowledgeDocuments(documents);
         setKnowledgeVectorStatus(vectorStatus);
@@ -2845,6 +3539,8 @@ export function App() {
         approvalMode,
         toolPermissionMode: approvalMode,
         allowHighRiskTools: String(approvalSettings.allowHighRiskTools),
+        ...(currentLocalUser?.id ? { localUserId: currentLocalUser.id } : {}),
+        ...(currentLocalUser?.username ? { 'auth.username': currentLocalUser.username } : {}),
         ...(requestProjectPath ? {
           activeProjectPath: requestProjectPath,
           projectPath: requestProjectPath,
@@ -2862,16 +3558,16 @@ export function App() {
         ? await api.resumeStream(options.resumeTaskId, {
           input: baseText,
           channelId: 'webui',
-          userId: 'console',
+          userId: requestUserId,
           metadata: requestMetadata,
-        }, controller.signal)
+        }, controller.signal, localSessionToken)
         : await api.submitStream({
           input: baseText,
           sessionId: currentSessionId,
           channelId: 'webui',
-          userId: 'console',
+          userId: requestUserId,
           metadata: requestMetadata,
-        }, controller.signal);
+        }, controller.signal, localSessionToken);
       if (!response.ok || !response.body) {
         throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
       }
@@ -2911,7 +3607,7 @@ export function App() {
       runningTaskRef.current = undefined;
       await stopTodoPolling(currentSessionId);
     }
-  }, [activeKnowledgeDocumentIds, activeProjectPath, approvalMode, approvalSettings.allowHighRiskTools, approvalSettings.approvedToolIds, attachments, cancelRunningTask, clearAttachments, currentSessionId, handleStreamEvent, highRiskTools, input, knowledgeDocuments, knowledgeVectorStatus, refreshAfterChatTask, rememberActiveProjectPath, running, selectedKnowledgeDocumentIds, startTodoPolling, stopTodoPolling, updateMessage]);
+  }, [activeKnowledgeDocumentIds, activeProjectPath, approvalMode, approvalSettings.allowHighRiskTools, approvalSettings.approvedToolIds, attachments, cancelRunningTask, clearAttachments, currentLocalUser?.id, currentLocalUser?.username, currentSessionId, effectiveLocalUserId, handleStreamEvent, highRiskTools, input, knowledgeDocuments, knowledgeVectorStatus, localSessionToken, refreshAfterChatTask, rememberActiveProjectPath, running, selectedKnowledgeDocumentIds, startTodoPolling, stopTodoPolling, updateMessage]);
 
   const resumeTask = useCallback(async (message: ChatMessage, projectPathOverride?: string) => {
     if (!message.taskId) return;
@@ -2966,6 +3662,15 @@ export function App() {
         }
         setChatMessages((current) => [...current, createUserMessage(command.raw)]);
         await resumeTask(candidate);
+        return true;
+      }
+      if (command.id === 'plan') {
+        if (command.args.trim()) {
+          await createPlanFromText(command.args, command.raw);
+        } else {
+          changePlanMode(true);
+          appendSlashCommandResult(command.raw, '### /plan\n\n已切换到计划模式。后续发送会先生成计划，再按步骤执行。', startedAt);
+        }
         return true;
       }
 
@@ -3111,7 +3816,9 @@ export function App() {
     appendSlashCommandResult,
     changeActiveProjectPath,
     changeApprovalMode,
+    changePlanMode,
     chatMessages,
+    createPlanFromText,
     currentSessionId,
     input,
     lastTaskId,
@@ -3125,8 +3832,12 @@ export function App() {
 
   const submit = useCallback(async () => {
     if (await runSlashCommand()) return;
+    if (planMode) {
+      await createPlanFromText();
+      return;
+    }
     await submitRequest();
-  }, [runSlashCommand, submitRequest]);
+  }, [createPlanFromText, planMode, runSlashCommand, submitRequest]);
 
   const approveToolAndContinue = useCallback((messageId: string, call: ToolCallView) => {
     const source = chatMessages.find((message) => message.id === messageId);
@@ -3904,6 +4615,10 @@ export function App() {
             input={input}
             attachments={attachments}
             running={running}
+            planMode={planMode}
+            planBusyId={planBusyId}
+            planTemplates={planTemplates}
+            selectedPlanTemplateId={selectedPlanTemplateId}
             messages={chatMessages}
             historyHasMore={chatHistoryHasMore}
             historyLoading={chatHistoryLoading}
@@ -3926,6 +4641,11 @@ export function App() {
             onToggleKnowledgeDocument={toggleKnowledgeDocument}
             onSetKnowledgeDocuments={setSelectedKnowledgeDocuments}
             onSubmit={() => void submit()}
+            onPlanModeChange={changePlanMode}
+            onPlanTemplateChange={changePlanTemplate}
+            onRevisePlan={(planId, feedback) => void revisePlan(planId, feedback)}
+            onRunPlan={(planId) => void runPlan(planId)}
+            onCancelPlan={(planId) => void cancelPlan(planId)}
             onResumeTask={(message) => void resumeTask(message)}
             onConfirmProjectDirectory={(message, projectPath) => void resumeTask(message, projectPath)}
             onNewSession={() => void createNewSession()}
@@ -4165,15 +4885,23 @@ export function App() {
                 saving={channelSaving}
                 adapterReloading={channelAdapterReloading}
                 adapterUploading={channelAdapterUploading}
+                adapterDeleting={channelAdapterDeleting}
                 message={channelMessage}
                 testText={channelTestText}
                 testResult={channelTestResult}
                 outboundConversationId={channelOutboundConversationId}
                 outboundText={channelOutboundText}
                 outboundResult={channelOutboundResult}
+                userBindings={channelUserBindings}
+                users={localUsers}
+                bindingExternalUserId={channelBindingExternalUserId}
+                bindingExternalUsername={channelBindingExternalUsername}
+                bindingLocalUserId={channelBindingLocalUserId}
+                bindingLoading={channelBindingLoading}
                 onRefresh={() => void refreshChannels()}
                 onReloadAdapters={() => void reloadChannelAdapters()}
                 onUploadAdapter={(file) => void uploadChannelAdapter(file)}
+                onDeleteAdapter={(filename) => void deleteChannelAdapter(filename)}
                 onSelect={selectChannel}
                 onNew={newChannel}
                 onDraftChange={setChannelDraft}
@@ -4190,6 +4918,12 @@ export function App() {
                 onRefreshStream={() => void refreshChannelStreamStatus()}
                 onStartStream={() => void startChannelStream()}
                 onStopStream={() => void stopChannelStream()}
+                onRefreshUserBindings={() => void refreshChannelUserBindings()}
+                onBindingExternalUserIdChange={setChannelBindingExternalUserId}
+                onBindingExternalUsernameChange={setChannelBindingExternalUsername}
+                onBindingLocalUserIdChange={setChannelBindingLocalUserId}
+                onBindChannelUser={() => void bindChannelUser()}
+                onUnbindChannelUser={(externalUserId) => void unbindChannelUser(externalUserId)}
               />
             )}
 
@@ -4202,10 +4936,46 @@ export function App() {
                 saving={apiTokenSaving}
                 message={apiTokenMessage}
                 createdToken={createdApiToken}
-                onRefresh={() => void refreshApiTokens()}
+                users={localUsers}
+                currentUser={currentLocalUser}
+                currentSession={currentLocalSession}
+                loginUsername={localLoginUsername}
+                loginPassword={localLoginPassword}
+                userUsername={localUserUsername}
+                userPassword={localUserPassword}
+                userDisplayName={localUserDisplayName}
+                userRole={localUserRole}
+                userPermissionMode={localUserPermissionMode}
+                userApprovedToolIds={localUserApprovedToolIds}
+                userLoading={localUserLoading}
+                userSaving={localUserSaving}
+                userMessage={localUserMessage}
+                sessions={localUserSessions}
+                sessionLoading={localUserSessionLoading}
+                onRefresh={() => {
+                  void refreshApiTokens();
+                  void refreshLocalUsers();
+                  void refreshLocalUserSessions();
+                }}
+                onClearCreatedToken={() => setCreatedApiToken(undefined)}
                 onTokenNameChange={setApiTokenName}
                 onCreate={() => void createApiToken()}
-                onRevoke={(tokenId) => void revokeApiToken(tokenId)}
+                onRevoke={(tokenId) => void deleteApiToken(tokenId)}
+                onLoginUsernameChange={setLocalLoginUsername}
+                onLoginPasswordChange={setLocalLoginPassword}
+                onLogin={() => void loginLocalUser()}
+                onLogout={() => void logoutLocalUser()}
+                onUserUsernameChange={setLocalUserUsername}
+                onUserPasswordChange={setLocalUserPassword}
+                onUserDisplayNameChange={setLocalUserDisplayName}
+                onUserRoleChange={setLocalUserRole}
+                onUserPermissionModeChange={setLocalUserPermissionMode}
+                onUserApprovedToolIdsChange={setLocalUserApprovedToolIds}
+                onCreateUser={() => void createLocalUser()}
+                onChangeUserPassword={(userId) => void changeLocalUserPassword(userId)}
+                onUpdateUserPermissions={(user) => void updateLocalUserPermissions(user)}
+                onDisableUser={(userId) => void disableLocalUser(userId)}
+                onRevokeSession={(sessionId) => void revokeLocalUserSession(sessionId)}
               />
             )}
 
@@ -4214,14 +4984,25 @@ export function App() {
                 devices={devices}
                 deviceName={deviceName}
                 deviceType={deviceType}
+                devicePermissionMode={devicePermissionMode}
+                deviceApprovedToolIds={deviceApprovedToolIds}
+                pairingTtlSeconds={devicePairingTtlSeconds}
+                createdPairing={createdDevicePairing}
                 loading={deviceLoading}
                 saving={deviceSaving}
                 message={deviceMessage}
                 onRefresh={() => void refreshDevices()}
                 onDeviceNameChange={setDeviceName}
                 onDeviceTypeChange={setDeviceType}
+                onDevicePermissionModeChange={setDevicePermissionMode}
+                onDeviceApprovedToolIdsChange={setDeviceApprovedToolIds}
+                onPairingTtlSecondsChange={setDevicePairingTtlSeconds}
                 onRegister={() => void registerDevice()}
+                onCreatePairingCode={() => void createDevicePairingCode()}
                 onHeartbeat={(deviceId) => void heartbeatDevice(deviceId)}
+                onRotateSecret={(deviceId) => void rotateDeviceSecret(deviceId)}
+                onBindUser={(deviceId) => void bindDeviceUser(deviceId)}
+                onUpdatePermissions={(deviceId) => void updateDevicePermissions(deviceId)}
                 onRevoke={(deviceId) => void revokeDevice(deviceId)}
               />
             )}
@@ -4445,6 +5226,10 @@ function ChatPage({
   input,
   attachments,
   running,
+  planMode,
+  planBusyId,
+  planTemplates,
+  selectedPlanTemplateId,
   messages,
   historyHasMore,
   historyLoading,
@@ -4467,6 +5252,11 @@ function ChatPage({
   onToggleKnowledgeDocument,
   onSetKnowledgeDocuments,
   onSubmit,
+  onPlanModeChange,
+  onPlanTemplateChange,
+  onRevisePlan,
+  onRunPlan,
+  onCancelPlan,
   onResumeTask,
   onConfirmProjectDirectory,
   onNewSession,
@@ -4483,6 +5273,10 @@ function ChatPage({
   input: string;
   attachments: ComposerAttachment[];
   running: boolean;
+  planMode: boolean;
+  planBusyId?: string;
+  planTemplates: PlanTemplateView[];
+  selectedPlanTemplateId: string;
   messages: ChatMessage[];
   historyHasMore: boolean;
   historyLoading: boolean;
@@ -4505,6 +5299,11 @@ function ChatPage({
   onToggleKnowledgeDocument: (documentId: string) => void;
   onSetKnowledgeDocuments: (documentIds: string[]) => void;
   onSubmit: () => void;
+  onPlanModeChange: (enabled: boolean) => void;
+  onPlanTemplateChange: (templateId: string) => void;
+  onRevisePlan: (planId: string, feedback: string) => void;
+  onRunPlan: (planId: string) => void;
+  onCancelPlan: (planId: string) => void;
   onResumeTask: (message: ChatMessage) => void;
   onConfirmProjectDirectory: (message: ChatMessage, projectPath: string) => void;
   onNewSession: () => void;
@@ -4532,6 +5331,8 @@ function ChatPage({
       .map((value) => (value || '').trim())
       .filter((value, index, all) => value && all.indexOf(value) === index);
   }, [activeProjectPath, localConfig?.recentProjects, localConfig?.workspaceRoot]);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [plusMenuPage, setPlusMenuPage] = useState<'main' | 'planTemplates'>('main');
   const [reviewPanelHidden, setReviewPanelHidden] = useState(() => window.localStorage.getItem('clawagent.chat.reviewPanelHidden') === 'true');
   const [reviewPanelWidth, setReviewPanelWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem('clawagent.chat.reviewPanelWidth') || 720);
@@ -4568,6 +5369,18 @@ function ChatPage({
       command.id.includes(slashQuery) || command.title.toLowerCase().includes(slashQuery)
     ));
   }, [slashQuery]);
+  const planTemplateLabel = useMemo(() => {
+    if (!selectedPlanTemplateId) return '默认计划';
+    return planTemplates.find((template) => template.id === selectedPlanTemplateId)?.title || '默认计划';
+  }, [planTemplates, selectedPlanTemplateId]);
+
+  const selectPlanTemplate = useCallback((templateId: string) => {
+    onPlanTemplateChange(templateId);
+    // 选择模板就是开启计划模式，避免用户还要再点一次独立的计划按钮。
+    onPlanModeChange(true);
+    setPlusOpen(false);
+    setPlusMenuPage('main');
+  }, [onPlanModeChange, onPlanTemplateChange]);
 
   const resizeInput = useCallback((textarea?: HTMLTextAreaElement | null) => {
     if (!textarea) return;
@@ -4582,6 +5395,17 @@ function ChatPage({
   useEffect(() => {
     resizeInput(inputRef.current);
   }, [input, resizeInput]);
+
+  useEffect(() => {
+    const closePlusMenu = (event: PointerEvent) => {
+      const target = event.target as Element;
+      if (target.closest?.('.composer-shell')) return;
+      setPlusOpen(false);
+      setPlusMenuPage('main');
+    };
+    document.addEventListener('pointerdown', closePlusMenu, true);
+    return () => document.removeEventListener('pointerdown', closePlusMenu, true);
+  }, []);
 
   useLayoutEffect(() => {
     const stream = chatStreamRef.current;
@@ -4977,6 +5801,10 @@ function ChatPage({
                   onRejectTool={onRejectTool}
                   onToggleTools={onToggleTools}
                   onConfirmProjectDirectory={onConfirmProjectDirectory}
+                  planBusy={Boolean(message.planId && planBusyId === message.planId)}
+                  onRevisePlan={onRevisePlan}
+                  onRunPlan={onRunPlan}
+                  onCancelPlan={onCancelPlan}
                 />
                 {((resumeState ? resumeState.canResume : isContinuationRequiredMessage(message))) && (
                   <ResumeTaskAction
@@ -5015,6 +5843,55 @@ function ChatPage({
                 }}
               />
             )}
+            {plusOpen && plusMenuPage === 'main' && (
+              <div className="tool-picker">
+                <header><span>+ 添加上下文</span></header>
+                <button type="button" onClick={() => attachmentInputRef.current?.click()}>
+                  <FileText size={14} />
+                  <span>添加文件或图片</span>
+                </button>
+                <button type="button" onClick={() => setPlusMenuPage('planTemplates')}>
+                  <ScrollText size={14} />
+                  <span>{planMode ? `计划：${planTemplateLabel}` : '计划'}</span>
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+            )}
+            {plusOpen && plusMenuPage === 'planTemplates' && (
+              <div className="tool-picker">
+                <header>
+                  <button type="button" className="menu-back" onClick={() => setPlusMenuPage('main')}>返回</button>
+                  <span>选择计划类型</span>
+                </header>
+                <button type="button" onClick={() => selectPlanTemplate('')}>
+                  <ScrollText size={14} />
+                  <span>默认计划</span>
+                  {!selectedPlanTemplateId && <Check size={13} />}
+                </button>
+                {planTemplates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    title={template.description || template.title}
+                    onClick={() => selectPlanTemplate(template.id)}
+                  >
+                    <ScrollText size={14} />
+                    <span>{template.title || template.id}</span>
+                    {selectedPlanTemplateId === template.id && <Check size={13} />}
+                  </button>
+                ))}
+                {planMode && (
+                  <button type="button" onClick={() => {
+                    onPlanModeChange(false);
+                    setPlusOpen(false);
+                    setPlusMenuPage('main');
+                  }}>
+                    <ScrollText size={14} />
+                    <span>关闭计划</span>
+                  </button>
+                )}
+              </div>
+            )}
             <textarea
               ref={inputRef}
               rows={1}
@@ -5024,7 +5901,7 @@ function ChatPage({
                 onInputChange(value);
                 resizeInput(event.target);
               }}
-              placeholder="Message (Enter 发送，Shift+Enter 换行，可粘贴 \\n 自动转为换行)"
+              placeholder={planMode ? '计划模式：输入需求后先生成计划，再按步骤执行' : 'Message (Enter 发送，Shift+Enter 换行，可粘贴 \\n 自动转为换行)'}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
@@ -5046,8 +5923,11 @@ function ChatPage({
               <button
                 className="composer-icon-button"
                 type="button"
-                onClick={() => attachmentInputRef.current?.click()}
-                title="添加附件"
+                onClick={() => {
+                  setPlusOpen((open) => !open);
+                  setPlusMenuPage('main');
+                }}
+                title="添加上下文"
               >
                 <Plus size={18} />
               </button>
@@ -5057,6 +5937,20 @@ function ChatPage({
                 onToggle={onToggleKnowledgeDocument}
                 onSetSelected={onSetKnowledgeDocuments}
               />
+              {planMode ? (
+                <button
+                  className="composer-plan-toggle active"
+                  type="button"
+                  onClick={() => {
+                    setPlusOpen(true);
+                    setPlusMenuPage('planTemplates');
+                  }}
+                  title={`当前计划：${planTemplateLabel}`}
+                >
+                  <ScrollText size={14} />
+                  <span>计划：{planTemplateLabel}</span>
+                </button>
+              ) : null}
               <ApprovalControls
                 highRiskTools={highRiskTools}
                 settings={approvalSettings}
@@ -6148,6 +7042,10 @@ function ChatBubble({
   onRejectTool,
   onToggleTools,
   onConfirmProjectDirectory,
+  planBusy,
+  onRevisePlan,
+  onRunPlan,
+  onCancelPlan,
 }: {
   message: ChatMessage;
   progressTodos?: TodoItem[];
@@ -6156,6 +7054,10 @@ function ChatBubble({
   onRejectTool: (messageId: string, call: ToolCallView) => void;
   onToggleTools: (messageId: string) => void;
   onConfirmProjectDirectory: (message: ChatMessage, projectPath: string) => void;
+  planBusy?: boolean;
+  onRevisePlan?: (planId: string, feedback: string) => void;
+  onRunPlan?: (planId: string) => void;
+  onCancelPlan?: (planId: string) => void;
 }) {
   const displayContent = message.role === 'user' ? stripAttachmentParseBlock(message.content) : message.content;
   const isUser = message.role === 'user';
@@ -6164,7 +7066,7 @@ function ChatBubble({
   const hasInlineProgress = message.role === 'assistant' && progressTodos.length > 0;
   const hasToolTrace = message.role === 'assistant' && visibleToolCalls.length > 0;
   const hasMessageContent = displayContent.trim().length > 0;
-  const showMessageCard = isUser || hasMessageContent || Boolean(blockedTool?.toolId) || Boolean(message.tokenUsage);
+  const showMessageCard = isUser || hasMessageContent || Boolean(message.plan) || Boolean(blockedTool?.toolId) || Boolean(message.tokenUsage);
   return (
     <article className={`message-row ${message.role}`}>
       <div className={`avatar ${isUser ? 'user-avatar' : 'assistant-avatar'}`}>
@@ -6203,6 +7105,15 @@ function ChatBubble({
         {showMessageCard && (
           <div className="message-card">
             {hasMessageContent && <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(displayContent) }} />}
+            {message.plan && (
+              <PlanCard
+                plan={message.plan}
+                busy={planBusy}
+                onRevise={onRevisePlan}
+                onRun={onRunPlan}
+                onCancel={onCancelPlan}
+              />
+            )}
             {message.role === 'assistant' && (
               <>
                 {blockedTool?.toolId && (
@@ -6231,6 +7142,156 @@ function ChatBubble({
         <ChatAttachmentList attachments={message.attachments} />
       </div>
     </article>
+  );
+}
+
+function PlanCard({
+  plan,
+  busy,
+  onRevise,
+  onRun,
+  onCancel,
+}: {
+  plan: PlanDraft;
+  busy?: boolean;
+  onRevise?: (planId: string, feedback: string) => void;
+  onRun?: (planId: string) => void;
+  onCancel?: (planId: string) => void;
+}) {
+  const [feedback, setFeedback] = useState('');
+  const [revisionSummary, setRevisionSummary] = useState<PlanRevisionSummaryView | null>(null);
+  const status = (plan.status || 'DRAFT').toUpperCase();
+  const editable = status === 'BLOCKED';
+  const runnable = status === 'BLOCKED';
+  const items = (plan.items || []).slice().sort((left, right) => (left.itemOrder || 0) - (right.itemOrder || 0));
+  useEffect(() => {
+    if (!plan.id || (plan.version || 1) <= 1) {
+      setRevisionSummary(null);
+      return;
+    }
+    let cancelled = false;
+    api.planRevisionSummary(plan.id)
+      .then((summary) => {
+        if (!cancelled) setRevisionSummary(summary);
+      })
+      .catch(() => {
+        if (!cancelled) setRevisionSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [plan.id, plan.version]);
+  return (
+    <section className="plan-card">
+      <div className="plan-card-head">
+        <div>
+          <div className="plan-card-title">
+            <ScrollText size={16} />
+            <span>任务计划</span>
+            <span className={`plan-status status-${status.toLowerCase()}`}>{planStatusText(plan.status)}</span>
+          </div>
+          {plan.summary && <p>{plan.summary}</p>}
+        </div>
+        <span className="plan-version">v{plan.version || 1}</span>
+      </div>
+      {plan.goal ? (
+        <div className="plan-section">
+          <span className="plan-section-title">目标</span>
+          <p>{plan.goal}</p>
+        </div>
+      ) : null}
+      <div className="plan-execution-strip">
+        <span>状态：{planStatusText(plan.status)}</span>
+        {plan.outcome ? <span>结果：{plan.outcome}</span> : null}
+        {plan.blockReason ? <span>阻塞：{plan.blockReason}</span> : null}
+        {status === 'APPROVED' || status === 'DRAFT' ? <strong>已自动进入执行队列</strong> : null}
+        {status === 'BLOCKED' ? <strong>可修订计划后继续执行</strong> : null}
+      </div>
+      <ol className="plan-step-list">
+        {items.map((item) => (
+          <PlanStepItem item={item} key={item.id || item.itemOrder || item.title} />
+        ))}
+      </ol>
+      {revisionSummary ? (
+        <details className="plan-revisions" open>
+          <summary>计划差异 v{revisionSummary.previousVersion || '-'} → v{revisionSummary.version || plan.version}</summary>
+          <div className="plan-diff-grid">
+            <span>步骤数</span>
+            <strong>{revisionSummary.itemCountBefore ?? '-'} → {revisionSummary.itemCountAfter ?? '-'}</strong>
+            <span>新增</span>
+            <code>{compactRevisionText(revisionSummary.addedItems)}</code>
+            <span>移除</span>
+            <code>{compactRevisionText(revisionSummary.removedItems)}</code>
+            <span>变更</span>
+            <code>{compactRevisionText(revisionSummary.changedItems)}</code>
+          </div>
+          {revisionSummary.feedback ? <p>反馈：{revisionSummary.feedback}</p> : null}
+        </details>
+      ) : null}
+      {plan.revisions?.length ? (
+        <details className="plan-revisions">
+          <summary>修订记录 {plan.revisions.length}</summary>
+          {plan.revisions.map((revision, index) => (
+            <p key={`${revision}-${index}`}>{revision}</p>
+          ))}
+        </details>
+      ) : null}
+      {editable && (
+        <div className="plan-revise-row">
+          <input
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+            placeholder="输入修改意见，例如：先补测试，再改实现"
+          />
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || !feedback.trim()}
+            onClick={() => {
+              onRevise?.(plan.id, feedback);
+              setFeedback('');
+            }}
+          >
+            修订
+          </button>
+        </div>
+      )}
+      <div className="plan-actions">
+        {runnable && (
+          <button type="button" disabled={busy} onClick={() => onRun?.(plan.id)}>
+            {busy ? '处理中...' : '继续执行'}
+          </button>
+        )}
+        {editable && (
+          <button type="button" className="ghost-button" disabled={busy} onClick={() => onCancel?.(plan.id)}>
+            取消
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PlanStepItem({ item }: { item: PlanItem }) {
+  const detail = item.detail || item.description;
+  return (
+    <li className="plan-step-item">
+      <span className="plan-step-dot" />
+      <div className="plan-step-body">
+        <div className="plan-step-title">
+          <strong>{item.itemOrder || '-'}. {item.title || '未命名步骤'}</strong>
+          {item.requiresApproval && <span className="plan-step-chip approval">需审批</span>}
+          {item.riskLevel && <span className={`plan-step-chip risk-${item.riskLevel}`}>风险：{item.riskLevel}</span>}
+        </div>
+        {detail && <p>{detail}</p>}
+        {item.expectedTools?.length ? (
+          <div className="plan-tool-row">
+            <span>预计工具</span>
+            {item.expectedTools.slice(0, 8).map((tool) => <code key={tool}>{tool}</code>)}
+          </div>
+        ) : null}
+      </div>
+    </li>
   );
 }
 
@@ -6435,6 +7496,16 @@ function JsonBlock({ data }: { data: unknown }) {
 }
 
 function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <div className="modal-shell" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
@@ -6504,6 +7575,39 @@ function AuditEventPage({
           <label>
             <span>Task ID</span>
             <input value={filter.taskId} onChange={(event) => update({ taskId: event.target.value })} />
+          </label>
+          <label>
+            <span>用户</span>
+            <input value={filter.userId} onChange={(event) => update({ userId: event.target.value })} placeholder="本地用户或外部用户" />
+          </label>
+          <label>
+            <span>通道</span>
+            <input value={filter.channelId} onChange={(event) => update({ channelId: event.target.value })} placeholder="channelId" />
+          </label>
+          <label>
+            <span>工具</span>
+            <input value={filter.toolId} onChange={(event) => update({ toolId: event.target.value })} placeholder="builtin.execute.command" />
+          </label>
+          <label>
+            <span>风险</span>
+            <select value={filter.riskLevel} onChange={(event) => update({ riskLevel: event.target.value })}>
+              <option value="">全部</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
+          <label>
+            <span>详情 Key</span>
+            <input value={filter.detailKey} onChange={(event) => update({ detailKey: event.target.value })} placeholder="metadata key" />
+          </label>
+          <label>
+            <span>详情值</span>
+            <input value={filter.detailValue} onChange={(event) => update({ detailValue: event.target.value })} placeholder="metadata value" />
+          </label>
+          <label>
+            <span>关键词</span>
+            <input value={filter.q} onChange={(event) => update({ q: event.target.value })} placeholder="说明或详情内容" />
           </label>
           <label>
             <span>数量</span>
@@ -8816,6 +9920,58 @@ function agentMessageToChatMessage(message: AgentMessage): ChatMessage {
   };
 }
 
+function planStatusText(status?: string) {
+  const value = (status || 'DRAFT').toUpperCase();
+  if (value === 'DRAFT') return '已创建';
+  if (value === 'APPROVED') return '已创建';
+  if (value === 'RUNNING') return '执行中';
+  if (value === 'BLOCKED') return '已阻塞';
+  if (value === 'DONE') return '已完成';
+  return value;
+}
+
+function compactRevisionText(value?: string) {
+  const text = (value || '').replace(/^\[|\]$/g, '').trim();
+  return text || '无';
+}
+
+function planToChatMessage(plan: PlanDraft): ChatMessage {
+  const createdAt = Date.parse(plan.createdAt || plan.updatedAt || '') || Date.now();
+  return {
+    id: `plan-${plan.id}-${plan.version || 1}`,
+    role: 'assistant',
+    content: '',
+    planId: plan.id,
+    plan,
+    status: planStatusText(plan.status),
+    createdAt,
+    finishedAt: Date.parse(plan.updatedAt || '') || createdAt,
+    toolCalls: [],
+    toolsCollapsed: true,
+  };
+}
+
+function activePlansForChat(plans: PlanDraft[]) {
+  const activePlans = plans
+    .filter((plan) => (plan.status || 'DRAFT').toUpperCase() !== 'DONE')
+    .sort((left, right) => (
+      (Date.parse(right.updatedAt || right.createdAt || '') || 0)
+      - (Date.parse(left.updatedAt || left.createdAt || '') || 0)
+    ));
+  // 聊天流里只恢复最近一个未结束计划；完整历史仍由后端 Plan API 保留，避免旧草稿反复占屏。
+  return activePlans.slice(0, 1);
+}
+
+function mergePlanMessages(messages: ChatMessage[], plans: PlanDraft[]) {
+  const planMessages = new Map<string, ChatMessage>();
+  activePlansForChat(plans).forEach((plan) => {
+    if (!plan.id) return;
+    planMessages.set(plan.id, planToChatMessage(plan));
+  });
+  const withoutOldPlans = messages.filter((message) => !message.planId || !planMessages.has(message.planId));
+  return [...withoutOldPlans, ...Array.from(planMessages.values())].sort((left, right) => left.createdAt - right.createdAt);
+}
+
 function EventTable({ events }: { events: AgentEvent[] }) {
   const [selectedEvent, setSelectedEvent] = useState<AgentEvent>();
   if (!events.length) return <Empty text="暂无日志" />;
@@ -8886,17 +10042,25 @@ function ChannelPage({
   saving,
   adapterReloading,
   adapterUploading,
+  adapterDeleting,
   message,
   testText,
   testResult,
   outboundConversationId,
   outboundText,
   outboundResult,
+  userBindings,
+  users,
+  bindingExternalUserId,
+  bindingExternalUsername,
+  bindingLocalUserId,
+  bindingLoading,
   health,
   streamStatus,
   onRefresh,
   onReloadAdapters,
   onUploadAdapter,
+  onDeleteAdapter,
   onSelect,
   onNew,
   onDraftChange,
@@ -8911,6 +10075,12 @@ function ChannelPage({
   onRefreshStream,
   onStartStream,
   onStopStream,
+  onRefreshUserBindings,
+  onBindingExternalUserIdChange,
+  onBindingExternalUsernameChange,
+  onBindingLocalUserIdChange,
+  onBindChannelUser,
+  onUnbindChannelUser,
 }: {
   channels: ChannelDefinition[];
   adapters: ChannelAdapterDescriptor[];
@@ -8919,17 +10089,25 @@ function ChannelPage({
   saving: boolean;
   adapterReloading: boolean;
   adapterUploading: boolean;
+  adapterDeleting?: string;
   message?: string;
   testText: string;
   testResult?: ChannelInboundResult;
   outboundConversationId: string;
   outboundText: string;
   outboundResult?: ChannelOutboundTestResponse;
+  userBindings: ChannelUserBindingView[];
+  users: LocalUserView[];
+  bindingExternalUserId: string;
+  bindingExternalUsername: string;
+  bindingLocalUserId: string;
+  bindingLoading: boolean;
   health?: ChannelConnectivityStatus;
   streamStatus?: ChannelStreamStatus;
   onRefresh: () => void;
   onReloadAdapters: () => void;
   onUploadAdapter: (file: File) => void;
+  onDeleteAdapter: (filename: string) => void;
   onSelect: (channel: ChannelDefinition) => void;
   onNew: () => void;
   onDraftChange: (draft: ChannelDefinition) => void;
@@ -8944,6 +10122,12 @@ function ChannelPage({
   onRefreshStream: () => void;
   onStartStream: () => void;
   onStopStream: () => void;
+  onRefreshUserBindings: () => void;
+  onBindingExternalUserIdChange: (value: string) => void;
+  onBindingExternalUsernameChange: (value: string) => void;
+  onBindingLocalUserIdChange: (value: string) => void;
+  onBindChannelUser: () => void;
+  onUnbindChannelUser: (externalUserId: string) => void;
 }) {
   const adapterFileInputRef = useRef<HTMLInputElement>(null);
   const update = (patch: Partial<ChannelDefinition>) => onDraftChange({ ...draft, ...patch });
@@ -8970,6 +10154,17 @@ function ChannelPage({
   const enabledCount = channels.filter((channel) => channel.enabled).length;
   const builtinAdapterCount = channels.filter((channel) => channel.metadata?.adapter === 'builtin').length;
   const activeAdapterCount = adapters.filter((adapter) => adapter.active).length;
+  const activeUsers = users.filter((user) => user.status !== 'disabled');
+  const adapterJarName = (adapter: ChannelAdapterDescriptor) => {
+    const location = adapter.location || '';
+    if (!location.toLowerCase().endsWith('.jar')) return '';
+    try {
+      const pathname = new URL(location).pathname;
+      return decodeURIComponent(pathname.split(/[\\/]/).filter(Boolean).pop() || '');
+    } catch {
+      return decodeURIComponent(location.split(/[\\/]/).filter(Boolean).pop() || '');
+    }
+  };
 
   return (
     <section className="stack">
@@ -9005,17 +10200,32 @@ function ChannelPage({
         {adapters.length ? (
           <div className="channel-list compact-list">
             {adapters.map((adapter, index) => (
-              <div className="channel-row passive" key={`${adapter.type}-${adapter.className}-${index}`}>
-                <span>
-                  <strong>{adapter.type}</strong>
-                  <small className="mono">{adapter.className || '-'}</small>
-                </span>
-                <span className="channel-row-meta">
-                  <em className={`pill ${adapter.active ? 'success' : 'neutral'}`}>{adapter.active ? '生效' : '被覆盖'}</em>
-                  <em className="pill neutral">{adapter.source || '-'}</em>
-                  {adapter.location && <em className="pill neutral">location</em>}
-                </span>
-              </div>
+              (() => {
+                const jarName = adapterJarName(adapter);
+                return (
+                  <div className="channel-row passive" key={`${adapter.type}-${adapter.className}-${index}`}>
+                    <span>
+                      <strong>{adapter.type}</strong>
+                      <small className="mono">{adapter.className || '-'}</small>
+                    </span>
+                    <span className="channel-row-meta">
+                      <em className={`pill ${adapter.active ? 'success' : 'neutral'}`}>{adapter.active ? '生效' : '被覆盖'}</em>
+                      <em className="pill neutral">{adapter.source || '-'}</em>
+                      {adapter.location && <em className="pill neutral">location</em>}
+                      {jarName && (
+                        <button
+                          type="button"
+                          className="link-button danger-text"
+                          disabled={adapterDeleting === jarName}
+                          onClick={() => onDeleteAdapter(jarName)}
+                        >
+                          {adapterDeleting === jarName ? '删除中' : '删除'}
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })()
             ))}
           </div>
         ) : (
@@ -9237,6 +10447,87 @@ function ChannelPage({
           </form>
         </Panel>
       </div>
+      <Panel
+        title="外部用户绑定"
+        action={<button type="button" onClick={onRefreshUserBindings} disabled={bindingLoading || !draft.id}><RefreshCw size={14} />刷新</button>}
+      >
+        <div className="config-form channel-binding-section">
+          <div className="channel-binding-form">
+            <label className="form-field">
+              <span>外部用户 ID</span>
+              <input
+                value={bindingExternalUserId}
+                onChange={(event) => onBindingExternalUserIdChange(event.target.value)}
+                placeholder="飞书 open_id / 钉钉 senderStaffId / DDIO userId"
+              />
+            </label>
+            <label className="form-field">
+              <span>外部用户名</span>
+              <input
+                value={bindingExternalUsername}
+                onChange={(event) => onBindingExternalUsernameChange(event.target.value)}
+                placeholder="可选，便于审计识别"
+              />
+            </label>
+            <label className="form-field">
+              <span>本地用户</span>
+              <select value={bindingLocalUserId} onChange={(event) => onBindingLocalUserIdChange(event.target.value)}>
+                <option value="">选择本地用户</option>
+                {activeUsers.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {(user.displayName || user.username || user.id)}{user.role ? ` · ${user.role}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="form-field channel-binding-actions">
+              <span>操作</span>
+              <button type="button" className="primary-button" onClick={onBindChannelUser} disabled={bindingLoading || !draft.id}>
+                <Link2 size={14} />绑定
+              </button>
+            </div>
+          </div>
+          <p className="muted compact-text">
+            通道收到外部消息后，会先按这张表把平台用户映射为本地用户，再合并用户、通道和 Agent 的权限策略。
+          </p>
+          {userBindings.length ? (
+            <Table>
+              <thead>
+                <tr>
+                  <th>外部用户</th>
+                  <th>本地用户</th>
+                  <th>状态</th>
+                  <th>更新时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {userBindings.map((binding) => (
+                  <tr key={binding.id}>
+                    <td>
+                      <strong>{binding.externalUsername || binding.externalUserId}</strong>
+                      <small className="mono block-text">{binding.externalUserId}</small>
+                    </td>
+                    <td>
+                      <strong>{binding.localUsername || binding.localUserId}</strong>
+                      <small className="mono block-text">{binding.localUserId}</small>
+                    </td>
+                    <td><span className={`pill ${binding.status === 'active' ? 'success' : 'neutral'}`}>{binding.status || '-'}</span></td>
+                    <td>{formatDateTime(binding.updatedAt || binding.createdAt)}</td>
+                    <td>
+                      <button type="button" className="link-button danger-text" disabled={bindingLoading} onClick={() => onUnbindChannelUser(binding.externalUserId)}>
+                        解绑
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          ) : (
+            <Empty text={bindingLoading ? '正在加载用户绑定...' : '当前通道暂无外部用户绑定'} />
+          )}
+        </div>
+      </Panel>
       <Panel title="入站测试">
         <div className="config-form">
           <label className="form-field">
@@ -9301,10 +10592,42 @@ function AuthPage({
   saving,
   message,
   createdToken,
+  users,
+  currentUser,
+  currentSession,
+  loginUsername,
+  loginPassword,
+  userUsername,
+  userPassword,
+  userDisplayName,
+  userRole,
+  userPermissionMode,
+  userApprovedToolIds,
+  userLoading,
+  userSaving,
+  userMessage,
+  sessions,
+  sessionLoading,
   onRefresh,
+  onClearCreatedToken,
   onTokenNameChange,
   onCreate,
   onRevoke,
+  onLoginUsernameChange,
+  onLoginPasswordChange,
+  onLogin,
+  onLogout,
+  onUserUsernameChange,
+  onUserPasswordChange,
+  onUserDisplayNameChange,
+  onUserRoleChange,
+  onUserPermissionModeChange,
+  onUserApprovedToolIdsChange,
+  onCreateUser,
+  onChangeUserPassword,
+  onUpdateUserPermissions,
+  onDisableUser,
+  onRevokeSession,
 }: {
   tokens: ApiTokenView[];
   tokenName: string;
@@ -9313,58 +10636,132 @@ function AuthPage({
   saving: boolean;
   message?: string;
   createdToken?: ApiTokenCreateResponse;
+  users: LocalUserView[];
+  currentUser?: LocalUserView;
+  currentSession?: LocalUserSessionView;
+  loginUsername: string;
+  loginPassword: string;
+  userUsername: string;
+  userPassword: string;
+  userDisplayName: string;
+  userRole: string;
+  userPermissionMode: string;
+  userApprovedToolIds: string;
+  userLoading: boolean;
+  userSaving: boolean;
+  userMessage?: string;
+  sessions: LocalUserSessionView[];
+  sessionLoading: boolean;
   onRefresh: () => void;
+  onClearCreatedToken: () => void;
   onTokenNameChange: (value: string) => void;
   onCreate: () => void;
   onRevoke: (tokenId: string) => void;
+  onLoginUsernameChange: (value: string) => void;
+  onLoginPasswordChange: (value: string) => void;
+  onLogin: () => void;
+  onLogout: () => void;
+  onUserUsernameChange: (value: string) => void;
+  onUserPasswordChange: (value: string) => void;
+  onUserDisplayNameChange: (value: string) => void;
+  onUserRoleChange: (value: string) => void;
+  onUserPermissionModeChange: (value: string) => void;
+  onUserApprovedToolIdsChange: (value: string) => void;
+  onCreateUser: () => void;
+  onChangeUserPassword: (userId: string) => void;
+  onUpdateUserPermissions: (user: LocalUserView) => void;
+  onDisableUser: (userId: string) => void;
+  onRevokeSession: (sessionId: string) => void;
 }) {
   const activeTokens = tokens.filter((token) => token.status === 'active');
   const recentlyUsedTokens = tokens.filter((token) => token.lastUsedAt).length;
-  const authEnabled = Boolean(config?.auth?.apiTokenRequired);
+  const activeUsers = users.filter((user) => user.status === 'active');
+  const activeSessions = sessions.filter((session) => session.status === 'active');
+  const authEnabled = Boolean(config?.auth?.required || config?.auth?.apiTokenRequired);
+  const supportedRoles = config?.auth?.supportedRoles?.length
+    ? config.auth.supportedRoles
+    : ['owner', 'admin', 'operator', 'viewer', 'user'];
+  const rolePolicyEntries = Object.entries(config?.auth?.rolePolicies || {});
+  const firstUser = users.length === 0;
+  type AuthSection = 'tokens' | 'users' | 'sessions' | 'policy';
+  const [section, setSection] = useState<AuthSection>('tokens');
+  const [copiedTokenId, setCopiedTokenId] = useState<string>();
+  const sectionTabs: Array<{ key: AuthSection; label: string; count?: number }> = [
+    { key: 'tokens', label: '访问令牌', count: tokens.length },
+    { key: 'users', label: '本地用户', count: users.length },
+    { key: 'sessions', label: '登录会话', count: activeSessions.length },
+    { key: 'policy', label: '策略', count: rolePolicyEntries.length },
+  ];
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const copyTokenValue = useCallback(async (token: ApiTokenView) => {
+    const value = token.token || token.tokenPrefix || '';
+    if (!value) return;
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(value);
+      copied = true;
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        copied = document.execCommand('copy');
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+    // 部分浏览器上下文会禁用 Clipboard API，复制失败时要给出明确反馈。
+    setCopiedTokenId(copied ? token.id : `failed:${token.id}`);
+    window.setTimeout(() => {
+      setCopiedTokenId((current) => (current === token.id || current === `failed:${token.id}` ? undefined : current));
+    }, 1600);
+  }, []);
   return (
     <section className="stack">
       <div className="metric-grid compact-metrics">
         <Metric title="API Token" value={tokens.length} desc="本地保存记录" />
         <Metric title="Active" value={activeTokens.length} desc="可用于 API 鉴权" />
-        <Metric title="强鉴权" value={authEnabled ? '已开启' : '未开启'} desc={authEnabled ? '匹配接口需要 token' : '本地 WebUI 默认不拦截'} />
+        <Metric title="本地用户" value={users.length} desc={`${activeUsers.length} 个可用`} />
+        <Metric title="登录会话" value={sessions.length} desc={`${activeSessions.length} 个活跃`} />
+        <Metric title="强鉴权" value={authEnabled ? '已开启' : '未开启'} desc={authEnabled ? '匹配接口需要 API Token 或本地会话' : '本地 WebUI 默认不拦截'} />
         <Metric title="已使用" value={recentlyUsedTokens} desc="有 lastUsedAt 记录" />
       </div>
-      <div className="two-col">
-        <Panel title="创建 Token" action={<button type="button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} />刷新</button>}>
-          <form
-            className="config-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onCreate();
-            }}
+      <div className="auth-section-tabs segmented-tabs">
+        {sectionTabs.map((tab) => (
+          <button
+            type="button"
+            key={tab.key}
+            className={section === tab.key ? 'active' : ''}
+            onClick={() => setSection(tab.key)}
           >
-            <label className="form-field">
-              <span>名称</span>
-              <input value={tokenName} onChange={(event) => onTokenNameChange(event.target.value)} placeholder="CI / IM Gateway / Local Client" />
-            </label>
-            <p className="muted compact-text">
-              生成后只展示一次明文；服务端落盘保存 SHA-256 哈希和前缀。API Token 强鉴权已接入，默认关闭。
-            </p>
-            {createdToken?.token && (
-              <div className="token-once">
-                <small>请立即保存</small>
-                <code>{createdToken.token}</code>
-                <button type="button" onClick={() => void navigator.clipboard.writeText(createdToken.token || '')}><Copy size={14} />复制</button>
-              </div>
-            )}
-            {message && <div className="config-message">{message}</div>}
-            <div className="form-actions">
-              <button className="send-button" type="submit" disabled={saving}>{saving ? '生成中...' : '生成 API Token'}</button>
-            </div>
-          </form>
-        </Panel>
-        <Panel title="Token 列表">
+            {tab.label}
+            {typeof tab.count === 'number' && <span className="tab-count">{tab.count}</span>}
+          </button>
+        ))}
+        <button type="button" className="auth-refresh-button" onClick={onRefresh} disabled={loading || userLoading || sessionLoading}>
+          <RefreshCw size={14} />刷新
+        </button>
+      </div>
+
+      {section === 'tokens' && (
+        <Panel
+          title="Token 列表"
+          action={<button type="button" onClick={() => { onClearCreatedToken(); setTokenDialogOpen(true); }}><Plus size={14} />新建 Token</button>}
+        >
+          <p className="auth-help-text">
+            Token 用于外部系统调用 ClawAgent API。列表支持复制完整 Token；旧版本创建的 Token 只有前缀，无法恢复明文。
+          </p>
           {tokens.length ? (
             <table className="data-table">
               <thead>
                 <tr>
                   <th>名称</th>
-                  <th>前缀</th>
+                  <th>Token</th>
                   <th>状态</th>
                   <th>创建时间</th>
                   <th>最后使用</th>
@@ -9377,15 +10774,25 @@ function AuthPage({
                 {tokens.map((token) => (
                   <tr key={token.id}>
                     <td>{token.name || token.id}</td>
-                    <td className="mono">{token.tokenPrefix || '-'}</td>
+                    <td className="auth-token-cell">
+                      <div className="copy-inline token-copy-inline mono">
+                        <span className="auth-token-value">{token.token || token.tokenPrefix || '-'}</span>
+                        {(token.token || token.tokenPrefix) && (
+                          <button type="button" title={token.token ? '复制完整 Token' : '复制 Token 前缀'} onClick={() => void copyTokenValue(token)}>
+                            {copiedTokenId === token.id ? <Check size={14} /> : <Copy size={14} />}
+                            {copiedTokenId === token.id ? '已复制' : copiedTokenId === `failed:${token.id}` ? '复制失败' : '复制'}
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td><span className={`pill ${token.status === 'active' ? 'success' : 'neutral'}`}>{token.status || '-'}</span></td>
                     <td>{formatDateTime(token.createdAt)}</td>
                     <td>{formatDateTime(token.lastUsedAt)}</td>
                     <td>{token.usageCount ?? 0}</td>
                     <td className="mono compact-text">{token.lastUsedMethod && token.lastUsedPath ? `${token.lastUsedMethod} ${token.lastUsedPath}` : '-'}</td>
                     <td>
-                      <button type="button" disabled={saving || token.status !== 'active'} onClick={() => onRevoke(token.id)}>
-                        <Trash2 size={14} />撤销
+                      <button type="button" disabled={saving} onClick={() => onRevoke(token.id)}>
+                        <Trash2 size={14} />删除
                       </button>
                     </td>
                   </tr>
@@ -9396,7 +10803,252 @@ function AuthPage({
             <Empty text={loading ? '正在加载 API Token...' : '暂无 API Token'} />
           )}
         </Panel>
-      </div>
+      )}
+
+      {section === 'users' && (
+        <div className="stack">
+          <div className="auth-usage-note">
+            <strong>本地用户怎么使用？</strong>
+            <span>这里负责创建和维护用户。登录入口放在客户端：App 远程模式在左下角登录；本地模式默认信任本机，不要求登录。</span>
+          </div>
+          <Panel
+            title="用户列表"
+            action={<button type="button" onClick={() => setUserDialogOpen(true)}><Plus size={14} />新建用户</button>}
+          >
+            {users.length ? (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>用户名</th>
+                    <th>显示名</th>
+                    <th>角色</th>
+                    <th>权限</th>
+                    <th>工具白名单</th>
+                    <th>状态</th>
+                    <th>创建时间</th>
+                    <th>改密时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr key={user.id}>
+                      <td className="mono">{user.username || user.id}</td>
+                      <td>{user.displayName || '-'}</td>
+                      <td>{user.role || '-'}</td>
+                      <td>{user.metadata?.permissionMode || user.metadata?.toolPermissionMode || '-'}</td>
+                      <td className="mono compact-text">{user.metadata?.approvedToolIds || user.metadata?.toolIds || '-'}</td>
+                      <td><span className={`pill ${user.status === 'active' ? 'success' : 'neutral'}`}>{user.status || '-'}</span></td>
+                      <td>{formatDateTime(user.createdAt)}</td>
+                      <td>{formatDateTime(user.lastPasswordChangedAt)}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button type="button" disabled={userSaving || user.status !== 'active'} onClick={() => onChangeUserPassword(user.id)}>
+                            改密
+                          </button>
+                          <button type="button" disabled={userSaving || user.status !== 'active'} onClick={() => onUpdateUserPermissions(user)}>
+                            权限
+                          </button>
+                          <button type="button" disabled={userSaving || user.status !== 'active'} onClick={() => onDisableUser(user.id)}>
+                            <Trash2 size={14} />禁用
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Empty text={userLoading ? '正在加载本地用户...' : '暂无本地用户'} />
+            )}
+          </Panel>
+        </div>
+      )}
+
+      {section === 'sessions' && (
+        <Panel title="登录会话">
+          {sessions.length ? (
+            <table className="data-table">
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>Token 前缀</th>
+                <th>创建时间</th>
+                <th>过期时间</th>
+                <th>最后使用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((session) => (
+                <tr key={session.sessionId}>
+                  <td>
+                    <div className="strong">{session.displayName || session.username || '-'}</div>
+                    <div className="muted mono compact-text">{session.username || session.userId || '-'}</div>
+                  </td>
+                  <td>{session.role || '-'}</td>
+                  <td><span className={`pill ${session.status === 'active' ? 'success' : 'neutral'}`}>{session.status || '-'}</span></td>
+                  <td className="mono">{session.tokenPrefix || '-'}</td>
+                  <td>{formatDateTime(session.createdAt)}</td>
+                  <td>{formatDateTime(session.expiresAt)}</td>
+                  <td>{formatDateTime(session.lastUsedAt)}</td>
+                  <td>
+                    <button type="button" disabled={userSaving || session.status !== 'active'} onClick={() => onRevokeSession(session.sessionId)}>
+                      <Trash2 size={14} />撤销
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty text={sessionLoading ? '正在加载本地登录会话...' : '暂无本地登录会话'} />
+        )}
+        </Panel>
+      )}
+
+      {section === 'policy' && (
+        <Panel title="角色策略模板">
+          <p className="auth-help-text">
+            策略模板是按角色预设的权限规则，用来给本地用户、Token、通道用户和设备做默认权限合并。当前没有数据，是因为配置里还没定义角色策略；没有配置时会走用户自身权限字段和系统默认值。
+          </p>
+          {rolePolicyEntries.length ? (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>权限模式</th>
+                  <th>审批模式</th>
+                  <th>工具白名单</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rolePolicyEntries.map(([role, policy]) => (
+                  <tr key={role}>
+                    <td className="mono">{role}</td>
+                    <td><span className={`pill ${policy?.enabled === false ? 'neutral' : 'success'}`}>{policy?.enabled === false ? '禁用' : '启用'}</span></td>
+                    <td>{policy?.permissionMode || '-'}</td>
+                    <td>{policy?.approvalMode || '-'}</td>
+                    <td className="mono compact-text">{policy?.approvedToolIds?.length ? policy.approvedToolIds.join(', ') : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <Empty text="暂无角色策略模板；未配置时仅 viewer 默认 read-only，用户自身权限字段仍可参与合并。" />
+          )}
+        </Panel>
+      )}
+      {tokenDialogOpen && (
+        <Modal onClose={() => setTokenDialogOpen(false)}>
+          <div className="modal-head">
+            <div>
+              <h3>新建 Token</h3>
+              <p>完整 Token 只展示一次，请创建后立即复制。</p>
+            </div>
+            <button type="button" onClick={() => setTokenDialogOpen(false)}><X size={16} /></button>
+          </div>
+          <form
+            className="config-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onCreate();
+            }}
+          >
+            <label className="form-field">
+              <span>名称</span>
+              <input value={tokenName} onChange={(event) => onTokenNameChange(event.target.value)} placeholder="CI / IM Gateway / Local Client" autoFocus />
+            </label>
+            <p className="muted compact-text">
+              生成后只展示一次明文；服务端只保存 SHA-256 哈希和前缀。
+            </p>
+            {createdToken?.token && (
+              <div className="token-once">
+                <small>请立即保存完整 Token</small>
+                <code>{createdToken.token}</code>
+                <button type="button" onClick={() => void navigator.clipboard.writeText(createdToken.token || '')}><Copy size={14} />复制完整 Token</button>
+              </div>
+            )}
+            {message && <div className="config-message">{message}</div>}
+            <div className="form-actions">
+              <button type="button" onClick={() => setTokenDialogOpen(false)}>关闭</button>
+              <button className="send-button" type="submit" disabled={saving}>{saving ? '生成中...' : '生成 API Token'}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {userDialogOpen && (
+        <Modal onClose={() => setUserDialogOpen(false)}>
+          <div className="modal-head">
+            <div>
+              <h3>{firstUser ? '初始化 owner' : '新建本地用户'}</h3>
+              <p>创建后可在 App 远程模式登录使用；本地模式默认信任本机，不要求登录。</p>
+            </div>
+            <button type="button" onClick={() => setUserDialogOpen(false)}><X size={16} /></button>
+          </div>
+          <form
+            className="config-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onCreateUser();
+            }}
+          >
+            <div className="form-grid two">
+              <label className="form-field">
+                <span>用户名</span>
+                <input value={userUsername} onChange={(event) => onUserUsernameChange(event.target.value)} placeholder="admin / operator" autoFocus />
+              </label>
+              <label className="form-field">
+                <span>显示名</span>
+                <input value={userDisplayName} onChange={(event) => onUserDisplayNameChange(event.target.value)} placeholder="本地管理员" />
+              </label>
+              <label className="form-field">
+                <span>密码</span>
+                <input type="password" value={userPassword} onChange={(event) => onUserPasswordChange(event.target.value)} placeholder="至少 6 位" />
+              </label>
+              <label className="form-field">
+                <span>角色</span>
+                <select value={firstUser ? 'owner' : userRole} onChange={(event) => onUserRoleChange(event.target.value)} disabled={firstUser}>
+                  {supportedRoles.map((role) => (
+                    <option value={role} key={role}>{role}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-field">
+                <span>权限模式</span>
+                <select value={userPermissionMode} onChange={(event) => onUserPermissionModeChange(event.target.value)}>
+                  <option value="ask">ask</option>
+                  <option value="auto">auto</option>
+                  <option value="custom">custom</option>
+                  <option value="read-only">read-only</option>
+                  <option value="full">full</option>
+                  <option value="full-access">full-access</option>
+                </select>
+              </label>
+              <label className="form-field wide">
+                <span>工具白名单</span>
+                <textarea
+                  rows={3}
+                  value={userApprovedToolIds}
+                  onChange={(event) => onUserApprovedToolIdsChange(event.target.value)}
+                  placeholder="builtin.filesystem.read_text_file&#10;builtin.execute.command"
+                />
+              </label>
+            </div>
+            <p className="muted compact-text">
+              {firstUser ? '首个本地用户会通过 setup 初始化为 owner。' : '用户维度权限会在任务入口与 Channel/Device/Agent 策略合并。'}
+            </p>
+            {userMessage && <div className="config-message">{userMessage}</div>}
+            <div className="form-actions">
+              <button type="button" onClick={() => setUserDialogOpen(false)}>关闭</button>
+              <button className="send-button" type="submit" disabled={userSaving}>{userSaving ? '创建中...' : (firstUser ? '初始化 owner' : '创建用户')}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </section>
   );
 }
@@ -9405,42 +11057,149 @@ function DevicePage({
   devices,
   deviceName,
   deviceType,
+  devicePermissionMode,
+  deviceApprovedToolIds,
+  pairingTtlSeconds,
+  createdPairing,
   loading,
   saving,
   message,
   onRefresh,
   onDeviceNameChange,
   onDeviceTypeChange,
+  onDevicePermissionModeChange,
+  onDeviceApprovedToolIdsChange,
+  onPairingTtlSecondsChange,
   onRegister,
+  onCreatePairingCode,
   onHeartbeat,
+  onRotateSecret,
+  onBindUser,
+  onUpdatePermissions,
   onRevoke,
 }: {
   devices: DeviceView[];
   deviceName: string;
   deviceType: string;
+  devicePermissionMode: string;
+  deviceApprovedToolIds: string;
+  pairingTtlSeconds: number;
+  createdPairing?: DevicePairingCodeResponse;
   loading: boolean;
   saving: boolean;
   message?: string;
   onRefresh: () => void;
   onDeviceNameChange: (value: string) => void;
   onDeviceTypeChange: (value: string) => void;
+  onDevicePermissionModeChange: (value: string) => void;
+  onDeviceApprovedToolIdsChange: (value: string) => void;
+  onPairingTtlSecondsChange: (value: number) => void;
   onRegister: () => void;
+  onCreatePairingCode: () => void;
   onHeartbeat: (deviceId: string) => void;
+  onRotateSecret: (deviceId: string) => void;
+  onBindUser: (deviceId: string) => void;
+  onUpdatePermissions: (deviceId: string) => void;
   onRevoke: (deviceId: string) => void;
 }) {
   const activeDevices = devices.filter((device) => device.status === 'active');
   const desktopDevices = devices.filter((device) => device.type === 'desktop');
+  const pairingDevices = devices.filter((device) => device.status === 'pairing');
+  const [deviceDialogOpen, setDeviceDialogOpen] = useState(false);
   return (
     <section className="stack">
       <div className="metric-grid compact-metrics">
         <Metric title="Device" value={devices.length} desc="登记设备" />
         <Metric title="Active" value={activeDevices.length} desc="未撤销设备" />
         <Metric title="Desktop" value={desktopDevices.length} desc="桌面端登记" />
+        <Metric title="Pairing" value={pairingDevices.length} desc="等待配对" />
       </div>
-      <div className="two-col">
-        <Panel title="登记设备" action={<button type="button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} />刷新</button>}>
+      <Panel
+        title="设备列表"
+        action={(
+          <div className="inline-actions">
+            <button type="button" onClick={() => setDeviceDialogOpen(true)} disabled={saving}>
+              <Plus size={14} />登记设备
+            </button>
+            <button type="button" onClick={onRefresh} disabled={loading}>
+              <RefreshCw size={14} />刷新
+            </button>
+          </div>
+        )}
+      >
+        {message && <div className="config-message">{message}</div>}
+        {devices.length ? (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>配对</th>
+                <th>密钥</th>
+                <th>绑定用户</th>
+                <th>权限</th>
+                <th>最后心跳</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((device) => (
+                <tr key={device.id}>
+                  <td>{device.name || device.id}</td>
+                  <td>{device.type || '-'}</td>
+                  <td><span className={`pill ${device.status === 'active' ? 'success' : 'neutral'}`}>{device.status || '-'}</span></td>
+                  <td>{device.pairedAt ? formatDateTime(device.pairedAt) : device.pairingCodeExpiresAt ? `过期 ${formatDateTime(device.pairingCodeExpiresAt)}` : '-'}</td>
+                  <td className="mono">{device.deviceSecretPrefix || '-'}</td>
+                  <td>{device.boundUsername || device.boundUserId || '-'}</td>
+                  <td>
+                    <div className="stack compact-text">
+                      <span>{device.permissionMode || 'ask'}</span>
+                      <span className="muted">{device.approvedToolIds?.length ? `${device.approvedToolIds.length} 个白名单` : '无白名单'}</span>
+                    </div>
+                  </td>
+                  <td>{formatDateTime(device.lastSeenAt)}</td>
+                  <td>
+                    <div className="inline-actions">
+                      <button type="button" disabled={saving || device.status !== 'active'} onClick={() => onHeartbeat(device.id)}>
+                        <RefreshCw size={14} />心跳
+                      </button>
+                      <button type="button" disabled={saving || device.status === 'revoked'} onClick={() => onBindUser(device.id)}>
+                        绑定
+                      </button>
+                      <button type="button" disabled={saving || device.status !== 'active'} onClick={() => onRotateSecret(device.id)}>
+                        轮换
+                      </button>
+                      <button type="button" disabled={saving || device.status === 'revoked'} onClick={() => onUpdatePermissions(device.id)}>
+                        权限
+                      </button>
+                      <button type="button" disabled={saving || device.status !== 'active'} onClick={() => onRevoke(device.id)}>
+                        <Trash2 size={14} />撤销
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty text={loading ? '正在加载设备...' : '暂无设备登记'} />
+        )}
+      </Panel>
+
+      {deviceDialogOpen && (
+        <Modal onClose={() => setDeviceDialogOpen(false)}>
+          <div className="modal-head">
+            <div>
+              <h3>登记设备</h3>
+              <p>登记本机设备，或生成配对码给桌面壳、浏览器扩展、外部网关使用。</p>
+            </div>
+            <button type="button" className="icon-button" onClick={() => setDeviceDialogOpen(false)} aria-label="关闭">
+              <X size={16} />
+            </button>
+          </div>
           <form
-            className="config-form"
+            className="config-form modal-body"
             onSubmit={(event) => {
               event.preventDefault();
               onRegister();
@@ -9459,53 +11218,45 @@ function DevicePage({
                 <option value="local">local</option>
               </select>
             </label>
+            <label className="form-field">
+              <span>权限模式</span>
+              <select value={devicePermissionMode} onChange={(event) => onDevicePermissionModeChange(event.target.value)}>
+                <option value="ask">ask</option>
+                <option value="auto">auto</option>
+                <option value="custom">custom</option>
+                <option value="read-only">read-only</option>
+                <option value="full-access">full-access</option>
+              </select>
+            </label>
+            <label className="form-field">
+              <span>配对码有效期</span>
+              <input type="number" min={60} max={3600} step={60} value={pairingTtlSeconds} onChange={(event) => onPairingTtlSecondsChange(Number(event.target.value) || 600)} />
+            </label>
+            <label className="form-field">
+              <span>高危工具白名单</span>
+              <textarea value={deviceApprovedToolIds} onChange={(event) => onDeviceApprovedToolIdsChange(event.target.value)} placeholder="builtin.execute.command" />
+            </label>
             <p className="muted compact-text">
-              当前先记录接入端身份和最后心跳时间；配对码、设备级权限和用户绑定后续再接入。
+              直接登记用于管理台本地录入；配对码用于桌面壳、浏览器扩展或外部网关绑定，设备密钥只在客户端完成配对时返回一次。
             </p>
+            {createdPairing?.code && (
+              <div className="token-once">
+                <small>配对码，过期前在客户端输入</small>
+                <code>{createdPairing.code}</code>
+                <span className="muted compact-text">过期：{formatDateTime(createdPairing.expiresAt)}</span>
+                <button type="button" onClick={() => void navigator.clipboard.writeText(createdPairing.code || '')}><Copy size={14} />复制</button>
+              </div>
+            )}
             {message && <div className="config-message">{message}</div>}
             <div className="form-actions">
               <button className="send-button" type="submit" disabled={saving}>{saving ? '登记中...' : '登记设备'}</button>
+              <button type="button" onClick={onCreatePairingCode} disabled={saving}>
+                生成配对码
+              </button>
             </div>
           </form>
-        </Panel>
-        <Panel title="设备列表">
-          {devices.length ? (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>类型</th>
-                  <th>状态</th>
-                  <th>最后心跳</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map((device) => (
-                  <tr key={device.id}>
-                    <td>{device.name || device.id}</td>
-                    <td>{device.type || '-'}</td>
-                    <td><span className={`pill ${device.status === 'active' ? 'success' : 'neutral'}`}>{device.status || '-'}</span></td>
-                    <td>{formatDateTime(device.lastSeenAt)}</td>
-                    <td>
-                      <div className="inline-actions">
-                        <button type="button" disabled={saving || device.status !== 'active'} onClick={() => onHeartbeat(device.id)}>
-                          <RefreshCw size={14} />心跳
-                        </button>
-                        <button type="button" disabled={saving || device.status !== 'active'} onClick={() => onRevoke(device.id)}>
-                          <Trash2 size={14} />撤销
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <Empty text={loading ? '正在加载设备...' : '暂无设备登记'} />
-          )}
-        </Panel>
-      </div>
+        </Modal>
+      )}
     </section>
   );
 }

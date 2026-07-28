@@ -12,9 +12,17 @@ export const API_PATHS: {
   sessionEvents: (sessionId: string, limit?: number) => string;
   session: (sessionId: string) => string;
   tasksStream: string;
+  authSetup: string;
+  authLogin: string;
+  authMe: string;
+  authLogout: string;
+  devicesPair: string;
+  deviceVerify: (deviceId: string) => string;
+  deviceHeartbeat: (deviceId: string) => string;
   todos: (limit?: number, sessionId?: string) => string;
   logSources: string;
   logsQuery: (limit?: number) => string;
   runtimeConfig: string;
+  localHealth: (deep?: boolean) => string;
   configModels: string;
 };

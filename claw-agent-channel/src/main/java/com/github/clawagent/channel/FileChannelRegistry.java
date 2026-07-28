@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.spi.ChannelRegistry;
 
@@ -25,6 +27,22 @@ import java.util.Optional;
  */
 public class FileChannelRegistry implements ChannelRegistry {
     private static final TypeReference<List<ChannelDefinition>> CHANNEL_LIST_TYPE = new TypeReference<>() {};
+    private static final List<String> ACCOUNT_STYLE_INTERNAL_METADATA = List.of(
+            "channel.configStyle",
+            "channel.accountId",
+            "channel.defaultAccount",
+            "channel.isDefaultAccount",
+            "channel.source",
+            "channel.readOnly",
+            "name",
+            "enabled",
+            "approvalMode",
+            "approvedToolIds",
+            "inboundPath",
+            "accountId",
+            "id",
+            "createdAt",
+            "updatedAt");
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .findAndRegisterModules()
@@ -79,24 +97,26 @@ public class FileChannelRegistry implements ChannelRegistry {
         if (isConfiguredChannel(normalized.id())) {
             throw new IllegalStateException("Channel 由 YAML 配置管理，不能保存到 channels.json 覆盖：" + normalized.id());
         }
+        SavedChannelFile savedFile = readSavedFile();
         Map<String, ChannelDefinition> channels = new LinkedHashMap<>();
-        for (ChannelDefinition saved : readSaved()) {
+        for (ChannelDefinition saved : savedFile.channels()) {
             channels.put(saved.id(), saved);
         }
         ChannelDefinition existing = channels.get(normalized.id());
         Instant createdAt = existing == null ? Instant.now() : existing.createdAt();
         channels.put(normalized.id(), normalized.withTimestamps(createdAt, Instant.now()));
-        writeSaved(new ArrayList<>(channels.values()));
+        writeSaved(new ArrayList<>(channels.values()), savedFile.accountStyle(), savedFile.channelsWrapper());
         return channels.get(normalized.id());
     }
 
     @Override
     public synchronized boolean delete(String channelId) {
         String id = normalizeId(channelId);
-        List<ChannelDefinition> saved = new ArrayList<>(readSaved());
+        SavedChannelFile savedFile = readSavedFile();
+        List<ChannelDefinition> saved = new ArrayList<>(savedFile.channels());
         boolean removed = saved.removeIf(channel -> channel.id().equals(id));
         if (removed) {
-            writeSaved(saved);
+            writeSaved(saved, savedFile.accountStyle(), savedFile.channelsWrapper());
         }
         return removed;
     }
@@ -152,25 +172,31 @@ public class FileChannelRegistry implements ChannelRegistry {
     }
 
     private List<ChannelDefinition> readSaved() {
+        return readSavedFile().channels();
+    }
+
+    private SavedChannelFile readSavedFile() {
         if (!Files.exists(storePath)) {
-            return List.of();
+            return SavedChannelFile.flat(List.of());
         }
         try {
             String json = Files.readString(storePath, StandardCharsets.UTF_8);
             JsonNode root = objectMapper.readTree(json);
             if (root == null || root.isNull() || root.isMissingNode()) {
-                return List.of();
+                return SavedChannelFile.flat(List.of());
             }
             if (root.isArray()) {
-                return objectMapper.readValue(json, CHANNEL_LIST_TYPE).stream()
+                List<ChannelDefinition> channels = objectMapper.readValue(json, CHANNEL_LIST_TYPE).stream()
                         .map(this::normalize)
                         .toList();
+                return SavedChannelFile.flat(channels);
             }
             if (root.isObject()) {
-                JsonNode channelsNode = root.has("channels") ? root.path("channels") : root;
-                return readAccountStyleChannels(channelsNode);
+                boolean channelsWrapper = root.has("channels");
+                JsonNode channelsNode = channelsWrapper ? root.path("channels") : root;
+                return new SavedChannelFile(readAccountStyleChannels(channelsNode), true, channelsWrapper);
             }
-            return List.of();
+            return SavedChannelFile.flat(List.of());
         } catch (IOException e) {
             throw new IllegalStateException("读取 Channel 配置失败：" + storePath, e);
         }
@@ -186,14 +212,114 @@ public class FileChannelRegistry implements ChannelRegistry {
     }
 
     private void writeSaved(List<ChannelDefinition> channels) {
+        writeSaved(channels, false, true);
+    }
+
+    private void writeSaved(List<ChannelDefinition> channels, boolean accountStyle, boolean channelsWrapper) {
         try {
             if (storePath.getParent() != null) {
                 Files.createDirectories(storePath.getParent());
             }
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(storePath.toFile(), channels);
+            JsonNode payload = accountStyle ? accountStylePayload(channels, channelsWrapper) : objectMapper.valueToTree(channels);
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(storePath.toFile(), payload);
         } catch (IOException e) {
             throw new IllegalStateException("保存 Channel 配置失败：" + storePath, e);
         }
+    }
+
+    private JsonNode accountStylePayload(List<ChannelDefinition> channels, boolean channelsWrapper) {
+        ObjectNode channelsNode = objectMapper.createObjectNode();
+        Map<String, List<ChannelDefinition>> byType = new LinkedHashMap<>();
+        for (ChannelDefinition channel : channels) {
+            ChannelDefinition normalized = normalize(channel);
+            byType.computeIfAbsent(normalized.type(), key -> new ArrayList<>()).add(normalized);
+        }
+        byType.forEach((type, typedChannels) -> channelsNode.set(type, accountStyleChannelNode(type, typedChannels)));
+        if (!channelsWrapper) {
+            return channelsNode;
+        }
+        ObjectNode root = objectMapper.createObjectNode();
+        root.set("channels", channelsNode);
+        return root;
+    }
+
+    private ObjectNode accountStyleChannelNode(String type, List<ChannelDefinition> typedChannels) {
+        ObjectNode channelNode = objectMapper.createObjectNode();
+        String defaultAccount = resolveDefaultAccount(type, typedChannels);
+        if (!defaultAccount.isBlank()) {
+            channelNode.put("defaultAccount", defaultAccount);
+        }
+        ObjectNode accountsNode = objectMapper.createObjectNode();
+        for (ChannelDefinition channel : typedChannels) {
+            accountsNode.set(resolveAccountId(type, defaultAccount, channel), accountStyleAccountNode(channel));
+        }
+        channelNode.set("accounts", accountsNode);
+        return channelNode;
+    }
+
+    private ObjectNode accountStyleAccountNode(ChannelDefinition channel) {
+        ObjectNode accountNode = objectMapper.createObjectNode();
+        accountNode.put("name", channel.name());
+        accountNode.put("enabled", channel.enabled());
+        accountNode.put("approvalMode", channel.approvalMode());
+        if (channel.approvedToolIds() != null && !channel.approvedToolIds().isEmpty()) {
+            ArrayNode approvedToolIds = accountNode.putArray("approvedToolIds");
+            channel.approvedToolIds().forEach(approvedToolIds::add);
+        }
+        accountNode.put("inboundPath", channel.inboundPath());
+        // metadata 里保留平台 adapter 需要的真实配置，channel.* 这类展开时产生的内部标记不写回。
+        Map<String, String> metadata = channel.metadata() == null ? Map.of() : channel.metadata();
+        metadata.forEach((key, value) -> {
+            if (ACCOUNT_STYLE_INTERNAL_METADATA.contains(key) || value == null) {
+                return;
+            }
+            putAccountStyleMetadata(accountNode, key, value);
+        });
+        return accountNode;
+    }
+
+    private void putAccountStyleMetadata(ObjectNode accountNode, String key, String value) {
+        String trimmed = value == null ? "" : value.trim();
+        if (key == null || key.isBlank() || trimmed.isBlank()) {
+            return;
+        }
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            try {
+                accountNode.set(key, objectMapper.readTree(trimmed));
+                return;
+            } catch (IOException ignored) {
+                // 元数据可能只是普通字符串，JSON 解析失败时按原文本写回。
+            }
+        }
+        accountNode.put(key, trimmed);
+    }
+
+    private String resolveDefaultAccount(String type, List<ChannelDefinition> channels) {
+        for (ChannelDefinition channel : channels) {
+            String configuredDefault = channel.metadata() == null ? "" : firstNonBlank(channel.metadata().get("channel.defaultAccount"), "");
+            if (!configuredDefault.isBlank()) {
+                return normalizeId(configuredDefault);
+            }
+        }
+        for (ChannelDefinition channel : channels) {
+            String accountId = channel.metadata() == null ? "" : firstNonBlank(channel.metadata().get("channel.accountId"), "");
+            if (channel.id().equals(type) && !accountId.isBlank() && !"default".equals(accountId)) {
+                return normalizeId(accountId);
+            }
+        }
+        return "";
+    }
+
+    private String resolveAccountId(String type, String defaultAccount, ChannelDefinition channel) {
+        String accountId = channel.metadata() == null ? "" : firstNonBlank(channel.metadata().get("channel.accountId"), "");
+        if (!accountId.isBlank()) {
+            return normalizeId(accountId);
+        }
+        if (channel.id().equals(type)) {
+            return firstNonBlank(defaultAccount, "default");
+        }
+        String prefix = type + "-";
+        return channel.id().startsWith(prefix) ? normalizeId(channel.id().substring(prefix.length())) : channel.id();
     }
 
     private List<ChannelDefinition> readAccountStyleChannels(JsonNode channelsNode) {
@@ -344,5 +470,11 @@ public class FileChannelRegistry implements ChannelRegistry {
 
     private String stringValue(JsonNode value) {
         return value == null || value.isNull() || value.isMissingNode() ? "" : value.asText("").trim();
+    }
+
+    private record SavedChannelFile(List<ChannelDefinition> channels, boolean accountStyle, boolean channelsWrapper) {
+        private static SavedChannelFile flat(List<ChannelDefinition> channels) {
+            return new SavedChannelFile(channels, false, true);
+        }
     }
 }

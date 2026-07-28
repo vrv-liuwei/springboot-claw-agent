@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -63,6 +64,37 @@ class ExecuteCommandRiskClassifierTest {
         ));
 
         assertEquals(List.of("**/.env", "**/*.pem"), properties.getSensitivePathPatterns());
+    }
+
+    @Test
+    void loadsWorkerIsolationConfigFromEnv() {
+        ExecuteToolkitProperties properties = ExecuteToolkitProperties.fromEnv(Map.ofEntries(
+                Map.entry("WORKER_ENABLED", "false"),
+                Map.entry("WORKER_JAR", "build/claw-agent-worker.jar"),
+                Map.entry("WORKER_JAVA", "D:/java/bin/java.exe"),
+                Map.entry("WORKER_JVM_MAX_HEAP", "128m"),
+                Map.entry("WORKER_MAX_OUTPUT_BYTES", "4096"),
+                Map.entry("WORKER_MAX_CPU_TIME_MS", "250"),
+                Map.entry("WORKER_MAX_MEMORY_BYTES", "10485760"),
+                Map.entry("WORKER_MAX_CONCURRENT", "3"),
+                Map.entry("WORKER_ACQUIRE_TIMEOUT_MS", "1200"),
+                Map.entry("WORKER_TERMINATION_GRACE_MS", "800"),
+                Map.entry("WORKER_BLOCKED_ENV_NAME_FRAGMENTS", "TOKEN;API_KEY"),
+                Map.entry("MAX_TIMEOUT_MS", "90000")
+        ));
+
+        assertFalse(properties.isWorkerEnabled());
+        assertEquals("build/claw-agent-worker.jar", properties.getWorkerJar());
+        assertEquals("D:/java/bin/java.exe", properties.getWorkerJava());
+        assertEquals("128m", properties.getWorkerJvmMaxHeap());
+        assertEquals(4096, properties.getWorkerMaxOutputBytes());
+        assertEquals(250, properties.getWorkerMaxCpuTimeMs());
+        assertEquals(10485760, properties.getWorkerMaxMemoryBytes());
+        assertEquals(3, properties.getWorkerMaxConcurrent());
+        assertEquals(1200, properties.getWorkerAcquireTimeoutMs());
+        assertEquals(800, properties.getWorkerTerminationGraceMs());
+        assertEquals(List.of("TOKEN", "API_KEY"), properties.getWorkerBlockedEnvNameFragments());
+        assertEquals(90000, properties.getMaxTimeoutMs());
     }
 
     @Test

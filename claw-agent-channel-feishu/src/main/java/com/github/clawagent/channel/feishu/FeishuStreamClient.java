@@ -2,10 +2,13 @@ package com.github.clawagent.channel.feishu;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.github.clawagent.channel.ChannelEventMetadataSupport;
 import com.github.clawagent.channel.ChannelRouter;
 import com.github.clawagent.channel.ChannelStreamHandle;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.core.ChannelInboundMessage;
+import com.lark.oapi.event.model.Header;
 import com.lark.oapi.event.EventDispatcher;
 import com.lark.oapi.service.im.ImService;
 import com.lark.oapi.service.im.v1.model.EventMessage;
@@ -19,7 +22,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import com.github.clawagent.channel.ChannelMessageDeduplicator;
@@ -30,6 +32,7 @@ import com.github.clawagent.channel.ChannelMessageDeduplicator;
 public class FeishuStreamClient {
     public static final String MODE = "feishu-long-connection";
     private static final Logger log = LoggerFactory.getLogger(FeishuStreamClient.class);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final ChannelRouter channelRouter;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -90,24 +93,60 @@ public class FeishuStreamClient {
         EventMessage message = data == null ? null : data.getMessage();
         EventSender sender = data == null ? null : data.getSender();
         UserId senderId = sender == null ? null : sender.getSenderId();
+        Header header = event == null ? null : event.getHeader();
         Map<String, String> metadata = new LinkedHashMap<>();
+        String messageType = firstNonBlank(message == null ? "" : message.getMessageType(), "text");
+        String conversationId = firstNonBlank(message == null ? "" : message.getChatId(), "default");
+        String externalUserId = firstNonBlank(senderId == null ? "" : senderId.getUserId(), senderId == null ? "" : senderId.getOpenId(), "external");
+        ChannelEventMetadataSupport.putStandardEvent(metadata, Map.ofEntries(
+                Map.entry(ChannelEventMetadataSupport.ADAPTER, MODE),
+                Map.entry(ChannelEventMetadataSupport.EVENT_SOURCE, "stream"),
+                Map.entry(ChannelEventMetadataSupport.EVENT_TYPE, header == null ? "" : stringValue(header.getEventType())),
+                Map.entry(ChannelEventMetadataSupport.EVENT_ID, header == null ? "" : stringValue(header.getEventId())),
+                Map.entry(ChannelEventMetadataSupport.EVENT_CREATE_TIME, header == null ? "" : stringValue(header.getCreateTime())),
+                Map.entry(ChannelEventMetadataSupport.MESSAGE_ID, message == null ? "" : stringValue(message.getMessageId())),
+                Map.entry(ChannelEventMetadataSupport.MESSAGE_CREATE_TIME, message == null ? "" : stringValue(message.getCreateTime())),
+                Map.entry(ChannelEventMetadataSupport.PLATFORM_MESSAGE_TYPE, messageType),
+                Map.entry(ChannelEventMetadataSupport.CONVERSATION_ID, conversationId),
+                Map.entry(ChannelEventMetadataSupport.CONVERSATION_TYPE, message == null ? "" : stringValue(message.getChatType())),
+                Map.entry(ChannelEventMetadataSupport.EXTERNAL_USER_ID, externalUserId),
+                Map.entry(ChannelEventMetadataSupport.TENANT_KEY, firstNonBlank(sender == null ? "" : sender.getTenantKey(), header == null ? "" : header.getTenantKey()))
+        ));
         metadata.put("channel.adapter", MODE);
         putIfPresent(metadata, "channel.messageId", message == null ? "" : message.getMessageId());
-        putIfPresent(metadata, "channel.eventType", event == null || event.getHeader() == null ? "" : event.getHeader().getEventType());
-        String messageType = firstNonBlank(message == null ? "" : message.getMessageType(), "text");
+        putIfPresent(metadata, "channel.eventType", header == null ? "" : header.getEventType());
+        putIfPresent(metadata, "channel.eventId", header == null ? "" : header.getEventId());
+        putIfPresent(metadata, "channel.eventCreateTime", header == null ? "" : header.getCreateTime());
+        putIfPresent(metadata, "channel.messageCreateTime", message == null ? "" : message.getCreateTime());
+        putIfPresent(metadata, "channel.conversationType", message == null ? "" : message.getChatType());
+        putIfPresent(metadata, "channel.senderTenantKey", firstNonBlank(
+                sender == null ? "" : sender.getTenantKey(),
+                header == null ? "" : header.getTenantKey()));
         String rawContent = message == null ? "" : message.getContent();
         JsonNode contentJson = parseContent(rawContent);
-        putFeishuMediaMetadata(metadata, messageType, contentJson);
+        Map<String, Object> contentMap = contentMap(contentJson);
+        putIfPresent(metadata, "channel.platformMessageType", messageType);
+        putIfPresent(metadata, "channel.feishu.imageKey", stringValue(contentMap.get("image_key")));
+        putIfPresent(metadata, "channel.feishu.fileKey", firstNonBlank(
+                stringValue(contentMap.get("file_key")),
+                stringValue(contentMap.get("fileKey"))));
+        putIfPresent(metadata, "channel.feishu.fileName", firstNonBlank(
+                stringValue(contentMap.get("file_name")),
+                stringValue(contentMap.get("fileName"))));
+        FeishuInboundAdapter.putAttachmentMetadata(metadata, channel, channel.id(),
+                message == null ? "" : message.getMessageId(), messageType, contentMap);
         String content = firstNonBlank(extractText(contentJson), mediaPlaceholder(messageType, contentJson), rawContent);
-        // SDK 收到的 content 是飞书 JSON 字符串；文本只取正文，图片/文件统一放入 metadata.attachments 供出站 auto 复用。
+        // SDK 收到的 content 是飞书 JSON 字符串；文本只取正文，媒体和富文本统一走 HTTP 入站同一套 attachments 规则。
         return new ChannelInboundMessage(
                 channel.id(),
-                firstNonBlank(message == null ? "" : message.getChatId(), "default"),
-                firstNonBlank(senderId == null ? "" : senderId.getUserId(), senderId == null ? "" : senderId.getOpenId(), "external"),
+                conversationId,
+                externalUserId,
                 messageType,
                 content,
                 metadata,
-                Map.of("source", MODE));
+                Map.of(
+                        "source", MODE,
+                        "eventId", header == null ? "" : stringValue(header.getEventId())));
     }
 
     private JsonNode parseContent(String content) {
@@ -142,44 +181,42 @@ public class FeishuStreamClient {
                     textValue(contentJson, "fileKey"),
                     "未提供文件名");
         }
+        if ("audio".equals(normalized) || "media".equals(normalized)) {
+            // 长连接媒体消息同样进入 attachment metadata，这里只给模型一个稳定、可读的摘要。
+            return "[飞书音视频] " + firstNonBlank(
+                    textValue(contentJson, "file_key"),
+                    textValue(contentJson, "fileKey"),
+                    textValue(contentJson, "file_name"),
+                    textValue(contentJson, "fileName"),
+                    "未提供 file_key");
+        }
+        if ("interactive".equals(normalized) || "card".equals(normalized)
+                || "post".equals(normalized) || "rich_text".equals(normalized)) {
+            return "[飞书卡片/富文本] " + firstNonBlank(
+                    richTitle(contentJson),
+                    textValue(contentJson, "title"),
+                    "请在平台查看完整内容");
+        }
         return "";
     }
 
-    private void putFeishuMediaMetadata(Map<String, String> metadata, String messageType, JsonNode contentJson) {
-        String normalized = messageType == null ? "" : messageType.trim().toLowerCase();
-        if ("image".equals(normalized)) {
-            String imageKey = textValue(contentJson, "image_key");
-            if (!imageKey.isBlank()) {
-                metadata.put("channel.feishu.imageKey", imageKey);
-                metadata.put("attachments", attachmentJson("image", Map.of("imageKey", imageKey)));
-            }
-            return;
+    private String richTitle(JsonNode contentJson) {
+        JsonNode title = contentJson == null ? null : contentJson.path("header").path("title");
+        if (title == null || title.isMissingNode()) {
+            return "";
         }
-        if ("file".equals(normalized)) {
-            String fileKey = firstNonBlank(textValue(contentJson, "file_key"), textValue(contentJson, "fileKey"));
-            if (!fileKey.isBlank()) {
-                String fileName = firstNonBlank(textValue(contentJson, "file_name"), textValue(contentJson, "fileName"));
-                Map<String, String> attachment = new LinkedHashMap<>();
-                attachment.put("fileKey", fileKey);
-                if (!fileName.isBlank()) {
-                    attachment.put("fileName", fileName);
-                }
-                metadata.put("channel.feishu.fileKey", fileKey);
-                putIfPresent(metadata, "channel.feishu.fileName", fileName);
-                metadata.put("attachments", attachmentJson("file", attachment));
-            }
-        }
+        String content = textValue(title, "content");
+        return content.isBlank() && title.isTextual() ? title.asText().trim() : content;
     }
 
-    private String attachmentJson(String type, Map<String, String> values) {
-        Map<String, String> attachment = new LinkedHashMap<>();
-        attachment.put("type", type);
-        attachment.put("source", "feishu");
-        attachment.putAll(values);
+    private Map<String, Object> contentMap(JsonNode contentJson) {
+        if (contentJson == null || contentJson.isMissingNode() || !contentJson.isObject()) {
+            return Map.of();
+        }
         try {
-            return objectMapper.writeValueAsString(List.of(attachment));
+            return objectMapper.convertValue(contentJson, MAP_TYPE);
         } catch (Exception ignored) {
-            return "[]";
+            return Map.of();
         }
     }
 

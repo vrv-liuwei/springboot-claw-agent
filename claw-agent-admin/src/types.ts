@@ -32,6 +32,7 @@ export type SubAgentTaskRequest = {
   input: string;
   role?: string;
   isolation?: string;
+  workerMode?: string;
   metadata?: Record<string, string>;
 };
 
@@ -47,6 +48,37 @@ export type SubAgentTaskResponse = {
     error?: string;
   };
   task?: AgentTask;
+};
+
+export type SubAgentBatchTaskRequest = {
+  tasks: SubAgentTaskRequest[];
+  parallel?: boolean;
+  maxParallelism?: number;
+  strategy?: string;
+  metadata?: Record<string, string>;
+};
+
+export type SubAgentPlanDispatchRequest = {
+  planId: string;
+  parallel?: boolean;
+  maxParallelism?: number;
+  strategy?: string;
+  includeHighRisk?: boolean;
+  dispatchMode?: string;
+  metadata?: Record<string, string>;
+};
+
+export type SubAgentBatchTaskResponse = {
+  parentTaskId?: string;
+  dispatchId?: string;
+  strategy?: string;
+  parallel?: boolean;
+  maxParallelism?: number;
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  tasks?: SubAgentTaskResponse[];
+  errors?: Record<string, string>;
 };
 
 export type AgentOrchestrationGraphNode = {
@@ -149,6 +181,84 @@ export type TodoItem = {
   metadata?: Record<string, string>;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type PlanStatus = 'DRAFT' | 'APPROVED' | 'RUNNING' | 'BLOCKED' | 'DONE';
+
+export type PlanOutcome = 'pending' | 'completed' | 'failed' | 'cancelled';
+
+export type PlanBlockReason = 'none' | 'waiting_user' | 'tool_failed' | 'risk_rejected' | 'needs_revision';
+
+export type PlanItem = {
+  id: string;
+  itemOrder?: number;
+  title?: string;
+  detail?: string;
+  description?: string;
+  status?: string;
+  expectedTools?: string[];
+  expectedFileChanges?: string[];
+  riskLevel?: string;
+  requiresApproval?: boolean;
+};
+
+export type PlanDraft = {
+  id: string;
+  sessionId?: string;
+  sourceTaskId?: string;
+  input?: string;
+  title?: string;
+  goal?: string;
+  summary?: string;
+  status?: PlanStatus | string;
+  outcome?: PlanOutcome | string;
+  blockReason?: PlanBlockReason | string;
+  version?: number;
+  activeFrom?: string;
+  contextBoundaryAt?: string;
+  items?: PlanItem[];
+  revisions?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type PlanTemplateView = {
+  id: string;
+  title?: string;
+  description?: string;
+  mode?: string;
+  promptHint?: string;
+};
+
+export type PlanRevisionSummaryView = {
+  planId?: string;
+  previousVersion?: number;
+  version?: number;
+  feedback?: string;
+  itemCountBefore?: number;
+  itemCountAfter?: number;
+  addedItems?: string;
+  removedItems?: string;
+  changedItems?: string;
+  updatedAt?: string;
+};
+
+export type PlanCreateRequest = {
+  input: string;
+  sessionId?: string;
+  mode?: string;
+  templateId?: string;
+  metadata?: Record<string, string>;
+};
+
+export type PlanReviseRequest = {
+  feedback?: string;
+};
+
+export type PlanRunRequest = {
+  channelId?: string;
+  userId?: string;
+  metadata?: Record<string, string>;
 };
 
 export type ResumeStateView = {
@@ -299,6 +409,13 @@ export type ChannelAdapterReloadResult = {
   adapters?: ChannelAdapterDescriptor[];
 };
 
+export type ChannelAdapterDeleteResult = {
+  file?: string;
+  deleted?: boolean;
+  reload?: ChannelAdapterReloadResult;
+  streamSwitchHint?: string;
+};
+
 export type ChannelConnectivityStatus = {
   channelId?: string;
   channelType?: string;
@@ -317,6 +434,27 @@ export type ChannelStreamStatus = {
   status?: string;
   message?: string;
   details?: Record<string, string>;
+};
+
+export type ChannelUserBindingRequest = {
+  externalUserId: string;
+  externalUsername?: string;
+  localUserId: string;
+  localUsername?: string;
+  metadata?: Record<string, string>;
+};
+
+export type ChannelUserBindingView = {
+  id: string;
+  channelId: string;
+  externalUserId: string;
+  externalUsername?: string;
+  localUserId: string;
+  localUsername?: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  metadata?: Record<string, string>;
 };
 
 export type ChannelInboundMessage = {
@@ -356,8 +494,15 @@ export type ApiTokenView = {
   id: string;
   name?: string;
   tokenPrefix?: string;
+  token?: string;
   status?: string;
+  ownerUserId?: string;
+  ownerUsername?: string;
+  permissionMode?: string;
+  approvedToolIds?: string[];
+  scopes?: string[];
   createdAt?: string;
+  expiresAt?: string;
   revokedAt?: string;
   lastUsedAt?: string;
   usageCount?: number;
@@ -368,12 +513,84 @@ export type ApiTokenView = {
 
 export type ApiTokenCreateRequest = {
   name?: string;
+  ownerUserId?: string;
+  ownerUsername?: string;
+  permissionMode?: string;
+  approvedToolIds?: string[];
+  scopes?: string[];
+  expiresAt?: string;
   metadata?: Record<string, string>;
 };
 
 export type ApiTokenCreateResponse = {
   tokenInfo?: ApiTokenView;
   token?: string;
+};
+
+export type LocalUserView = {
+  id: string;
+  username?: string;
+  displayName?: string;
+  role?: string;
+  status?: string;
+  createdAt?: string;
+  disabledAt?: string;
+  lastPasswordChangedAt?: string;
+  metadata?: Record<string, string>;
+};
+
+export type LocalUserCreateRequest = {
+  username?: string;
+  password?: string;
+  displayName?: string;
+  role?: string;
+  metadata?: Record<string, string>;
+};
+
+export type AuthSetupView = {
+  initialized?: boolean;
+  userCount?: number;
+  ownerExists?: boolean;
+  supportedRoles?: string[];
+};
+
+export type LocalUserPasswordChangeRequest = {
+  password?: string;
+};
+
+export type LocalUserPermissionUpdateRequest = {
+  permissionMode?: string;
+  approvedToolIds?: string[];
+};
+
+export type LocalUserLoginRequest = {
+  username?: string;
+  password?: string;
+};
+
+export type LocalUserSessionView = {
+  sessionId: string;
+  userId?: string;
+  username?: string;
+  displayName?: string;
+  role?: string;
+  status?: string;
+  tokenPrefix?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+};
+
+export type LocalUserLoginResponse = {
+  user?: LocalUserView;
+  session?: LocalUserSessionView;
+  sessionToken?: string;
+};
+
+export type LocalUserCurrentResponse = {
+  user?: LocalUserView;
+  session?: LocalUserSessionView;
 };
 
 export type DeviceView = {
@@ -384,13 +601,72 @@ export type DeviceView = {
   firstSeenAt?: string;
   lastSeenAt?: string;
   revokedAt?: string;
+  pairedAt?: string;
+  pairingCodeExpiresAt?: string;
+  deviceSecretPrefix?: string;
+  permissionMode?: string;
+  approvedToolIds?: string[];
+  boundUserId?: string;
+  boundUsername?: string;
   metadata?: Record<string, string>;
 };
 
 export type DeviceRegisterRequest = {
   name?: string;
   type?: string;
+  permissionMode?: string;
+  approvedToolIds?: string[];
   metadata?: Record<string, string>;
+};
+
+export type DevicePairingCreateRequest = {
+  name?: string;
+  type?: string;
+  ttlSeconds?: number;
+  permissionMode?: string;
+  approvedToolIds?: string[];
+  metadata?: Record<string, string>;
+};
+
+export type DevicePairingCodeResponse = {
+  device?: DeviceView;
+  code?: string;
+  expiresAt?: string;
+};
+
+export type DevicePairRequest = {
+  code?: string;
+  metadata?: Record<string, string>;
+};
+
+export type DevicePairResponse = {
+  device?: DeviceView;
+  deviceSecret?: string;
+};
+
+export type DeviceSecretRotateResponse = {
+  device?: DeviceView;
+  deviceSecret?: string;
+};
+
+export type DeviceUserBindRequest = {
+  userId?: string;
+  username?: string;
+};
+
+export type DevicePermissionUpdateRequest = {
+  permissionMode?: string;
+  approvedToolIds?: string[];
+};
+
+export type DeviceSecretVerifyRequest = {
+  deviceSecret?: string;
+};
+
+export type DeviceSecretVerifyResponse = {
+  deviceId?: string;
+  verified?: boolean;
+  status?: string;
 };
 
 export type FileChangeView = {
@@ -712,9 +988,22 @@ export type RuntimeConfigSnapshot = {
 };
 
 export type AuthConfigView = {
+  required?: boolean;
   apiTokenRequired?: boolean;
   protectedPathPatterns?: string[];
   excludedPathPatterns?: string[];
+  initialized?: boolean;
+  userCount?: number;
+  ownerExists?: boolean;
+  supportedRoles?: string[];
+  rolePolicies?: Record<string, AuthRolePolicyView>;
+};
+
+export type AuthRolePolicyView = {
+  enabled?: boolean;
+  permissionMode?: string;
+  approvalMode?: string;
+  approvedToolIds?: string[];
 };
 
 export type ApprovalPolicyView = {
@@ -752,6 +1041,34 @@ export type PolicySnapshotView = {
   resolutionOrder?: PolicyResolutionLayerView[];
   effectiveRules?: string[];
   pendingEnhancements?: string[];
+};
+
+export type PolicyResolveRequest = {
+  channelId?: string;
+  userId?: string;
+  metadata?: Record<string, string>;
+};
+
+export type PolicyResolveLayerView = {
+  order?: number;
+  source?: string;
+  scope?: string;
+  mode?: string;
+  approvedToolIds?: string[];
+  reason?: string;
+  effective?: boolean;
+};
+
+export type PolicyResolveView = {
+  channelId?: string;
+  userId?: string;
+  effectiveMode?: string;
+  source?: string;
+  scope?: string;
+  reason?: string;
+  approvedToolIds?: string[];
+  layers?: PolicyResolveLayerView[];
+  effectiveMetadata?: Record<string, string>;
 };
 
 export type LocalHealthItemView = {

@@ -2,7 +2,7 @@
 
 `springboot-claw-agent` 是 `clawagent` 的 Java Harness Agent 框架工程。目标是提供一套可独立运行、可嵌入业务系统、可审计、可恢复、可扩展的企业级 Agent Runtime。
 
-当前版本已完成 M1、M2 主线能力和 M3 的 MCP/Skill/toolkit 主链路：可以编译、启动独立 Spring Boot 服务，使用 SQLite3 保存会话、消息、任务、步骤、事件和本地记忆，长期记忆支持 SQLite FTS5 + JVector + RRF 混合检索，并通过 OpenAI 兼容接口接入真实大模型，同时提供 Web Console、管理台和 REST API。
+当前版本已完成 M1、M2 主线能力、M3 的 MCP/Skill/toolkit 主链路，以及面向本地行动 Agent 的计划模式和任务执行闭环：可以编译、启动独立 Spring Boot 服务，使用 SQLite3 保存会话、消息、任务、步骤、事件、计划草稿和本地记忆，长期记忆支持 SQLite FTS5 + JVector + RRF 混合检索，并通过 OpenAI 兼容接口接入真实大模型，同时提供 Web Console、管理台、桌面 App 静态入口和 REST API。
 
 ## 快速启动
 
@@ -45,6 +45,7 @@ BACKGROUND=true HEALTH_TIMEOUT_SECONDS=120 sh ./start-clawagent.sh
 默认访问：
 
 - Admin Console: `http://localhost:17891/admin/index.html`
+- Desktop App Web UI: `http://localhost:17891/app/index.html`
 - Web Console: `http://localhost:17891/console/index.html`
 - Health API: `http://localhost:17891/api/v1/health`
 
@@ -200,9 +201,11 @@ Invoke-WebRequest `
 
 - Web Console: `http://localhost:17891/console/index.html`
 - Admin Console: `http://localhost:17891/admin/index.html`
+- Desktop App Web UI: `http://localhost:17891/app/index.html`
 - Health API: `http://localhost:17891/api/v1/health`
 - Assistant API: `http://localhost:17891/api/v1/assistant?query=北京天气和计算2+3*4`
 - Session API: `http://localhost:17891/api/v1/sessions`
+- Plan API: `http://localhost:17891/api/v1/plans`
 - MCP Server API: `http://localhost:17891/api/v1/mcp/servers`
 
 默认数据目录：
@@ -222,7 +225,7 @@ M1 当前执行流程：
 
 ```text
 用户请求
-  -> REST API / Web Console
+  -> REST API / Web Console / Admin / App
   -> AgentRuntime 创建或恢复 AgentSession
   -> AgentRuntime 创建 AgentTask
   -> LlmAgentPlanner 调用真实模型生成 ToolCall JSON
@@ -233,6 +236,22 @@ M1 当前执行流程：
   -> 更新 AgentTask 为 COMPLETED / FAILED
   -> 返回 AgentResult
 ```
+
+通道入口额外增加了系统意图路由：
+
+```text
+IM/通道消息
+  -> ChannelRouter
+  -> PendingActionService 先处理“确认执行/取消执行”
+  -> IntentRoutingService 匹配 system-intents.yml
+  -> low 风险直接执行 handler
+  -> medium/high 风险创建 PendingAction 等待用户确认
+  -> 未命中系统意图时进入 AgentRuntime
+```
+
+内置系统意图定义在 `claw-agent-intent/src/main/resources/clawagent/intents/system-intents.yml`。当前覆盖 `/clear`、`/compact`、`/context`、`/status`、命令列表、计划确认、工作区查看、文档列表、附件文档总结/问答和知识库检索。`workspace.open`、`workspace.switch` 不作为默认 IM 意图开放，工作区切换仍走后台入口。
+
+统一确认服务 `PendingActionService` 当前承载三类动作：`INTENT_CONFIRMATION`、`TOOL_APPROVAL`、`PLAN_APPROVAL`。普通中风险操作回复 `确认执行` 即可，高风险操作需要回复完整确认文本。
 
 设计目标中的完整流程：
 
@@ -259,6 +278,7 @@ M1 当前执行流程：
 主要包含：
 
 - 请求、结果、会话、任务、步骤、事件等对象：`AgentRequest`、`AgentResult`、`AgentSession`、`AgentTask`、`AgentStep`、`AgentEvent`。
+- 计划模式对象：`PlanDraft`、`PlanItem`，用于在执行前保存可审查、可修订、可确认的任务计划。
 - 工具调用模型：`ToolCall`、`ToolResult`、`ToolDefinition`。
 - 任务状态和步骤类型：`TaskStatus`、`StepStatus`、`StepType`。
 
@@ -275,7 +295,7 @@ M1 当前执行流程：
 - 工具扩展点：`AgentTool`。
 - 模型扩展点：`ModelClient`、`EmbeddingClient`、`ChatMessage`、`ChatOptions`、`LlmCallTrace`。
 - 会话摘要扩展点：`SessionSummarizer`。
-- 持久化扩展点：`TaskStore`、`SessionStore`、`SessionMessageStore`、`AgentEventStore`。
+- 持久化扩展点：`TaskStore`、`SessionStore`、`SessionMessageStore`、`AgentEventStore`、`PlanStore`。
 
 业务方后续要替换模型、Planner、工具、存储实现，优先实现这里的 SPI。
 
@@ -293,10 +313,10 @@ Agent 执行链路模块。
 - Runtime 拦截器链：事件落库前、SSE 推送前、Runtime 日志写入前会按 `order` 顺序执行拦截器；事件落库后会执行后置回调。
 - 默认敏感数据脱敏拦截器：避免 API Key、Token、Password 等进入日志、事件表和前端流式事件。
 - Rule 模式兜底实现：`RuleBasedPlanner`、`ToolOutputResponseGenerator`、`SimpleSessionSummarizer`。
-- 内存版存储：`InMemoryTaskStore`、`InMemorySessionStore`、`InMemorySessionMessageStore`、`InMemoryAgentEventStore`。
+- 内存版存储：`InMemoryTaskStore`、`InMemorySessionStore`、`InMemorySessionMessageStore`、`InMemoryAgentEventStore`、`InMemoryPlanStore`。
 - 日志链路 MDC：`traceId`、`sessionId`、`taskId`、`userId`、`channelId`。
 
-当前同步执行；异步任务、checkpoint/resume、子 Agent 编排属于后续阶段。
+当前执行链路以单任务 ReAct/Tool Calling 为主；后台进程、checkpoint/resume、任务恢复和只读子 Agent 编排已在本地行动链路中逐步接入。子 Agent 目前支持单个派生、批量派发和并行提交，高危 execute 命令已有独立 worker、并发限流池、输出上限、超时强杀和可选 CPU 时间限制；`process.start` 也已支持通过 worker 隔离启动后台进程并返回 pid，后续继续补自动任务拆分策略和更强的 OS 级资源隔离。
 
 ### `claw-agent-toolkit`
 
@@ -371,10 +391,11 @@ SQLite3 持久化模块，当前默认单机存储实现。
 主要包含：
 
 - `SqliteTaskStore`。
-- 会话、消息、任务、步骤、事件表初始化。
-- `TaskStore`、`SessionStore`、`SessionMessageStore`、`AgentEventStore` 的 SQLite 实现。
+- 会话、消息、任务、步骤、事件、计划表初始化。
+- `TaskStore`、`SessionStore`、`SessionMessageStore`、`AgentEventStore`、`PlanStore` 的 SQLite 实现。
+- `LocalUserStore`、`LocalUserSessionStore`、`ApiTokenStore`、`DeviceStore`、`ChannelUserBindingStore` 的 SQLite 实现，覆盖本地用户、登录会话、API Token、设备配对和 Channel 外部用户绑定。
 
-默认数据文件是 `.clawagent/clawagent.db`。MySQL、PostgreSQL 是后续扩展模块。
+默认数据文件是 `.clawagent/clawagent.db`。计划模式数据写入 `agent_plan` 表。MySQL、PostgreSQL 是后续扩展模块。
 
 ### `claw-agent-memory`
 
@@ -422,7 +443,7 @@ SQLite3 持久化模块，当前默认单机存储实现。
 - MCP resources/prompts 描述：`McpResourceDescriptor`、`McpPromptDescriptor`。
 - MCP Server 文件保存：默认写入 `clawagent.mcp.path` 的第一个文件，例如 `.clawagent/mcp/mcp.json`；同名 Server 覆盖，不存在则追加。
 
-当前已支持 STDIO MCP 的连接、`tools/list`、`tools/call`；也支持 HTTP/streamableHttp 的基础 JSON-RPC 调用和老版 SSE endpoint/message 长连接。resources/prompts 已提供刷新、查询、resource read 和 prompt get 接口。
+当前已支持 STDIO MCP 的连接、`tools/list`、`tools/call`；也支持 HTTP/streamableHttp 的基础 JSON-RPC 调用和老版 SSE endpoint/message 长连接。resources/prompts 已提供刷新、查询、resource read 和 prompt get 接口。MCP 配置里的 `${ENV_NAME}` 会优先读取当前 server 的 `env`，再读取进程环境变量；`autoApprove` 支持 `*`、原始工具名、完整 `mcp.<serverId>.<toolName>` 和 `mcp.<serverId>.*` 前缀通配。
 
 ### `claw-agent-skill`
 
@@ -494,7 +515,9 @@ React + Vite 正式管理台源码模块。
 当前管理台采用运维控制台布局，不复用原生 Web Console。已提供：
 
 - 总览指标：会话、工具、MCP、Skill、Token、异常任务。
-- 会话管理：历史会话列表，任务、消息、日志、Token 详情。
+- 会话管理：历史会话列表，任务、消息、日志、Todo、Token 详情。
+- 计划模式：聊天输入框支持计划模式开关和 `/plan` 斜杠指令；需求会先生成计划卡片并自动进入执行队列，阻塞后可修订、继续或取消。
+- 文件审查：任务产生的文件变更会在会话中展示，支持 diff 查看、右键操作和回滚入口。
 - 工具能力：工具 ID、风险等级、描述。
 - MCP Server：传输方式、连接状态、Endpoint/Command、工具数。
 - Skills：Skill ID、启用状态、工具数、描述，并支持启用/禁用已安装 Skill。
@@ -524,6 +547,31 @@ http://localhost:17891/admin/index.html
 
 原生聊天调试页面 `/console/index.html` 保留，用于快速测试任务流式交互。
 
+### `claw-agent-app`
+
+本地桌面端外壳和桌面 App Web UI 模块。
+
+主要包含：
+
+- Electron 桌面端外壳和 `ui/` React + Vite 前端源码。
+- App UI 构建配置：`claw-agent-app/ui/vite.config.ts`。
+- 构建产物输出：`claw-agent-server/src/main/resources/static/app`，由 Spring Boot 直接通过 `/app/index.html` 访问。
+- 与 Admin 聊天主流程保持一致：会话恢复、工具调用展示、文件审查、计划模式开关、`/plan` 指令、计划卡片修订和执行。
+
+本地构建 App Web UI：
+
+```powershell
+cd D:\workspace\codex\springboot-claw-agent\claw-agent-app\ui
+npm install
+npm run build
+```
+
+构建后访问：
+
+```text
+http://localhost:17891/app/index.html
+```
+
 ### `claw-agent-server`
 
 独立运行版 Spring Boot 服务。
@@ -535,6 +583,7 @@ http://localhost:17891/admin/index.html
   - health
   - task
   - session
+  - plan
   - message
   - event
   - tool
@@ -542,6 +591,7 @@ http://localhost:17891/admin/index.html
   - Skill
 - 静态 Web Console：`/console/index.html`。
 - React Admin Console 构建产物：`/admin/index.html`。
+- Desktop App Web UI 构建产物：`/app/index.html`。
 - 默认 `application.yml`。
 
 适合像 OpenClaw 一样本地直接启动和配置。
@@ -661,6 +711,192 @@ Invoke-RestMethod `
 
 摘要会写回 `AgentSession.summary`。模型模式下使用 `LlmSessionSummarizer`，`rule` 模式下使用 `SimpleSessionSummarizer`。
 
+## Plan API
+
+Plan 模式用于“先计划、再执行”：用户需求先生成可审查的 `PlanDraft`，前端允许用户修订、确认或取消；只有确认后的计划才能进入 `/run/stream`，执行时会转换为现有 Todo，并继续复用 Runtime、工具审批、事件、文件审查和任务恢复链路。计划修订会写入 `plan.updated` 事件，记录原版本、新版本、用户反馈摘要、步骤数量变化以及新增/删除/变更的步骤，便于管理台和审计页展示计划差异。
+
+创建计划：
+
+```powershell
+$body = @{
+  sessionId = 'demo-session'
+  input = '为当前项目新增一个健康检查接口，并补充验证'
+  mode = 'plan'
+  templateId = 'local-dev'
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri 'http://localhost:17891/api/v1/plans' `
+  -Method Post `
+  -Body $body `
+  -ContentType 'application/json; charset=utf-8'
+```
+
+查询会话计划：
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/plans?sessionId=demo-session&limit=20'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/plans/{planId}'
+```
+
+查询内置计划模板和最近一次修订差异：
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/plans/templates'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/plans/{planId}/revision-summary'
+```
+
+根据用户反馈修订计划：
+
+```powershell
+$body = @{ feedback = '先只改后端接口，不修改前端页面' } | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri 'http://localhost:17891/api/v1/plans/{planId}/revise' `
+  -Method Post `
+  -Body $body `
+  -ContentType 'application/json; charset=utf-8'
+```
+
+手动审批旧版草稿计划或取消计划：
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/plans/{planId}/approve' -Method Post
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/plans/{planId}/cancel' -Method Post
+```
+
+执行计划：
+
+```powershell
+$body = @{
+  channelId = 'webui'
+  userId = 'demo-user'
+  metadata = @{
+    workspaceId = 'default'
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-WebRequest `
+  -Uri 'http://localhost:17891/api/v1/plans/{planId}/run/stream' `
+  -Method Post `
+  -Body $body `
+  -ContentType 'application/json; charset=utf-8'
+```
+
+Admin 和 App UI 已接入计划模式开关和 `/plan` 指令。输入 `/plan 你的需求` 会直接创建计划；打开计划模式后，普通发送也会先生成计划草稿。计划模式支持内置模板选择，当前内置 `local-dev`、`review-only`、`bugfix`、`integration`。模板只影响计划生成提示词，不绕过工具审批、权限策略或 Todo 执行链路。计划修订后，Admin/App 计划卡片会展示版本差异摘要；计划执行阻塞时会展示阻塞原因，用户可以修订计划后再继续。
+
+## Agent Orchestration API
+
+多 Agent 编排当前定位为父任务派生只读子 Agent。子任务会继承项目、知识库和附件上下文，但强制 `toolPermissionMode=ask` 并清空父任务高危批准，避免父任务授权横向扩散。
+
+子任务 metadata 会同时记录请求隔离和实际隔离：`agent.isolation.requested`、`agent.isolation.effective`、`agent.isolation.profile`、`agent.isolation.enforcement`、`agent.worker.requested`、`agent.worker.effective`、`agent.worker.configured`、`agent.worker.eligible` 和 `agent.worker.mode`。调用方可以通过 `workerMode=process` 表达独立 worker 意图；未配置 worker 时仍降级为 `read-only` + `tool-guard`。`clawagent.agents.worker.enabled=true` 且提供 `command` 后，子任务会通过 external-process dispatcher 启动外部 worker 进程，stdin 输入任务 JSON，stdout 输出 `CLAW_SUBAGENT_WORKER_RESULT_V1` marker 后跟结果 JSON。
+
+`toolkit.tools.execute.env.WORKER_*` 只控制高危命令执行隔离；`clawagent.agents.worker.*` 才是子 Agent Runtime 进程隔离配置，两者不能混用。
+
+外部子 Agent worker 返回格式：
+
+```text
+CLAW_SUBAGENT_WORKER_RESULT_V1
+{"answer":"执行总结","status":"COMPLETED","metadata":{"worker.id":"local-1"}}
+```
+
+`claw-agent-worker` 同时提供内置适配入口 `com.github.clawagent.worker.ClawAgentSubAgentWorkerMain`。它会读取 server 下发的任务 JSON，把内容通过 stdin 转发给下游 Runtime 命令；如果下游命令已经输出 `CLAW_SUBAGENT_WORKER_RESULT_V1`，则直接透传，否则会把 stdout/stderr 包装成标准结果。
+
+示例配置：
+
+```yaml
+clawagent:
+  agents:
+    worker:
+      enabled: true
+      mode: external-process
+      command: "java"
+      args:
+        - "-cp"
+        - "claw-agent-worker/target/claw-agent-worker-1.0.0-SNAPSHOT.jar"
+        - "com.github.clawagent.worker.ClawAgentSubAgentWorkerMain"
+        - "--timeoutMs"
+        - "300000"
+        - "--maxOutputBytes"
+        - "1048576"
+        - "--"
+        - "your-sub-agent-runtime-command"
+```
+
+创建单个只读子 Agent：
+
+```powershell
+$body = @{
+  input = '只审查 controller 层，不修改文件'
+  role = 'reviewer'
+  workerMode = 'none'
+  metadata = @{
+    scope = 'controller'
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri 'http://localhost:17891/api/v1/agents/{parentTaskId}/subtasks' `
+  -Method Post `
+  -Body $body `
+  -ContentType 'application/json; charset=utf-8'
+```
+
+批量派发子 Agent：
+
+```powershell
+$body = @{
+  parallel = $true
+  maxParallelism = 4
+  strategy = 'fanout'
+  metadata = @{
+    batch = 'review'
+  }
+  tasks = @(
+    @{ input = '审查 controller 层'; role = 'reviewer'; metadata = @{ scope = 'controller' } },
+    @{ input = '审查 service 层'; role = 'reviewer'; metadata = @{ scope = 'service' } }
+  )
+} | ConvertTo-Json -Depth 8
+
+Invoke-RestMethod `
+  -Uri 'http://localhost:17891/api/v1/agents/{parentTaskId}/subtasks/batch' `
+  -Method Post `
+  -Body $body `
+  -ContentType 'application/json; charset=utf-8'
+```
+
+从计划派发子 Agent：
+
+```powershell
+$body = @{
+  planId = '{planId}'
+  parallel = $true
+  maxParallelism = 4
+  strategy = 'plan-items'
+  includeHighRisk = $false
+  metadata = @{
+    reason = 'review-before-run'
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri 'http://localhost:17891/api/v1/agents/{parentTaskId}/subtasks/from-plan' `
+  -Method Post `
+  -Body $body `
+  -ContentType 'application/json; charset=utf-8'
+```
+
+`parallel=true` 时后端默认最多同时派发 4 个子任务，可通过 `maxParallelism` 调整；服务端会把实际并发数裁剪到任务数和硬上限 8，并在响应和审计事件里返回最终 `maxParallelism`。`from-plan` 会把 `PlanDraft.items` 转成只读子 Agent：每个子任务 metadata 会带上 `plan.id`、`plan.version`、`plan.itemId`、`plan.itemOrder` 和步骤风险信息。`includeHighRisk=false` 时会跳过 high 风险或 `requiresApproval=true` 的计划项，适合先做并行审查。
+
+当子 Agent 请求 `workerMode=process` 且 `clawagent.agents.worker.*` 已配置 external-process worker 时，服务端会通过独立进程协议调度子 Agent Runtime。成功或失败都会把 `agent.worker.pid/exitCode/elapsedMs/timeoutMs/maxOutputBytes/stdoutBytes/stderrBytes/stdoutTruncated/stderrTruncated/timedOut/terminated` 等字段写回子任务 metadata，便于管理台、审计和排障确认实际隔离进程与强终止行为。
+
+查询子任务和编排图：
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/agents/{parentTaskId}/subtasks?limit=100'
+Invoke-RestMethod -Uri 'http://localhost:17891/api/v1/agents/{rootTaskId}/graph?depth=3'
+```
+
 ## MCP API
 
 M3 已加入通用 MCP 接入层。它不是 RAGFlow 专用能力，任何 MCP Server 都可以通过统一配置注册；当前已支持 STDIO MCP 的启动、握手、`tools/list`、`tools/call`，并把 MCP tools 映射为 `AgentTool`。HTTP/streamableHttp 已支持基础 JSON-RPC 调用；SSE 已支持老版 endpoint/message 长连接。
@@ -692,7 +928,7 @@ Web Console 支持三步操作：
 - `type` / `transportType`：传输类型，支持 `stdio`、`sse`、`streamableHttp`。
 - `command`、`args`、`cwd`：`stdio` 子进程启动配置。
 - `url`：`sse` / `streamableHttp` 远程服务地址。
-- `env`、`headers`、`timeout`、`disabled`、`autoApprove`：环境变量、请求头、超时、禁用状态和自动批准规则。
+- `env`、`headers`、`timeout`、`disabled`、`autoApprove`：环境变量、请求头、超时、禁用状态和自动批准规则。`headers` 和 URL 中的 `${ENV_NAME}` 会优先从当前 MCP Server 的 `env` 读取，再读取 Java 进程环境变量；Windows 系统环境变量如果是在服务启动后才新增，需要重启服务进程后才会进入 `System.getenv()`。
 
 导入标准 `mcpServers` JSON：
 
@@ -972,6 +1208,7 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成独立 server，默认端口 `17891`。
 - 已完成最小 Web Console。
 - 已新增 React + Vite 管理台源码模块 `claw-agent-admin`，构建后访问 `/admin/index.html`。
+- 已新增桌面端 App Web UI 模块 `claw-agent-app/ui`，构建后访问 `/app/index.html`，并可被桌面外壳复用。
 - 已完成内置工具：天气、时间、WebFetch、WebSearch、Filesystem。
 - 已完成 DeepSeek / OpenAI 兼容真实模型调用。
 - 已完成 Spring AI ChatClient 可选适配，默认不强制绑定 Spring AI 依赖。
@@ -983,13 +1220,14 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 已完成会话消息表和会话消息查询 API。
 - 已完成会话摘要生成 API。
 - 已完成会话/任务 Token usage 聚合查询 API。
+- 已完成 Plan 计划模式：`PlanDraft/PlanItem/PlanStore`、SQLite `agent_plan` 持久化、计划生成、修订、确认、取消、执行 SSE、内置计划模板、修订差异摘要 API，以及 Admin/App 计划模式 UI。
 - 已完成通用 MCP 注册表、STDIO 连接、HTTP/streamableHttp 基础连接、SSE endpoint/message 连接、MCP tools/resources/prompts 管理、resource read、prompt get、MCP Server 管理 API 和本地配置保存。
 - 已完成 Skill 本地安装、启用、禁用、列表查询、本地 manifest 保存、工具自动注册和 document/http/script/java 执行器。
 - 已完成工具执行前置拦截点 `ToolExecutionGuard`，并提供默认高危工具审批校验。
 - 已完成 Runtime 拦截器 SPI `AgentRuntimeInterceptor`，默认提供敏感数据脱敏拦截器，可通过 Spring Bean 扩展。
 - 已完成 EmbeddingClient SPI 和 OpenAI 兼容 Embeddings 客户端。
 - 已完成内置 filesystem 工具：读取文本、列目录、搜索文件、文件信息、受控写入。
-- 已新增 React + Vite 管理台入口 `/admin/index.html`，原 `/console/index.html` 保留。
+- 已新增 React + Vite 管理台入口 `/admin/index.html` 和 App Web UI 入口 `/app/index.html`，原 `/console/index.html` 保留。
 - 已完成智能体定时任务与自动化基础能力：创建、编辑、启停、固定间隔、Cron、单次执行、立即运行、运行历史、失败重试、退避策略、重试耗尽后暂停、耗时/Token/工具链路聚合和管理台页面。
 
 ## 未完成能力
@@ -997,12 +1235,14 @@ Java 插件类需要实现 `com.github.clawagent.skill.SkillJavaPlugin`。简单
 - 智能体定时任务增强：后续只补更细的统计报表和趋势分析。
 - 记忆质量治理需要继续增强：当前已支持长期记忆本地入库、FTS5/JVector/RRF 检索、命中记录、候选审核和管理台页面；去重、冲突处理、过期策略仍需增强。
 - React + Vite 正式管理台持续优化：已覆盖内置能力/权限、Token 成本、审计、自动化、文件审查、进程、记忆和本地配置；后台新增的业务能力仍必须同步补充管理台页面；原 `/console/index.html` 暂时保留。
-- Shell/cmd/PowerShell 工具：第一阶段查询类命令不审批，删除/覆盖等破坏性操作必须用户确认；`claw-agent-worker` 隔离执行后续再做。
+- Shell/cmd/PowerShell 工具：查询类命令不审批，删除、覆盖、格式化、脚本执行、依赖安装等破坏性操作必须用户确认；`claw-agent-worker` 已提供高危命令独立 JVM 隔离执行、主服务侧 worker 并发限流、超时强杀、JVM heap 限制、输出字节上限、可选进程树 CPU 时间限制和结构化结果回传，`process.start` 可通过 worker 隔离启动后台进程并由主服务继续托管 pid，后续继续补更强的 OS 级内存/沙箱挂载限制。
+- `claw-agent-worker` 默认承接 high risk execute 命令和 `builtin.process.start` 后台启动。开发环境先执行 `mvn -pl claw-agent-worker -DskipTests package` 生成 worker jar，再通过 `clawagent.toolkit.tools.execute.env.WORKER_ENABLED/WORKER_JAR/WORKER_JAVA/WORKER_JVM_MAX_HEAP/WORKER_MAX_OUTPUT_BYTES/WORKER_MAX_CPU_TIME_MS/WORKER_MAX_CONCURRENT/WORKER_ACQUIRE_TIMEOUT_MS/WORKER_TERMINATION_GRACE_MS` 控制是否启用、jar 位置、Java 可执行文件、worker 堆大小、输出上限、CPU 时间上限、并发槽位、槽位等待超时和超时后强终止宽限。这里的 `WORKER_*` 是命令隔离 worker；`clawagent.agents.worker.*` 是子 Agent Runtime 进程配置，两者可复用同一个 jar，但入口类和协议不同。`/api/v1/config/local/health` 会检查 worker jar 解析结果，管理台本地配置页和桌面 App 设置页都能直接看到 worker jar 是否存在、实际解析路径和已检查路径。
 - Skill 目录风格和加载逻辑调整：每个 Skill 独立保存到 `.clawagent/skills/<skillId>/`，完整加载 `manifest.json`、`SKILL.md`、`scripts/`、`assets/`、`references/`、`lib/` 等资源。
-- MCP 健壮性继续增强：当前已有 timeout、启动隔离和运行态按需重连；更复杂的断线检测和会话级关闭策略后续补充。
-- MCP `autoApprove` 已接入工具风险等级，通道级审批策略仍在 M4 扩展。
-- Prompt Injection Defense 和本地审批主链路已落地；限流、企业级 PermissionPolicy 和 Channel/User/Agent 维度权限矩阵后续补充。
-- 通道 Channel、Auth、设备配对等治理项。
+- MCP 健壮性继续增强：当前已有 timeout、启动隔离、运行态按需重连、HTTP headers/env 占位解析和 `autoApprove` 通配规则；更复杂的断线检测和会话级关闭策略后续补充。
+- MCP `autoApprove` 已接入工具风险等级，支持 `*`、工具名、完整 toolId 和前缀通配；通道级审批策略仍在 M4 扩展。
+- Prompt Injection Defense、本地审批主链路和轻量级 Channel/User/Device/Agent 策略合并已落地；本地用户角色可通过 `clawagent.auth.role-policies` 配置默认审批模式和工具白名单，Agent 角色可通过 `clawagent.agents.policies` 配置子任务工具边界；`clawagent.rate-limit` 已提供单机固定窗口 HTTP 入口限流，按 Token/User/Device/IP 分桶保护 API 和 Channel 回调；企业级 PermissionPolicy 和组织/用户组矩阵后续补充。
+- Plan 模式增强：当前已完成计划确认层、执行转换、内置模板库、后端修订差异摘要、Admin/App 前端差异展示和阻塞状态提示。后续只保留更细的自动重规划策略优化，不另造第二套任务执行引擎。
+- 通道 Channel 已有基础媒体缓存、媒体 URL/大小/超时限制、钉钉 downloadCode 专用下载、飞书/钉钉卡片与富文本统一 Markdown 富渲染摘要、飞书/钉钉/DDIO 核心标准事件字段、飞书/钉钉 HTTP/Stream/Bot 标准事件 metadata、飞书/钉钉 Stream attachments metadata、附件存在标记、媒体/富文本数量、下载成功/失败数量、类型/来源/文件名/平台 key/渲染状态等索引字段和 DDIO 媒体附件状态 metadata；事件语义基础映射已通过 `eventSemantic/eventAction` 接入，平台原生卡片全量还原按当前产品节奏暂缓；本地用户、首个 owner 初始化、登录会话、会话列表/撤销、API Token owner/scope/基础接口拦截/权限范围、可配置登录拦截、Channel 外部用户绑定本地用户、设备配对、设备密钥轮换、设备用户绑定和 Token/User/Channel/Device/Agent 权限强制合并基础已接入；企业权限矩阵编辑器和权限策略审计解释增强暂缓；本地用户角色策略模板已支持 `clawagent.auth.role-policies`，用户自身 metadata 优先于角色模板；管理台 Channel 页已提供外部用户绑定列表、绑定和解绑入口；admin/app 前端会把本地 session 带入普通任务、恢复任务和 Plan 执行，并使用当前登录用户作为任务 `userId/localUserId`，`claw-agent-app` 顶部已补本地用户登录/退出入口，设置页已补设备配对、密钥校验和心跳入口，创建会话/任务/Plan 会携带 `deviceId` 进入设备级权限合并；管理台创建 API Token 时会优先绑定当前登录用户；本地 session 已补最小角色门禁：`owner/admin` 可管理 Auth/配置/通道/能力边界，`operator/user` 可执行任务链路，`viewer` 只读，`me/logout` 对所有登录用户开放。
 - MySQL / PostgreSQL 持久化实现。
 - 企业级 VectorStore Provider 实现。
 - 分布式部署和 Redis 同步。

@@ -55,7 +55,8 @@ public class DefaultToolExecutionGuard implements ToolExecutionGuard {
     }
 
     private boolean isReadOnlyIsolatedAgent(AgentTask task) {
-        String isolation = task.metadata().get("agent.isolation");
+        String isolation = firstPresent(task.metadata().get("agent.isolation.effective"),
+                task.metadata().get("agent.isolation"));
         return "read-only".equalsIgnoreCase(isolation);
     }
 

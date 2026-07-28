@@ -23,11 +23,13 @@ public class ClawAgentProperties {
     private final Knowledge knowledge = new Knowledge();
     private final Attachments attachments = new Attachments();
     private final Automation automation = new Automation();
+    private final Intent intent = new Intent();
     private final Channels channels = new Channels();
     private final Runtime runtime = new Runtime();
     private final Local local = new Local();
     private final Cost cost = new Cost();
     private final Model model = new Model();
+    private final Agents agents = new Agents();
     private final Map<String, ModelConfig> models = new LinkedHashMap<>();
 
     public boolean isEnabled() {
@@ -78,6 +80,10 @@ public class ClawAgentProperties {
         return automation;
     }
 
+    public Intent getIntent() {
+        return intent;
+    }
+
     public Channels getChannels() {
         return channels;
     }
@@ -96,6 +102,10 @@ public class ClawAgentProperties {
 
     public Model getModel() {
         return model;
+    }
+
+    public Agents getAgents() {
+        return agents;
     }
 
     public Map<String, ModelConfig> getModels() {
@@ -264,6 +274,16 @@ public class ClawAgentProperties {
         public void setDefaultChannelId(String defaultChannelId) { this.defaultChannelId = defaultChannelId; }
         public String getDefaultUserId() { return defaultUserId; }
         public void setDefaultUserId(String defaultUserId) { this.defaultUserId = defaultUserId; }
+    }
+
+    public static class Intent {
+        private boolean enabled = true;
+        private double threshold = 0.78;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public double getThreshold() { return threshold; }
+        public void setThreshold(double threshold) { this.threshold = threshold; }
     }
 
     public static class Channels {
@@ -452,6 +472,80 @@ public class ClawAgentProperties {
         public int getMaxReactRounds() { return maxReactRounds; }
         public void setMaxReactRounds(int maxReactRounds) { this.maxReactRounds = maxReactRounds; }
         public Sanitization getSanitization() { return sanitization; }
+    }
+
+    public static class Agents {
+        /** Agent 角色到权限策略的映射；调度层只写 agent.role，策略模板由服务端统一解析。 */
+        private Map<String, AgentPolicy> policies = new LinkedHashMap<>();
+        private final SubAgentWorker worker = new SubAgentWorker();
+
+        public Map<String, AgentPolicy> getPolicies() { return policies; }
+        public void setPolicies(Map<String, AgentPolicy> policies) {
+            this.policies = policies == null ? new LinkedHashMap<>() : new LinkedHashMap<>(policies);
+        }
+        public SubAgentWorker getWorker() { return worker; }
+    }
+
+    public static class AgentPolicy {
+        /** 是否启用该 Agent 角色策略；禁用后仅保留配置，不参与任务权限合并。 */
+        private boolean enabled = true;
+        /** Agent 角色的工具权限模式，语义和本地 permission-mode 保持一致。 */
+        private String permissionMode = "";
+        /** 兼容旧命名或页面命名；为空时优先使用 permissionMode。 */
+        private String approvalMode = "";
+        /** Agent 角色允许的工具白名单；多层策略同时存在时会取交集。 */
+        private List<String> approvedToolIds = new ArrayList<>();
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getPermissionMode() { return permissionMode; }
+        public void setPermissionMode(String permissionMode) {
+            this.permissionMode = permissionMode == null ? "" : permissionMode.trim();
+        }
+        public String getApprovalMode() { return approvalMode; }
+        public void setApprovalMode(String approvalMode) {
+            this.approvalMode = approvalMode == null ? "" : approvalMode.trim();
+        }
+        public List<String> getApprovedToolIds() { return approvedToolIds; }
+        public void setApprovedToolIds(List<String> approvedToolIds) {
+            this.approvedToolIds = approvedToolIds == null ? new ArrayList<>() : new ArrayList<>(approvedToolIds);
+        }
+    }
+
+    public static class SubAgentWorker {
+        /** 是否允许子 Agent 请求独立 worker。默认关闭，避免误以为已经进程隔离。 */
+        private boolean enabled = false;
+        /** 子 Agent worker 目标模式；当前只接受 external-process/process 作为未来进程入口。 */
+        private String mode = "external-process";
+        /** 外部 worker 启动命令。为空时仅记录请求并降级，不会声明已具备进程调度能力。 */
+        private String command = "";
+        /** 外部 worker 启动参数；推荐把可执行文件放 command，参数放 args，避免 Windows 路径空格解析问题。 */
+        private List<String> args = new ArrayList<>();
+        /** 子 Agent worker 最大并发，用于后续独立进程调度器限流。 */
+        private int maxConcurrent = 2;
+        /** 获取 worker 槽位的等待时间，避免子 Agent 派发无界阻塞。 */
+        private long acquireTimeoutMs = 5000;
+        /** 单个子 Agent worker 进程最大运行时间，超时后会强杀进程树。 */
+        private long timeoutMs = 300000;
+        /** worker stdout/stderr 单流最大读取字节数，超出后截断但继续 drain，避免管道写满卡死。 */
+        private int maxOutputBytes = 1024 * 1024;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getMode() { return mode; }
+        public void setMode(String mode) { this.mode = mode == null || mode.isBlank() ? "external-process" : mode.trim(); }
+        public String getCommand() { return command; }
+        public void setCommand(String command) { this.command = command == null ? "" : command.trim(); }
+        public List<String> getArgs() { return args; }
+        public void setArgs(List<String> args) { this.args = args == null ? new ArrayList<>() : new ArrayList<>(args); }
+        public int getMaxConcurrent() { return maxConcurrent; }
+        public void setMaxConcurrent(int maxConcurrent) { this.maxConcurrent = maxConcurrent <= 0 ? 1 : maxConcurrent; }
+        public long getAcquireTimeoutMs() { return acquireTimeoutMs; }
+        public void setAcquireTimeoutMs(long acquireTimeoutMs) { this.acquireTimeoutMs = acquireTimeoutMs <= 0 ? 5000 : acquireTimeoutMs; }
+        public long getTimeoutMs() { return timeoutMs; }
+        public void setTimeoutMs(long timeoutMs) { this.timeoutMs = timeoutMs <= 0 ? 300000 : timeoutMs; }
+        public int getMaxOutputBytes() { return maxOutputBytes; }
+        public void setMaxOutputBytes(int maxOutputBytes) { this.maxOutputBytes = maxOutputBytes <= 0 ? 1024 * 1024 : maxOutputBytes; }
     }
 
     public static class Sanitization {

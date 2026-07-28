@@ -208,7 +208,7 @@ public class FileMcpRegistry implements McpRegistry {
         }
     }
 
-    private boolean isAutoApproved(McpToolDescriptor descriptor, List<String> autoApprove) {
+    static boolean isAutoApproved(McpToolDescriptor descriptor, List<String> autoApprove) {
         if (autoApprove == null || autoApprove.isEmpty()) {
             return false;
         }
@@ -219,14 +219,24 @@ public class FileMcpRegistry implements McpRegistry {
             if (normalized.isBlank()) {
                 continue;
             }
-            // 支持标准 MCP toolName、ClawAgent toolId，以及 * 通配整个 server。
+            // 支持标准 MCP toolName、ClawAgent toolId，以及 * / 前缀* 这类常见通配规则。
             if ("*".equals(normalized)
                     || normalized.equals(toolName)
-                    || normalized.equals(agentToolId)) {
+                    || normalized.equals(agentToolId)
+                    || wildcardMatches(normalized, toolName)
+                    || wildcardMatches(normalized, agentToolId)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean wildcardMatches(String rule, String value) {
+        if (rule == null || value == null || !rule.endsWith("*")) {
+            return false;
+        }
+        String prefix = rule.substring(0, rule.length() - 1);
+        return !prefix.isBlank() && value.startsWith(prefix);
     }
 
     private void safeRefreshResources(String serverId) {

@@ -32,10 +32,12 @@ public class ExecuteCommandTool implements AgentTool {
     private final ExecuteToolkitProperties properties;
     private final ExecuteCommandRiskClassifier riskClassifier = new ExecuteCommandRiskClassifier();
     private final ProjectWorkingDirectoryResolver cwdResolver;
+    private final WorkerCommandExecutor workerExecutor;
 
     public ExecuteCommandTool(ExecuteToolkitProperties properties) {
         this.properties = properties == null ? new ExecuteToolkitProperties() : properties;
         this.cwdResolver = new ProjectWorkingDirectoryResolver(this.properties);
+        this.workerExecutor = new WorkerCommandExecutor(this.properties);
     }
 
     @Override
@@ -66,7 +68,16 @@ public class ExecuteCommandTool implements AgentTool {
                     invocation.args(),
                     properties.getSensitivePathPatterns());
             Path cwd = resolveCwd(call.arguments().get("cwd"), invocation, context);
-            long timeoutMs = longArg(call, "timeoutMs", properties.getTimeoutMs());
+            TimeoutPolicy timeout = timeoutPolicy(longArg(call, "timeoutMs", properties.getTimeoutMs()));
+            if (workerExecutor.shouldUseWorker(assessment)) {
+                WorkerCommandExecutor.WorkerExecutionResult result = workerExecutor.execute(invocation, cwd, timeout.effectiveMs());
+                return ToolResult.success(format(invocation.command(), invocation.args(), cwd, assessment,
+                        result.exitCode(), result.stdout(), result.stderr(), result.elapsedMs(), true, result.timedOut(),
+                        result.stdoutTruncated(), result.stderrTruncated(), result.resourceLimited(),
+                        result.resourceLimitReason(), result.cpuTimeMs(), result.workerPoolWaitMs(),
+                        result.memoryBytes(), result.workerTerminationGraceMs(), result.workerEnvBlockedCount(),
+                        result.workerSandboxPath(), result.workerSandboxKept(), timeout));
+            }
 
             CommandLine commandLine = new CommandLine(invocation.executable());
             for (String arg : invocation.args()) {
@@ -78,13 +89,14 @@ public class ExecuteCommandTool implements AgentTool {
             DefaultExecutor executor = new DefaultExecutor();
             executor.setWorkingDirectory(cwd.toFile());
             executor.setStreamHandler(new PumpStreamHandler(stdout, stderr));
-            executor.setWatchdog(new ExecuteWatchdog(timeoutMs));
+            executor.setWatchdog(new ExecuteWatchdog(timeout.effectiveMs()));
             executor.setExitValues(null);
 
             long started = System.nanoTime();
             int exitCode = execute(executor, commandLine);
             long elapsedMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-            return ToolResult.success(format(invocation.command(), invocation.args(), cwd, assessment, exitCode, stdout, stderr, elapsedMs));
+            return ToolResult.success(format(invocation.command(), invocation.args(), cwd, assessment,
+                    exitCode, stdout, stderr, elapsedMs, timeout));
         } catch (Exception e) {
             return ToolResult.error(e.getMessage());
         }
@@ -138,14 +150,62 @@ public class ExecuteCommandTool implements AgentTool {
 
     private String format(String command, List<String> args, Path cwd, CommandRiskAssessment assessment,
                           int exitCode, ByteArrayOutputStream stdout, ByteArrayOutputStream stderr, long elapsedMs) {
-        String out = truncate(CommandOutputDecoder.decode(stdout.toByteArray(), "stdout"));
-        String err = truncate(CommandOutputDecoder.decode(stderr.toByteArray(), "stderr"));
+        return format(command, args, cwd, assessment, exitCode, stdout, stderr, elapsedMs,
+                new TimeoutPolicy(properties.getTimeoutMs(), properties.getTimeoutMs(), false));
+    }
+
+    private String format(String command, List<String> args, Path cwd, CommandRiskAssessment assessment,
+                          int exitCode, ByteArrayOutputStream stdout, ByteArrayOutputStream stderr, long elapsedMs,
+                          TimeoutPolicy timeout) {
+        return format(command, args, cwd, assessment, exitCode,
+                CommandOutputDecoder.decode(stdout.toByteArray(), "stdout"),
+                CommandOutputDecoder.decode(stderr.toByteArray(), "stderr"),
+                elapsedMs, false, false, false, false, false, "", 0, 0, 0, 0, 0,
+                "", false, timeout);
+    }
+
+    private String format(String command, List<String> args, Path cwd, CommandRiskAssessment assessment,
+                          int exitCode, String stdout, String stderr, long elapsedMs, boolean workerIsolated,
+                          boolean timedOut, boolean stdoutTruncated, boolean stderrTruncated,
+                          boolean workerResourceLimited, String workerResourceLimitReason, long workerCpuTimeMs,
+                          long workerPoolWaitMs, long workerTerminationGraceMs) {
+        return format(command, args, cwd, assessment, exitCode, stdout, stderr, elapsedMs, workerIsolated,
+                timedOut, stdoutTruncated, stderrTruncated, workerResourceLimited, workerResourceLimitReason,
+                workerCpuTimeMs, workerPoolWaitMs, 0, workerTerminationGraceMs, 0,
+                "", false, new TimeoutPolicy(properties.getTimeoutMs(), properties.getTimeoutMs(), false));
+    }
+
+    private String format(String command, List<String> args, Path cwd, CommandRiskAssessment assessment,
+                          int exitCode, String stdout, String stderr, long elapsedMs, boolean workerIsolated,
+                          boolean timedOut, boolean stdoutTruncated, boolean stderrTruncated,
+                          boolean workerResourceLimited, String workerResourceLimitReason, long workerCpuTimeMs,
+                          long workerPoolWaitMs, long workerMemoryBytes, long workerTerminationGraceMs,
+                          int workerEnvBlockedCount, String workerSandboxPath, boolean workerSandboxKept,
+                          TimeoutPolicy timeout) {
+        String out = truncate(stdout);
+        String err = truncate(stderr);
         return "command: " + command + (args.isEmpty() ? "" : " " + String.join(" ", args)) + "\n"
                 + "cwd: " + cwd + "\n"
+                + "requestedTimeoutMs: " + timeout.requestedMs() + "\n"
+                + "timeoutMs: " + timeout.effectiveMs() + "\n"
+                + "timeoutCapped: " + timeout.capped() + "\n"
                 + "riskLevel: " + assessment.riskLevel() + "\n"
                 + "riskCategory: " + assessment.category() + "\n"
                 + "approvalRequired: " + assessment.approvalRequired() + "\n"
                 + "riskReason: " + assessment.reason() + "\n"
+                + "workerIsolated: " + workerIsolated + "\n"
+                + "workerPoolWaitMs: " + workerPoolWaitMs + "\n"
+                + "workerTerminationGraceMs: " + workerTerminationGraceMs + "\n"
+                + "timedOut: " + timedOut + "\n"
+                + "stdoutTruncatedByWorker: " + stdoutTruncated + "\n"
+                + "stderrTruncatedByWorker: " + stderrTruncated + "\n"
+                + "workerResourceLimited: " + workerResourceLimited + "\n"
+                + "workerResourceLimitReason: " + (workerResourceLimitReason == null ? "" : workerResourceLimitReason) + "\n"
+                + "workerCpuTimeMs: " + workerCpuTimeMs + "\n"
+                + "workerMemoryBytes: " + workerMemoryBytes + "\n"
+                + "workerEnvBlockedCount: " + workerEnvBlockedCount + "\n"
+                + "workerSandboxPath: " + (workerSandboxPath == null ? "" : workerSandboxPath) + "\n"
+                + "workerSandboxKept: " + workerSandboxKept + "\n"
                 + "exitCode: " + exitCode + "\n"
                 + "elapsedMs: " + elapsedMs + "\n"
                 + "stdout:\n" + out + "\n\n"
@@ -259,6 +319,17 @@ public class ExecuteCommandTool implements AgentTool {
     private long longArg(ToolCall call, String name, long defaultValue) {
         String value = call.arguments().get(name);
         return value == null || value.isBlank() ? defaultValue : Long.parseLong(value.trim());
+    }
+
+    private TimeoutPolicy timeoutPolicy(long requestedTimeoutMs) {
+        long requested = requestedTimeoutMs <= 0 ? properties.getTimeoutMs() : requestedTimeoutMs;
+        long max = properties.getMaxTimeoutMs();
+        long effective = Math.min(requested, max);
+        // 超时上限是强终止边界，避免模型传入极大 timeout 长时间占住 worker 或主服务执行线程。
+        return new TimeoutPolicy(requested, effective, effective != requested);
+    }
+
+    record TimeoutPolicy(long requestedMs, long effectiveMs, boolean capped) {
     }
 
     record CommandInvocation(String command, String executable, List<String> args) {

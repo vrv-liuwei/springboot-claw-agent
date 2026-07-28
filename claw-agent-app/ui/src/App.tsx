@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Check,
   ChevronRight,
   Code2,
   FileText,
@@ -10,6 +11,7 @@ import {
   KeyRound,
   Loader2,
   MessageSquare,
+  Monitor,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,6 +19,7 @@ import {
   PanelRightOpen,
   Paperclip,
   Plus,
+  ScrollText,
   Send,
   Settings,
   TerminalSquare,
@@ -25,17 +28,51 @@ import {
 import { FormEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AgentEvent, AgentMessage, AgentSession, ClientConfig, RuntimeConfig, SystemLogLine, SystemLogSource, Workspace, api, streamTask } from './api';
+import {
+  AUTH_SESSION_STORAGE_KEY,
+  AUTH_USER_ID_STORAGE_KEY,
+  AUTH_USERNAME_STORAGE_KEY,
+  DEVICE_ID_STORAGE_KEY,
+  DEVICE_NAME_STORAGE_KEY,
+  DEVICE_SECRET_PREFIX_STORAGE_KEY,
+  DEVICE_SECRET_STORAGE_KEY,
+  DEVICE_TYPE_STORAGE_KEY,
+  AgentEvent,
+  AgentMessage,
+  AgentSession,
+  ClientConfig,
+  DevicePairResponse,
+  DeviceView,
+  LocalHealthView,
+  LocalUser,
+  LocalUserLoginResponse,
+  LocalUserSession,
+  PlanDraft,
+  PlanItem,
+  PlanRevisionSummaryView,
+  PlanTemplateView,
+  RuntimeConfig,
+  SystemLogLine,
+  SystemLogSource,
+  Workspace,
+  api,
+  streamPlan,
+  streamTask,
+} from './api';
 
 type ChatLine = {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** 当前页面流式回复的临时关联标识，不持久化到会话消息。 */
+  streamId?: string;
   kind?: 'message' | 'event';
   eventName?: string;
   status?: string;
   detail?: string;
   createdAt?: string;
   toolName?: string;
+  planId?: string;
+  plan?: PlanDraft;
 };
 
 type AssistantRunLine = {
@@ -59,7 +96,7 @@ declare global {
       onOpenSettings?: (callback: () => void) => void;
       selectDirectory?: () => Promise<string | null>;
       getClientConfig?: () => Promise<ClientConfig>;
-      setServerUrl?: (serverUrl: string, options?: { check?: boolean }) => Promise<ClientConfig>;
+      setServerUrl?: (serverUrl: string, options?: { check?: boolean; connectionMode?: 'local' | 'remote' }) => Promise<ClientConfig>;
     };
   }
 }
@@ -76,6 +113,16 @@ const permissionOptions = [
   { value: 'full', label: '完全访问' },
   { value: 'custom', label: '自定义工具' },
 ];
+
+function shortServerUrl(value?: string) {
+  if (!value) return '-';
+  try {
+    const url = new URL(value);
+    return `${url.hostname}${url.port ? `:${url.port}` : ''}`;
+  } catch {
+    return value;
+  }
+}
 
 function formatTime(value?: string) {
   if (!value) return '';
@@ -95,9 +142,166 @@ function messageRole(role?: string): ChatLine['role'] {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : 'system';
 }
 
+function planStatusText(status?: string) {
+  const value = (status || 'DRAFT').toUpperCase();
+  if (value === 'DRAFT') return '已创建';
+  if (value === 'APPROVED') return '已创建';
+  if (value === 'RUNNING') return '执行中';
+  if (value === 'BLOCKED') return '已阻塞';
+  if (value === 'DONE') return '已完成';
+  return value;
+}
+
+function compactRevisionText(value?: string) {
+  const text = (value || '').replace(/^\[|\]$/g, '').trim();
+  return text || '无';
+}
+
+function localHealthClass(status?: string) {
+  const normalized = (status || '').toUpperCase();
+  if (normalized === 'UP' || normalized === 'OK') return 'success';
+  if (normalized === 'DOWN' || normalized === 'ERROR') return 'danger';
+  if (normalized === 'DEGRADED' || normalized === 'WARNING') return 'warning';
+  return 'neutral';
+}
+
+function localHealthText(status?: string) {
+  const normalized = (status || '').toUpperCase();
+  if (normalized === 'UP' || normalized === 'OK') return '正常';
+  if (normalized === 'DOWN' || normalized === 'ERROR') return '异常';
+  if (normalized === 'DEGRADED' || normalized === 'WARNING') return '需检查';
+  return '未知';
+}
+
+function planToLine(plan: PlanDraft): ChatLine {
+  return {
+    role: 'assistant',
+    content: '',
+    planId: plan.id,
+    plan,
+    status: planStatusText(plan.status),
+    createdAt: plan.createdAt || plan.updatedAt,
+  };
+}
+
+function PlanCard({
+  plan,
+  busy,
+  onRevise,
+  onRun,
+  onCancel,
+}: {
+  plan: PlanDraft;
+  busy?: boolean;
+  onRevise: (planId: string, feedback: string) => void;
+  onRun: (planId: string) => void;
+  onCancel: (planId: string) => void;
+}) {
+  const [feedback, setFeedback] = useState('');
+  const [revisionSummary, setRevisionSummary] = useState<PlanRevisionSummaryView | null>(null);
+  const status = (plan.status || 'DRAFT').toUpperCase();
+  const editable = status === 'BLOCKED';
+  const runnable = status === 'BLOCKED';
+  const items = (plan.items || []).slice().sort((left, right) => (left.itemOrder || 0) - (right.itemOrder || 0));
+  useEffect(() => {
+    if (!plan.id || (plan.version || 1) <= 1) {
+      setRevisionSummary(null);
+      return;
+    }
+    let cancelled = false;
+    api.planRevisionSummary(plan.id)
+      .then((summary) => {
+        if (!cancelled) setRevisionSummary(summary);
+      })
+      .catch(() => {
+        if (!cancelled) setRevisionSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [plan.id, plan.version]);
+  return (
+    <section className="plan-card">
+      <header>
+        <div>
+          <strong><ScrollText size={15} />任务计划</strong>
+          <span className={`plan-status status-${status.toLowerCase()}`}>{planStatusText(plan.status)}</span>
+        </div>
+        <em>v{plan.version || 1}</em>
+      </header>
+      {plan.goal ? (
+        <div className="plan-section">
+          <span className="plan-section-title">目标</span>
+          <p>{plan.goal}</p>
+        </div>
+      ) : null}
+      {plan.summary ? <p>{plan.summary}</p> : null}
+      <div className="plan-execution-strip">
+        <span>状态：{planStatusText(plan.status)}</span>
+        {plan.outcome ? <span>结果：{plan.outcome}</span> : null}
+        {plan.blockReason ? <span>阻塞：{plan.blockReason}</span> : null}
+        {status === 'APPROVED' || status === 'DRAFT' ? <strong>已自动进入执行队列</strong> : null}
+        {status === 'BLOCKED' ? <strong>可修订后继续执行</strong> : null}
+      </div>
+      <ol>
+        {items.map((item) => <PlanStep item={item} key={item.id || item.itemOrder || item.title} />)}
+      </ol>
+      {revisionSummary ? (
+        <details className="plan-revisions" open>
+          <summary>计划差异 v{revisionSummary.previousVersion || '-'} → v{revisionSummary.version || plan.version}</summary>
+          <div className="plan-diff-grid">
+            <span>步骤数</span>
+            <strong>{revisionSummary.itemCountBefore ?? '-'} → {revisionSummary.itemCountAfter ?? '-'}</strong>
+            <span>新增</span>
+            <code>{compactRevisionText(revisionSummary.addedItems)}</code>
+            <span>移除</span>
+            <code>{compactRevisionText(revisionSummary.removedItems)}</code>
+            <span>变更</span>
+            <code>{compactRevisionText(revisionSummary.changedItems)}</code>
+          </div>
+          {revisionSummary.feedback ? <p>反馈：{revisionSummary.feedback}</p> : null}
+        </details>
+      ) : null}
+      {editable ? (
+        <div className="plan-revise">
+          <input value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="输入计划修改意见" />
+          <button type="button" disabled={busy || !feedback.trim()} onClick={() => {
+            onRevise(plan.id, feedback);
+            setFeedback('');
+          }}>修订</button>
+        </div>
+      ) : null}
+      <footer>
+        {runnable ? <button type="button" disabled={busy} onClick={() => onRun(plan.id)}>{busy ? '处理中...' : '继续执行'}</button> : null}
+        {editable ? <button type="button" disabled={busy} onClick={() => onCancel(plan.id)}>取消</button> : null}
+      </footer>
+    </section>
+  );
+}
+
+function PlanStep({ item }: { item: PlanItem }) {
+  const detail = item.detail || item.description;
+  return (
+    <li>
+      <span className="plan-dot" />
+      <div>
+        <strong>{item.itemOrder || '-'}. {item.title || '未命名步骤'}</strong>
+        {detail ? <p>{detail}</p> : null}
+        {item.expectedTools?.length ? (
+          <div className="plan-tools">
+            {item.expectedTools.slice(0, 6).map((tool) => <code key={tool}>{tool}</code>)}
+          </div>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
 export function App() {
   const [runtime, setRuntime] = useState<Record<string, unknown>>({});
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
+  const [localHealth, setLocalHealth] = useState<LocalHealthView | null>(null);
+  const [localHealthLoading, setLocalHealthLoading] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
@@ -109,12 +313,16 @@ export function App() {
   const [pendingSessionCreate, setPendingSessionCreate] = useState(false);
   const [input, setInput] = useState('');
   const [lines, setLines] = useState<ChatLine[]>([]);
+  const [planMode, setPlanMode] = useState(() => localStorage.getItem('clawagent.app.planMode') === 'true');
+  const [planBusyId, setPlanBusyId] = useState<string>();
+  const [planTemplates, setPlanTemplates] = useState<PlanTemplateView[]>([]);
+  const [selectedPlanTemplateId, setSelectedPlanTemplateId] = useState(() => localStorage.getItem('clawagent.app.planTemplateId') || '');
   const [taskStatus, setTaskStatus] = useState('');
   const [error, setError] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [page, setPage] = useState<'chat' | 'settings' | 'logs'>('chat');
-  const [settingsTab, setSettingsTab] = useState<'general' | 'connection' | 'projects' | 'logs' | 'models'>('general');
+  const [settingsTab, setSettingsTab] = useState<'general' | 'connection' | 'projects' | 'device' | 'logs' | 'models'>('general');
   const [logSources, setLogSources] = useState<SystemLogSource[]>([]);
   const [logLines, setLogLines] = useState<SystemLogLine[]>([]);
   const [theme, setTheme] = useState<'idea-light' | 'idea-dark'>(() => {
@@ -127,10 +335,27 @@ export function App() {
   const [rightTab, setRightTab] = useState<'review' | 'files'>('review');
   const [model, setModel] = useState('');
   const [permission, setPermission] = useState('ask');
+  const [authMenuOpen, setAuthMenuOpen] = useState(false);
+  const [localUser, setLocalUser] = useState<LocalUser>();
+  const [localSession, setLocalSession] = useState<LocalUserSession>();
+  const [localSessionToken, setLocalSessionToken] = useState(() => window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY) || '');
+  const [loginUsername, setLoginUsername] = useState(() => window.localStorage.getItem(AUTH_USERNAME_STORAGE_KEY) || '');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState('');
+  const [deviceId, setDeviceId] = useState(() => window.localStorage.getItem(DEVICE_ID_STORAGE_KEY) || '');
+  const [deviceName, setDeviceName] = useState(() => window.localStorage.getItem(DEVICE_NAME_STORAGE_KEY) || '');
+  const [deviceType, setDeviceType] = useState(() => window.localStorage.getItem(DEVICE_TYPE_STORAGE_KEY) || '');
+  const [deviceSecret, setDeviceSecret] = useState(() => window.localStorage.getItem(DEVICE_SECRET_STORAGE_KEY) || '');
+  const [deviceSecretPrefix, setDeviceSecretPrefix] = useState(() => window.localStorage.getItem(DEVICE_SECRET_PREFIX_STORAGE_KEY) || '');
+  const [deviceStatus, setDeviceStatus] = useState(deviceId ? '未校验' : '未配对');
+  const [devicePairingCode, setDevicePairingCode] = useState('');
+  const [deviceLoading, setDeviceLoading] = useState(false);
+  const [deviceMessage, setDeviceMessage] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
-  const [plusMenuPage, setPlusMenuPage] = useState<'main' | 'plugins'>('main');
+  const [plusMenuPage, setPlusMenuPage] = useState<'main' | 'planTemplates' | 'plugins'>('main');
   const [directoryMessage, setDirectoryMessage] = useState('');
   const [scrollState, setScrollState] = useState({ up: false, down: false });
   const composerRef = useRef<HTMLFormElement | null>(null);
@@ -148,9 +373,27 @@ export function App() {
   const [clientConfig, setClientConfig] = useState<ClientConfig | null>(null);
   const [serverUrlDraft, setServerUrlDraft] = useState('http://127.0.0.1:17891');
   const [serverConfigMessage, setServerConfigMessage] = useState('');
+  const [connectionModeDraft, setConnectionModeDraft] = useState<'local' | 'remote'>('local');
+
+  const activeConnectionUrl = clientConfig?.activeServerUrl || window.location.origin;
+  const hasStartupFallback = Boolean(clientConfig?.startupConnectionError);
+  // 连接模式由用户配置决定，本机地址也可以作为远程服务连接。
+  const connectionMode = clientConfig?.connectionMode || clientConfig?.edition || (window.clawAgentApp?.desktop ? 'local' : 'remote');
+  // 远程启动失败时 Electron 会临时回落本地服务，当前运行态不应再要求远程身份。
+  const isLocalConnection = connectionMode === 'local' || hasStartupFallback;
+  const isRemoteConnection = !isLocalConnection;
+  const connectionLabel = isLocalConnection ? '本地模式' : '远程模式';
+  // 本地服务端口可能因占用自动变化，界面必须展示实际运行地址而非默认尝试地址。
+  const localRuntimeUrl = isLocalConnection ? activeConnectionUrl : '切换后由桌面端自动启动本地服务';
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  useEffect(() => {
+    api.planTemplates()
+      .then(setPlanTemplates)
+      .catch(() => setPlanTemplates([]));
   }, []);
 
   useEffect(() => {
@@ -177,18 +420,56 @@ export function App() {
   }, [page]);
 
   useEffect(() => {
+    if (page !== 'settings') return;
+    void refreshLocalHealth(false);
+  }, [page]);
+
+  useEffect(() => {
     const closeFloatingMenus = (event: globalThis.PointerEvent) => {
       if (composerRef.current?.contains(event.target as Node)) return;
       const target = event.target as Element;
       if (target.closest?.('.session-context-menu')) return;
+      if (target.closest?.('.auth-menu')) return;
+      if (target.closest?.('.identity-panel')) return;
       setPlusOpen(false);
       setToolPickerOpen(false);
       setPlusMenuPage('main');
       setSessionMenu(null);
+      setAuthMenuOpen(false);
     };
     document.addEventListener('pointerdown', closeFloatingMenus, true);
     return () => document.removeEventListener('pointerdown', closeFloatingMenus, true);
   }, []);
+
+  useEffect(() => {
+    const token = localSessionToken.trim();
+    if (isLocalConnection || !token) {
+      setLocalUser(undefined);
+      setLocalSession(undefined);
+      return;
+    }
+    let cancelled = false;
+    api.currentLocalUser(token)
+      .then((response) => {
+        if (cancelled) return;
+        setLocalUser(response.user);
+        setLocalSession(response.session);
+        setAuthMessage('');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // 本地会话失效时同步清理缓存，避免后续任务继续携带过期身份。
+        clearLocalAuth('登录已过期，请重新登录。');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLocalConnection, localSessionToken]);
+
+  useEffect(() => {
+    if (!isRemoteConnection || !deviceId || !deviceSecret) return;
+    void verifyCurrentDevice(false);
+  }, [deviceId, deviceSecret, isRemoteConnection]);
 
   const plainSessions = useMemo(() => sessions.filter((item) => !item.workspaceId), [sessions]);
 
@@ -239,6 +520,26 @@ export function App() {
     setSessions(sessionList);
   }
 
+  async function refreshLocalHealth(deep = false) {
+    setLocalHealthLoading(true);
+    try {
+      setLocalHealth(await api.localHealth(deep));
+    } catch {
+      setLocalHealth({
+        status: 'DOWN',
+        items: [{
+          key: 'local-health',
+          label: '本地健康检查',
+          status: 'error',
+          summary: '健康检查接口不可用',
+          detail: '请确认后端服务已启动，并检查 /api/v1/config/local/health。',
+        }],
+      });
+    } finally {
+      setLocalHealthLoading(false);
+    }
+  }
+
   function updateConversationScrollState() {
     const element = conversationRef.current;
     if (!element) {
@@ -279,17 +580,20 @@ export function App() {
     if (!window.clawAgentApp?.getClientConfig) {
       const browserConfig: ClientConfig = {
         serverUrl: window.location.origin,
+        connectionMode: 'remote',
         edition: 'remote',
         activeServerUrl: window.location.origin,
         configExists: false,
       };
       setClientConfig(browserConfig);
       setServerUrlDraft(browserConfig.serverUrl);
+      setConnectionModeDraft('remote');
       return;
     }
     const config = await window.clawAgentApp.getClientConfig();
     setClientConfig(config);
     setServerUrlDraft(config.serverUrl);
+    setConnectionModeDraft(config.connectionMode || config.edition || 'local');
   }
 
   async function saveServerUrl(check = true) {
@@ -297,33 +601,166 @@ export function App() {
       setServerConfigMessage('浏览器访问不能修改桌面客户端服务器地址。');
       return;
     }
-    setServerConfigMessage(check ? '正在保存并切换服务器...' : '正在保存服务器地址，不做连通性检查...');
+    setServerConfigMessage(connectionModeDraft === 'remote' ? '正在校验并切换远程服务...' : '正在启动并切换本地服务...');
     try {
-      const saved = await window.clawAgentApp.setServerUrl(serverUrlDraft, { check });
+      const saved = await window.clawAgentApp.setServerUrl(serverUrlDraft, { check, connectionMode: connectionModeDraft });
       setClientConfig(saved);
       setServerUrlDraft(saved.serverUrl);
-      setServerConfigMessage(check
-        ? `已切换到 ${saved.edition === 'local' ? '本地模式' : '远程模式'}：${saved.serverUrl}`
-        : `已保存 ${saved.edition === 'local' ? '本地模式' : '远程模式'}地址：${saved.serverUrl}。下次启动或手动刷新后生效。`);
+      setConnectionModeDraft(saved.connectionMode || saved.edition);
+      setServerConfigMessage(`已切换到 ${saved.connectionMode === 'remote' ? '远程模式' : '本地模式'}：${saved.activeServerUrl || saved.serverUrl}`);
     } catch (error) {
       setServerConfigMessage(error instanceof Error ? error.message : '服务器地址保存失败。');
     }
   }
 
-  async function resetServerUrl() {
-    setServerUrlDraft('http://127.0.0.1:17891');
-    if (!window.clawAgentApp?.setServerUrl) {
-      setServerConfigMessage('已恢复输入框为本地默认地址，浏览器模式不能写入桌面客户端配置。');
+  function selectConnectionMode(mode: 'local' | 'remote') {
+    setConnectionModeDraft(mode);
+    if (mode === 'local') setServerUrlDraft('http://127.0.0.1:17891');
+    setServerConfigMessage('');
+  }
+
+  function rememberLocalAuth(response: LocalUserLoginResponse) {
+    const token = response.sessionToken || '';
+    const userId = response.user?.id || '';
+    const username = response.user?.username || '';
+    if (token) window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, token);
+    if (userId) window.localStorage.setItem(AUTH_USER_ID_STORAGE_KEY, userId);
+    if (username) window.localStorage.setItem(AUTH_USERNAME_STORAGE_KEY, username);
+    setLocalSessionToken(token);
+    setLocalUser(response.user);
+    setLocalSession(response.session);
+    setLoginUsername(username || loginUsername);
+  }
+
+  function clearLocalAuth(message = '') {
+    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    window.localStorage.removeItem(AUTH_USER_ID_STORAGE_KEY);
+    window.localStorage.removeItem(AUTH_USERNAME_STORAGE_KEY);
+    setLocalSessionToken('');
+    setLocalUser(undefined);
+    setLocalSession(undefined);
+    setLoginPassword('');
+    setAuthMessage(message);
+  }
+
+  async function loginLocalUser(event: FormEvent) {
+    event.preventDefault();
+    const username = loginUsername.trim();
+    if (!username || !loginPassword || authLoading) return;
+    setAuthLoading(true);
+    setAuthMessage('正在登录...');
+    try {
+      rememberLocalAuth(await api.loginLocalUser(username, loginPassword));
+      setLoginPassword('');
+      setAuthMessage('已登录。');
+      setAuthMenuOpen(false);
+    } catch (err) {
+      setAuthMessage(err instanceof Error ? err.message : '登录失败。');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function logoutLocalUser() {
+    const token = localSessionToken.trim();
+    setAuthLoading(true);
+    setAuthMessage('正在退出...');
+    try {
+      if (token) await api.logoutLocalUser(token).catch(() => null);
+      clearLocalAuth('已退出。');
+      setAuthMenuOpen(false);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function rememberDevicePair(response: DevicePairResponse) {
+    const paired = response.device;
+    const secret = response.deviceSecret || '';
+    if (!paired?.id || !secret) {
+      throw new Error('设备配对响应缺少 deviceId 或 deviceSecret。');
+    }
+    window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, paired.id);
+    window.localStorage.setItem(DEVICE_SECRET_STORAGE_KEY, secret);
+    window.localStorage.setItem(DEVICE_NAME_STORAGE_KEY, paired.name || 'ClawAgent App');
+    window.localStorage.setItem(DEVICE_TYPE_STORAGE_KEY, paired.type || 'desktop');
+    window.localStorage.setItem(DEVICE_SECRET_PREFIX_STORAGE_KEY, paired.deviceSecretPrefix || '');
+    setDeviceId(paired.id);
+    setDeviceSecret(secret);
+    setDeviceName(paired.name || 'ClawAgent App');
+    setDeviceType(paired.type || 'desktop');
+    setDeviceSecretPrefix(paired.deviceSecretPrefix || '');
+    setDeviceStatus(paired.status || 'active');
+  }
+
+  function clearDevicePair(message = '') {
+    window.localStorage.removeItem(DEVICE_ID_STORAGE_KEY);
+    window.localStorage.removeItem(DEVICE_SECRET_STORAGE_KEY);
+    window.localStorage.removeItem(DEVICE_NAME_STORAGE_KEY);
+    window.localStorage.removeItem(DEVICE_TYPE_STORAGE_KEY);
+    window.localStorage.removeItem(DEVICE_SECRET_PREFIX_STORAGE_KEY);
+    setDeviceId('');
+    setDeviceSecret('');
+    setDeviceName('');
+    setDeviceType('');
+    setDeviceSecretPrefix('');
+    setDeviceStatus('未配对');
+    setDeviceMessage(message);
+  }
+
+  async function pairCurrentDevice() {
+    const code = devicePairingCode.trim();
+    if (!code || deviceLoading) return;
+    setDeviceLoading(true);
+    setDeviceMessage('正在配对设备...');
+    try {
+      const response = await api.pairDevice(code, {
+        source: 'claw-agent-app',
+        platform: window.clawAgentApp?.platform || 'browser',
+        desktop: String(Boolean(window.clawAgentApp?.desktop)),
+        ...(localUser?.id ? { localUserId: localUser.id } : {}),
+        ...(localUser?.username ? { username: localUser.username } : {}),
+      });
+      // deviceSecret 只在客户端保存，用于后续校验；任务 metadata 只携带 deviceId。
+      rememberDevicePair(response);
+      setDevicePairingCode('');
+      setDeviceMessage('设备已配对，后续任务会携带 deviceId 进入权限策略合并。');
+    } catch (err) {
+      setDeviceMessage(err instanceof Error ? err.message : '设备配对失败。');
+    } finally {
+      setDeviceLoading(false);
+    }
+  }
+
+  async function verifyCurrentDevice(report = true) {
+    if (!deviceId || !deviceSecret || deviceLoading) {
+      if (report) setDeviceMessage('当前没有可校验的设备密钥。');
       return;
     }
-    setServerConfigMessage('正在恢复本地默认地址...');
+    if (report) {
+      setDeviceLoading(true);
+      setDeviceMessage('正在校验设备密钥...');
+    }
     try {
-      const saved = await window.clawAgentApp.setServerUrl('http://127.0.0.1:17891');
-      setClientConfig(saved);
-      setServerUrlDraft(saved.serverUrl);
-      setServerConfigMessage(`已恢复本地模式：${saved.serverUrl}`);
-    } catch (error) {
-      setServerConfigMessage(error instanceof Error ? error.message : '恢复本地默认地址失败。');
+      const response = await api.verifyDeviceSecret(deviceId, deviceSecret);
+      if (!response.verified) {
+        setDeviceStatus(response.status || '校验失败');
+        if (report) setDeviceMessage('设备密钥校验失败，请重新配对。');
+        return;
+      }
+      const heartbeat = await api.heartbeatDevice(deviceId).catch(() => undefined as DeviceView | undefined);
+      setDeviceStatus(heartbeat?.status || response.status || 'active');
+      setDeviceName(heartbeat?.name || deviceName);
+      setDeviceType(heartbeat?.type || deviceType);
+      setDeviceSecretPrefix(heartbeat?.deviceSecretPrefix || deviceSecretPrefix);
+      if (heartbeat?.name) window.localStorage.setItem(DEVICE_NAME_STORAGE_KEY, heartbeat.name);
+      if (heartbeat?.type) window.localStorage.setItem(DEVICE_TYPE_STORAGE_KEY, heartbeat.type);
+      if (heartbeat?.deviceSecretPrefix) window.localStorage.setItem(DEVICE_SECRET_PREFIX_STORAGE_KEY, heartbeat.deviceSecretPrefix);
+      if (report) setDeviceMessage('设备密钥有效，心跳已更新。');
+    } catch (err) {
+      if (report) setDeviceMessage(err instanceof Error ? err.message : '设备校验失败。');
+    } finally {
+      if (report) setDeviceLoading(false);
     }
   }
 
@@ -412,9 +849,10 @@ export function App() {
     });
     setPage('chat');
     setTaskStatus('');
-    const [messages, events] = await Promise.all([
+    const [messages, events, plans] = await Promise.all([
       api.sessionMessages(item.id, 120),
       api.sessionEvents(item.id, 200),
+      api.plans(item.id, 100).catch(() => [] as PlanDraft[]),
     ]);
     const messageLines = messages.map((message: AgentMessage): ChatLine => ({
       role: messageRole(message.role),
@@ -424,7 +862,8 @@ export function App() {
     const eventLines = compactEventLines(events
       .map(eventToChatLine)
       .filter((line): line is ChatLine => Boolean(line)));
-    setLines([...messageLines, ...eventLines].sort((left, right) => {
+    const planLines = plans.map(planToLine);
+    setLines([...messageLines, ...eventLines, ...planLines].sort((left, right) => {
       if (!left.createdAt || !right.createdAt) return 0;
       return left.createdAt.localeCompare(right.createdAt);
     }));
@@ -613,17 +1052,36 @@ export function App() {
     return grouped;
   }
 
-  function appendAssistantDelta(content: string) {
+  function appendAssistantDelta(streamId: string, content: string) {
     setLines((current) => {
       const next = [...current];
       for (let index = next.length - 1; index >= 0; index -= 1) {
-        if (next[index].role === 'assistant' && next[index].kind !== 'event') {
+        if (next[index].streamId === streamId) {
           next[index] = { ...next[index], content: `${next[index].content}${content}` };
           return next;
         }
       }
-      return [...next, { role: 'assistant', content }];
+      return [...next, { role: 'assistant', content, streamId, createdAt: new Date().toISOString() }];
     });
+  }
+
+  function applyAssistantResult(streamId: string, answer: string) {
+    if (!answer) return;
+    setLines((current) => {
+      const next = [...current];
+      for (let index = next.length - 1; index >= 0; index -= 1) {
+        if (next[index].streamId === streamId) {
+          // 正常流式场景已通过 delta 写入；只在模型没有下发 delta 时补最终答案。
+          if (!next[index].content) next[index] = { ...next[index], content: answer };
+          return next;
+        }
+      }
+      return [...next, { role: 'assistant', content: answer, streamId, createdAt: new Date().toISOString() }];
+    });
+  }
+
+  function discardEmptyAssistantLine(streamId: string) {
+    setLines((current) => current.filter((line) => line.streamId !== streamId || Boolean(line.content)));
   }
 
   function appendProcessLine(eventName: string, data: Record<string, unknown>) {
@@ -684,13 +1142,22 @@ export function App() {
     event.preventDefault();
     const text = input.trim();
     if (!text || composerBusy) return;
+    if (planMode || text.startsWith('/plan ')) {
+      await createPlan(text.startsWith('/plan ') ? text.slice(6).trim() : text, text);
+      return;
+    }
     let activeSession = session;
     let completed = false;
     setPendingSessionCreate(!activeSession);
     setTaskStatus('正在提交任务...');
     setError('');
     setInput('');
-    setLines((current) => [...current, { role: 'user', content: text }]);
+    const streamId = `task-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // 每个任务预先占用自己的 assistant 消息槽，防止流式内容误追加到历史回复。
+    setLines((current) => [...current,
+      { role: 'user', content: text },
+      { role: 'assistant', content: '', streamId, createdAt: new Date().toISOString() },
+    ]);
     try {
       if (!activeSession) {
         activeSession = await api.createSession(workspace, text.slice(0, 30) || '新会话');
@@ -702,7 +1169,11 @@ export function App() {
       await streamTask(text, activeSession, workspace, { modelId: model, permissionMode: permission }, (eventName, data) => {
         const isVisibleSession = currentSessionIdRef.current === activeSession!.id && currentPageRef.current === 'chat';
         if (eventName === 'llm.delta') {
-          if (isVisibleSession) appendAssistantDelta(String(data.content || ''));
+          if (isVisibleSession) appendAssistantDelta(streamId, String(data.content || ''));
+          return;
+        }
+        if (eventName === 'result') {
+          if (isVisibleSession) applyAssistantResult(streamId, String(data.answer || ''));
           return;
         }
         if (!isVisibleSession) return;
@@ -712,6 +1183,7 @@ export function App() {
       setSessions(await api.sessions());
       completed = true;
     } catch (err) {
+      discardEmptyAssistantLine(streamId);
       if (!activeSession?.id || currentSessionIdRef.current === activeSession.id) {
         setError(err instanceof Error ? err.message : String(err));
       }
@@ -729,6 +1201,127 @@ export function App() {
           setUnreadSessionIds((current) => ({ ...current, [activeSession!.id]: true }));
         }
       }
+    }
+  }
+
+  async function createPlan(text: string, visibleText = text) {
+    if (!text.trim() || composerBusy) return;
+    let activeSession = session;
+    setPendingSessionCreate(!activeSession);
+    setTaskStatus('正在生成计划...');
+    setError('');
+    setInput('');
+    setLines((current) => [...current, { role: 'user', content: visibleText }]);
+    try {
+      if (!activeSession) {
+        activeSession = await api.createSession(workspace, text.slice(0, 30) || '新会话');
+        setSessions((current) => [activeSession!, ...current.filter((item) => item.id !== activeSession!.id)]);
+      }
+      setSession(activeSession);
+      setPendingSessionCreate(false);
+      const plan = await api.createPlan({
+        input: text,
+        sessionId: activeSession.id,
+        mode: 'grounded',
+        templateId: selectedPlanTemplateId || undefined,
+        metadata: {
+          workspaceId: workspace?.id || activeSession.workspaceId || '',
+          workspaceName: workspace?.name || activeSession.workspaceName || '',
+          workspaceRoot: workspace?.root || activeSession.workspaceRoot || '',
+          modelId: model || '',
+          permissionMode: permission || '',
+        },
+      });
+      setLines((current) => [...current, planToLine(plan)]);
+      setSessions(await api.sessions());
+      setPendingSessionCreate(false);
+      setTaskStatus('');
+      await runPlan(plan.id, activeSession, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPendingSessionCreate(false);
+      setTaskStatus('');
+    }
+  }
+
+  function updatePlanLine(plan: PlanDraft) {
+    setLines((current) => {
+      let replaced = false;
+      const next = current.map((line) => {
+        if (line.planId !== plan.id) return line;
+        replaced = true;
+        return { ...line, ...planToLine(plan) };
+      });
+      return replaced ? next : [...next, planToLine(plan)];
+    });
+  }
+
+  async function revisePlan(planId: string, feedback: string) {
+    if (!feedback.trim()) return;
+    setPlanBusyId(planId);
+    try {
+      updatePlanLine(await api.revisePlan(planId, feedback.trim()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanBusyId(undefined);
+    }
+  }
+
+  async function cancelPlan(planId: string) {
+    setPlanBusyId(planId);
+    try {
+      updatePlanLine(await api.cancelPlan(planId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanBusyId(undefined);
+    }
+  }
+
+  async function runPlan(planId: string, sessionOverride?: AgentSession, ignoreBusy = false) {
+    const targetSession = sessionOverride || session;
+    if ((!ignoreBusy && composerBusy) || !targetSession) return;
+    const streamId = `plan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPlanBusyId(planId);
+    setRunningSessionIds((current) => ({ ...current, [targetSession.id]: true }));
+    setTaskStatus('正在执行计划...');
+    try {
+      const latest = await api.plan(planId);
+      if ((latest.status || '').toUpperCase() === 'DRAFT') {
+        updatePlanLine(await api.approvePlan(planId));
+      }
+      setLines((current) => [...current, { role: 'assistant', content: '', streamId, createdAt: new Date().toISOString() }]);
+      await streamPlan(planId, workspace, targetSession, { modelId: model, permissionMode: permission }, (eventName, data) => {
+        const isVisibleSession = currentSessionIdRef.current === targetSession.id && currentPageRef.current === 'chat';
+        if (eventName === 'llm.delta') {
+          if (isVisibleSession) appendAssistantDelta(streamId, String(data.content || ''));
+          return;
+        }
+        if (eventName === 'result') {
+          if (isVisibleSession) applyAssistantResult(streamId, String(data.answer || ''));
+          return;
+        }
+        if (!isVisibleSession) return;
+        const status = appendProcessLine(eventName, data);
+        if (status) setTaskStatus(status);
+      });
+      updatePlanLine(await api.plan(planId));
+      setSessions(await api.sessions());
+    } catch (err) {
+      discardEmptyAssistantLine(streamId);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (targetSession.id) {
+        setRunningSessionIds((current) => {
+          const next = { ...current };
+          delete next[targetSession.id];
+          return next;
+        });
+      }
+      setPlanBusyId(undefined);
+      setTaskStatus('');
     }
   }
 
@@ -756,11 +1349,38 @@ export function App() {
     setPlusMenuPage('main');
   }
 
+  function togglePlanMode() {
+    setPlanMode((current) => {
+      const next = !current;
+      localStorage.setItem('clawagent.app.planMode', String(next));
+      return next;
+    });
+  }
+
+  function changePlanTemplate(templateId: string) {
+    setSelectedPlanTemplateId(templateId);
+    localStorage.setItem('clawagent.app.planTemplateId', templateId);
+  }
+
+  function planTemplateLabel() {
+    if (!selectedPlanTemplateId) return '默认计划';
+    return planTemplates.find((template) => template.id === selectedPlanTemplateId)?.title || '默认计划';
+  }
+
+  function selectPlanTemplate(templateId: string) {
+    changePlanTemplate(templateId);
+    setPlanMode(true);
+    localStorage.setItem('clawagent.app.planMode', 'true');
+    setPlusOpen(false);
+    setPlusMenuPage('main');
+  }
+
   function settingsSubPageLabel() {
     const labels: Record<string, string> = {
       general: '常规',
       connection: '连接',
       projects: '项目',
+      device: '设备',
       logs: '日志',
       models: '模型与权限',
     };
@@ -778,6 +1398,69 @@ export function App() {
             <ChevronRight size={13} />
             <span>{subPage}</span>
           </>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderIdentityPanel() {
+    if (isLocalConnection) {
+      return (
+        <div className="identity-panel local">
+          <div className="identity-main">
+            <Monitor size={15} />
+            <span>
+              <strong>本地模式</strong>
+              <em>{shortServerUrl(activeConnectionUrl)}</em>
+            </span>
+          </div>
+          <p>当前连接的是本机服务，无需登录或设备配对。</p>
+          {hasStartupFallback ? <p className="identity-warning">远程服务不可用，已临时回到本地模式。</p> : null}
+        </div>
+      );
+    }
+
+    const userLabel = localUser?.displayName || localUser?.username || '未登录';
+    const deviceLabel = deviceId
+      ? `${deviceName || '已配对设备'} · ${deviceStatus || 'active'}`
+      : '设备未配对';
+
+    return (
+      <div className="identity-panel remote">
+        <button className={localUser ? 'identity-main signed-in' : 'identity-main'} type="button" onClick={() => setAuthMenuOpen((open) => !open)}>
+          <User size={15} />
+          <span>
+            <strong>{userLabel}</strong>
+            <em>{shortServerUrl(activeConnectionUrl)}</em>
+          </span>
+        </button>
+        <button type="button" className={deviceId ? 'identity-device paired' : 'identity-device'} onClick={() => { setPage('settings'); setSettingsTab('device'); }}>
+          <Monitor size={13} />
+          <span>{deviceLabel}</span>
+        </button>
+        {authMenuOpen ? (
+          <div className="auth-popover">
+            {localUser ? (
+              <div className="auth-user-card">
+                <strong>{localUser.displayName || localUser.username || '本地用户'}</strong>
+                <span>{localUser.role || 'user'} · {localSession?.status || localUser.status || 'active'}</span>
+                <button type="button" disabled={authLoading} onClick={() => void logoutLocalUser()}>退出登录</button>
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={loginLocalUser}>
+                <label>
+                  <span>用户名</span>
+                  <input value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} placeholder="admin" autoComplete="username" />
+                </label>
+                <label>
+                  <span>密码</span>
+                  <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} placeholder="请输入密码" autoComplete="current-password" />
+                </label>
+                <button type="submit" disabled={authLoading || !loginUsername.trim() || !loginPassword}>{authLoading ? '登录中...' : '登录'}</button>
+              </form>
+            )}
+            {authMessage ? <p className="auth-message">{authMessage}</p> : null}
+          </div>
         ) : null}
       </div>
     );
@@ -924,10 +1607,7 @@ export function App() {
         </section>
 
         <div className="sidebar-footer">
-          <button className={page === 'logs' ? 'footer-button active' : 'footer-button'} onClick={() => setPage('logs')}>
-            <TerminalSquare size={15} />
-            服务日志
-          </button>
+          {renderIdentityPanel()}
           <button className={page === 'settings' ? 'footer-button active' : 'footer-button'} onClick={() => setPage('settings')}>
             <Settings size={15} />
             设置
@@ -980,12 +1660,12 @@ export function App() {
           <div className="conversation-frame">
             <section ref={conversationRef} className="conversation" onScroll={updateConversationScrollState}>
               {lines.length === 0 ? (
-                <div className="starter">
-                  <h2>我们该构建什么？</h2>
-                  <div className="starter-context">
-                    {workspace ? <span><FolderOpen size={13} />{workspace.name}</span> : null}
-                    <span><Code2 size={13} />本地模式</span>
-                  </div>
+                  <div className="starter">
+                    <h2>我们该构建什么？</h2>
+                    <div className="starter-context">
+                      {workspace ? <span><FolderOpen size={13} />{workspace.name}</span> : null}
+                    <span><Code2 size={13} />{connectionLabel}</span>
+                    </div>
                   <div className="prompt-grid">
                     {quickPrompts.map((prompt) => <button key={prompt} onClick={() => setInput(prompt)}>{prompt}</button>)}
                   </div>
@@ -995,9 +1675,19 @@ export function App() {
                   <article key={index} className={`message ${line.role}`}>
                     <div className="avatar">{line.role === 'user' ? <User size={14} /> : <Bot size={15} />}</div>
                     <div className="message-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {line.content || (currentSessionBusy && line.role === 'assistant' ? '正在处理...' : '')}
-                      </ReactMarkdown>
+                      {line.plan ? (
+                        <PlanCard
+                          plan={line.plan}
+                          busy={planBusyId === line.plan.id}
+                          onRevise={revisePlan}
+                          onRun={runPlan}
+                          onCancel={cancelPlan}
+                        />
+                      ) : (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {line.content || (currentSessionBusy && line.role === 'assistant' ? '正在处理...' : '')}
+                        </ReactMarkdown>
+                      )}
                     </div>
                   </article>
                 )
@@ -1065,24 +1755,54 @@ export function App() {
                   }} />
                 </label>
                 <button type="button" onClick={() => {
-                  setInput((current) => `${current.trimEnd()} #计划模式 `);
-                  setPlusOpen(false);
+                  setPlusMenuPage('planTemplates');
                 }}>
-                  <Code2 size={14} />
-                  <span>计划模式</span>
+                  <ScrollText size={14} />
+                  <span>{planMode ? `计划：${planTemplateLabel()}` : '计划'}</span>
+                  <ChevronRight size={13} />
                 </button>
                 <button type="button" onClick={() => {
-                  setInput((current) => `${current.trimEnd()} #追求目标 `);
+                  setInput((current) => `${current.trimEnd()} #目标 `);
                   setPlusOpen(false);
                 }}>
                   <KeyRound size={14} />
-                  <span>追求目标</span>
+                  <span>目标</span>
                 </button>
                 <button type="button" onClick={() => setPlusMenuPage('plugins')}>
                   <Package size={14} />
                   <span>插件</span>
                   <ChevronRight size={13} />
                 </button>
+              </div>
+            ) : null}
+            {plusOpen && plusMenuPage === 'planTemplates' ? (
+              <div className="tool-picker">
+                <header>
+                  <button type="button" className="menu-back" onClick={() => setPlusMenuPage('main')}>返回</button>
+                  <span>选择计划类型</span>
+                </header>
+                <button type="button" onClick={() => selectPlanTemplate('')}>
+                  <ScrollText size={14} />
+                  <span>默认计划</span>
+                  {!selectedPlanTemplateId && <Check size={13} />}
+                </button>
+                {planTemplates.map((template) => (
+                  <button key={template.id} type="button" onClick={() => selectPlanTemplate(template.id)} title={template.description || template.title}>
+                    <ScrollText size={14} />
+                    <span>{template.title || template.id}</span>
+                    {selectedPlanTemplateId === template.id && <Check size={13} />}
+                  </button>
+                ))}
+                {planMode ? (
+                  <button type="button" onClick={() => {
+                    togglePlanMode();
+                    setPlusOpen(false);
+                    setPlusMenuPage('main');
+                  }}>
+                    <ScrollText size={14} />
+                    <span>关闭计划</span>
+                  </button>
+                ) : null}
               </div>
             ) : null}
             {plusOpen && plusMenuPage === 'plugins' ? (
@@ -1127,6 +1847,21 @@ export function App() {
                   {permissionOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                 </select></label>
                 {workspace ? <span><FolderOpen size={13} />{workspace.name}</span> : null}
+                {planMode ? (
+                  <button
+                    type="button"
+                    className="plan-toggle active"
+                    onClick={() => {
+                      setPlusOpen(true);
+                      setToolPickerOpen(false);
+                      setPlusMenuPage('planTemplates');
+                    }}
+                    title={`当前计划：${planTemplateLabel()}`}
+                  >
+                    <ScrollText size={13} />
+                    {`计划：${planTemplateLabel()}`}
+                  </button>
+                ) : null}
               </div>
               <div className="send-controls">
                 <label className="model-select"><Bot size={13} /><select value={model} onChange={(event) => setModel(event.target.value)}>
@@ -1179,6 +1914,7 @@ export function App() {
               <button className={settingsTab === 'general' ? 'active' : ''} onClick={() => setSettingsTab('general')}><Settings size={15} />常规</button>
               <button className={settingsTab === 'connection' ? 'active' : ''} onClick={() => setSettingsTab('connection')}><TerminalSquare size={15} />连接</button>
               <button className={settingsTab === 'projects' ? 'active' : ''} onClick={() => setSettingsTab('projects')}><FolderOpen size={15} />项目</button>
+              <button className={settingsTab === 'device' ? 'active' : ''} onClick={() => setSettingsTab('device')}><Monitor size={15} />设备</button>
               <button className={settingsTab === 'logs' ? 'active' : ''} onClick={() => setSettingsTab('logs')}><TerminalSquare size={15} />日志</button>
               <button className={settingsTab === 'models' ? 'active' : ''} onClick={() => setSettingsTab('models')}><Code2 size={15} />模型与权限</button>
             </aside>
@@ -1205,6 +1941,32 @@ export function App() {
                     <div className="settings-kv"><span>实际应用地址</span><strong>{appUrl}</strong></div>
                     <div className="settings-kv"><span>后台配置文件</span><strong>{runtimeConfig?.configPath || '-'}</strong></div>
                   </section>
+                  <section className="settings-block">
+                    <div className="settings-block-title">
+                      <h2>本地健康检查</h2>
+                      <div className="settings-actions">
+                        <span className={`status-pill ${localHealthClass(localHealth?.status)}`}>{localHealthText(localHealth?.status)}</span>
+                        <button type="button" onClick={() => void refreshLocalHealth(false)} disabled={localHealthLoading}>
+                          {localHealthLoading ? '检查中...' : '重新检查'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="local-health-list">
+                      {(localHealth?.items || []).map((item) => (
+                        <div className="local-health-row" key={item.key || item.label}>
+                          <span className={`status-pill ${localHealthClass(item.status)}`}>{localHealthText(item.status)}</span>
+                          <div>
+                            <strong>{item.label || item.key || '-'}</strong>
+                            <p>{item.summary || '-'}</p>
+                            {item.detail ? <code>{item.detail}</code> : null}
+                          </div>
+                        </div>
+                      ))}
+                      {!localHealth?.items?.length ? (
+                        <div className="empty-list">{localHealthLoading ? '正在检查本地配置...' : '暂无健康检查结果。'}</div>
+                      ) : null}
+                    </div>
+                  </section>
                 </>
               ) : null}
               {settingsTab === 'connection' ? (
@@ -1212,21 +1974,40 @@ export function App() {
                   <h1>连接</h1>
                   <section className="settings-block">
                     <h2>服务器地址</h2>
-                    <div className="settings-kv"><span>连接类型</span><strong>{clientConfig?.edition === 'remote' ? '外部服务' : '本地默认'}</strong></div>
-                    <div className="settings-kv"><span>实际运行地址</span><strong>{clientConfig?.activeServerUrl || window.location.origin}</strong></div>
-                    <div className="settings-kv"><span>保存目标地址</span><strong>{clientConfig?.serverUrl || '未保存，使用当前访问地址'}</strong></div>
+                    <div className="settings-kv"><span>连接类型</span><strong>{connectionLabel}</strong></div>
+                    <div className="settings-kv"><span>{isLocalConnection ? '本地服务地址' : '实际运行地址'}</span><strong>{activeConnectionUrl}</strong></div>
+                    {!isLocalConnection ? (
+                      <div className="settings-kv"><span>保存目标地址</span><strong>{clientConfig?.serverUrl || '未保存，使用当前访问地址'}</strong></div>
+                    ) : null}
                     <div className="settings-kv"><span>客户端配置文件</span><strong>{clientConfig?.configExists ? clientConfig.configPath : '未创建，正在使用默认本地地址'}</strong></div>
                     {clientConfig?.startupConnectionError ? (
                       <div className="settings-alert">{clientConfig.startupConnectionError}</div>
                     ) : null}
                     <div className="server-form">
-                      <input value={serverUrlDraft} onChange={(event) => setServerUrlDraft(event.target.value)} placeholder="http://127.0.0.1:17891 或企业服务地址" />
+                      <div className="connection-mode-picker" role="group" aria-label="连接模式">
+                        <button
+                          type="button"
+                          className={connectionModeDraft === 'local' ? 'active' : ''}
+                          onClick={() => selectConnectionMode('local')}
+                        >本地模式</button>
+                        <button
+                          type="button"
+                          className={connectionModeDraft === 'remote' ? 'active' : ''}
+                          onClick={() => selectConnectionMode('remote')}
+                        >远程模式</button>
+                      </div>
+                      <input
+                        value={connectionModeDraft === 'local' ? localRuntimeUrl : serverUrlDraft}
+                        onChange={(event) => setServerUrlDraft(event.target.value)}
+                        disabled={connectionModeDraft === 'local'}
+                        placeholder="http://127.0.0.1:17891 或企业服务地址"
+                      />
                       <div className="server-actions">
                         <button type="button" onClick={() => void saveServerUrl(true)}>保存并切换</button>
-                        <button type="button" onClick={() => void saveServerUrl(false)}>仅保存不检查</button>
-                        <button type="button" onClick={() => void resetServerUrl()}>恢复本地默认地址</button>
                       </div>
-                      <p>本地默认保存地址是 http://127.0.0.1:17891；如果端口被占用，桌面端会启动到后续空闲端口，实际运行地址以上方为准。外部服务地址只作为连接目标保存。</p>
+                      <p>{connectionModeDraft === 'local'
+                        ? '本地服务由桌面端托管，地址不可修改；端口被占用时会自动选择空闲端口。'
+                        : '远程模式只连接填写的 ClawAgent Server，不会启动或重启本地服务。'}</p>
                       {serverConfigMessage ? <p className="settings-message">{serverConfigMessage}</p> : null}
                     </div>
                   </section>
@@ -1242,6 +2023,54 @@ export function App() {
                     ))}
                     <div className="settings-row"><button className="primary-setting-button" onClick={() => void browseWorkspace(false)}>选择项目目录</button></div>
                   </section>
+                </>
+              ) : null}
+              {settingsTab === 'device' ? (
+                <>
+                  <h1>设备</h1>
+                  {isLocalConnection ? (
+                    <section className="settings-block local-mode-block">
+                      <h2>本地模式</h2>
+                      <div className="settings-row">
+                        <div>
+                          <strong>当前连接的是本机服务</strong>
+                          <span>本地桌面端默认信任本机用户，不需要登录或设备配对即可使用。</span>
+                        </div>
+                        <span className="status-pill success">本地</span>
+                      </div>
+                      <div className="settings-kv"><span>实际运行地址</span><strong>{activeConnectionUrl}</strong></div>
+                    </section>
+                  ) : (
+                    <>
+                      <section className="settings-block">
+                        <h2>当前设备</h2>
+                        <div className="settings-kv"><span>设备状态</span><strong>{deviceStatus}</strong></div>
+                        <div className="settings-kv"><span>设备 ID</span><strong>{deviceId || '未配对'}</strong></div>
+                        <div className="settings-kv"><span>设备名称</span><strong>{deviceName || '-'}</strong></div>
+                        <div className="settings-kv"><span>设备类型</span><strong>{deviceType || '-'}</strong></div>
+                        <div className="settings-kv"><span>密钥前缀</span><strong>{deviceSecretPrefix || '-'}</strong></div>
+                        <div className="settings-row">
+                          <div>
+                            <strong>设备权限策略</strong>
+                            <span>远程模式配对后，App 发起的会话和任务会携带 deviceId，由后端合并设备级权限。</span>
+                          </div>
+                          <button type="button" className="primary-setting-button" disabled={!deviceId || !deviceSecret || deviceLoading} onClick={() => void verifyCurrentDevice(true)}>校验设备</button>
+                        </div>
+                      </section>
+                      <section className="settings-block">
+                        <h2>配对设备</h2>
+                        <div className="device-form">
+                          <input value={devicePairingCode} onChange={(event) => setDevicePairingCode(event.target.value)} placeholder="输入管理台生成的设备配对码" />
+                          <div className="server-actions">
+                            <button type="button" disabled={!devicePairingCode.trim() || deviceLoading} onClick={() => void pairCurrentDevice()}>完成配对</button>
+                            <button type="button" disabled={!deviceId || deviceLoading} onClick={() => clearDevicePair('已解除本地设备配对。')}>解除本地配对</button>
+                          </div>
+                          <p>配对码在管理台“设备”页面生成。设备密钥只保存在当前客户端，用于校验设备身份，不会随任务发送给模型或写入任务 metadata。</p>
+                          {deviceMessage ? <p className="settings-message">{deviceMessage}</p> : null}
+                        </div>
+                      </section>
+                    </>
+                  )}
                 </>
               ) : null}
               {settingsTab === 'logs' ? (

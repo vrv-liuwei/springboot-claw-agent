@@ -5,20 +5,28 @@ import com.github.clawagent.core.ToolCall;
 import com.github.clawagent.core.ToolResult;
 
 import java.io.File;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 脚本型 Skill 执行器。
  * 适合把稳定、重复、需要确定性执行的逻辑放进 Skill 的 scripts/ 目录。
  */
 class ScriptSkillExecutor implements SkillExecutor {
+    private final SkillProcessExecutor processExecutor;
+
+    ScriptSkillExecutor() {
+        this(new DefaultSkillProcessExecutor());
+    }
+
+    ScriptSkillExecutor(SkillProcessExecutor processExecutor) {
+        this.processExecutor = processExecutor == null ? new DefaultSkillProcessExecutor() : processExecutor;
+    }
+
     @Override
     public ToolResult execute(SkillExecutionContext context, ToolCall call, AgentContext agentContext) {
         requireShellPermission(context);
@@ -32,22 +40,40 @@ class ScriptSkillExecutor implements SkillExecutor {
             for (String arg : args) {
                 commandLine.add(render(arg, call));
             }
-            ProcessBuilder builder = new ProcessBuilder(commandLine);
-            builder.directory(resolveCwd(context, stringValue(config, "cwd", "")));
-            builder.environment().putAll(resolveEnv(config, call));
-            Process process = builder.start();
-            boolean finished = process.waitFor(Duration.ofSeconds(timeoutSeconds).toMillis(), TimeUnit.MILLISECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                return ToolResult.error("Script Skill 执行超时 timeoutSeconds=" + timeoutSeconds);
+            SkillProcessExecutor.Result result = processExecutor.execute(
+                    commandLine,
+                    resolveCwd(context, stringValue(config, "cwd", "")),
+                    resolveEnv(config, call),
+                    Duration.ofSeconds(timeoutSeconds).toMillis());
+            String output = format(commandLine, result);
+            if (result.timedOut()) {
+                return ToolResult.error("Script Skill 执行超时 timeoutSeconds=" + timeoutSeconds + "\n" + output);
             }
-            String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-            String output = "exitCode=" + process.exitValue() + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr;
-            return process.exitValue() == 0 ? ToolResult.success(output) : ToolResult.error(output);
+            return result.exitCode() == 0 ? ToolResult.success(output) : ToolResult.error(output);
         } catch (Exception e) {
             return ToolResult.error("Script Skill 执行失败：" + e.getMessage());
         }
+    }
+
+    private String format(List<String> commandLine, SkillProcessExecutor.Result result) {
+        return "command: " + String.join(" ", commandLine) + "\n"
+                + "workerIsolated: " + result.workerIsolated() + "\n"
+                + "workerPoolWaitMs: " + result.workerPoolWaitMs() + "\n"
+                + "workerEnvBlockedCount: " + result.workerEnvBlockedCount() + "\n"
+                + "stdoutTruncatedByWorker: " + result.stdoutTruncated() + "\n"
+                + "stderrTruncatedByWorker: " + result.stderrTruncated() + "\n"
+                + "workerResourceLimited: " + result.resourceLimited() + "\n"
+                + "workerResourceLimitReason: " + nullToEmpty(result.resourceLimitReason()) + "\n"
+                + "workerCpuTimeMs: " + result.workerCpuTimeMs() + "\n"
+                + "workerMemoryBytes: " + result.workerMemoryBytes() + "\n"
+                + "exitCode: " + result.exitCode() + "\n"
+                + "elapsedMs: " + result.elapsedMs() + "\n"
+                + "stdout:\n" + nullToEmpty(result.stdout()) + "\n\n"
+                + "stderr:\n" + nullToEmpty(result.stderr());
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private String resolveCommand(SkillExecutionContext context, String command) {

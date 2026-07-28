@@ -125,6 +125,18 @@ class DefaultToolExecutionGuardTest {
     }
 
     @Test
+    void readOnlyEffectiveIsolationBlocksHighRiskWithoutLegacyIsolationField() {
+        AgentTool tool = new StaticRiskTool("high");
+
+        assertThrows(IllegalStateException.class, () -> guard.check(task(Map.of(
+                "agent.kind", "subagent",
+                "agent.isolation.requested", "write",
+                "agent.isolation.effective", "read-only",
+                "toolPermissionMode", "full"
+        )), tool, call()));
+    }
+
+    @Test
     void readOnlySubAgentAllowsLowRiskQueries() {
         AgentTool tool = new StaticRiskTool("low");
 

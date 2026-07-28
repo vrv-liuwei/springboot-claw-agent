@@ -489,10 +489,92 @@ button {
 .sidebar-footer {
   display: grid;
   flex: 0 0 auto;
-  gap: 3px;
+  gap: 6px;
   margin-top: 10px;
   border-top: 1px solid var(--line);
   padding-top: 10px;
+}
+
+.identity-panel {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  padding: 8px;
+}
+
+.identity-main,
+.identity-device {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+}
+
+.identity-panel.remote .identity-main {
+  padding: 5px 6px;
+}
+
+.identity-panel.remote .identity-main:hover,
+.identity-device:hover {
+  background: var(--card-soft);
+}
+
+.identity-main.signed-in {
+  color: var(--blue);
+}
+
+.identity-main span {
+  display: grid;
+  min-width: 0;
+}
+
+.identity-main strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-main em,
+.identity-panel p,
+.identity-device {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.identity-panel p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.identity-warning {
+  color: var(--danger-text) !important;
+}
+
+.identity-device {
+  padding: 5px 6px;
+}
+
+.identity-device span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-device.paired {
+  color: var(--text);
 }
 
 .footer-button {
@@ -632,6 +714,104 @@ button {
   color: var(--text);
 }
 
+.auth-menu {
+  position: relative;
+}
+
+.auth-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 148px;
+}
+
+.auth-chip.signed-in {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  background: color-mix(in srgb, var(--blue) 8%, var(--card));
+}
+
+.auth-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  width: 260px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 12px;
+  box-shadow: 0 18px 52px var(--shadow);
+}
+
+.identity-panel .auth-popover {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(280px, calc(100vw - 24px));
+}
+
+.auth-form,
+.auth-user-card {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-soft);
+  padding: 7px 9px;
+  color: var(--text);
+  outline: none;
+}
+
+.auth-form input:focus {
+  border-color: color-mix(in srgb, var(--blue) 60%, var(--line));
+  background: var(--card);
+}
+
+.auth-form button,
+.auth-user-card button {
+  justify-content: center;
+  width: 100%;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.auth-user-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-user-card span,
+.auth-message {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-message {
+  margin: 9px 0 0;
+  line-height: 1.5;
+}
+
 .conversation-frame {
   position: relative;
   min-height: 0;
@@ -699,6 +879,7 @@ button {
 .starter-context span,
 .context-pills span,
 .context-pills label,
+.context-pills button.plan-toggle,
 .inline-tool-button,
 .attachment-strip span {
   display: inline-flex;
@@ -710,6 +891,16 @@ button {
   padding: 6px 9px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.context-pills button.plan-toggle {
+  cursor: pointer;
+}
+
+.context-pills button.plan-toggle.active {
+  border-color: #22c55e;
+  background: color-mix(in srgb, #22c55e 12%, var(--card));
+  color: #15803d;
 }
 
 .prompt-grid {
@@ -855,10 +1046,14 @@ button {
 
 .assistant-run-header em::after {
   content: "⌄";
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
   color: var(--muted-2);
   font-size: 11px;
-  line-height: 1;
+  line-height: 14px;
   transition: transform 120ms ease;
 }
 
@@ -1167,6 +1362,176 @@ button {
 
 .message-body p {
   margin: 0 0 10px;
+}
+
+.plan-card {
+  display: grid;
+  gap: 10px;
+}
+
+.plan-card header,
+.plan-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-card header div,
+.plan-card header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.plan-card header em,
+.plan-status {
+  border-radius: 999px;
+  background: var(--card-soft);
+  padding: 2px 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.plan-status.status-draft {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.plan-status.status-approved,
+.plan-status.status-running {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.plan-status.status-blocked {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.plan-execution-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-execution-strip span,
+.plan-execution-strip strong {
+  border-radius: 999px;
+  background: var(--card-soft);
+  padding: 2px 7px;
+}
+
+.plan-execution-strip strong {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.plan-section {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: var(--card-soft);
+}
+
+.plan-section-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.plan-card > p,
+.plan-section p,
+.plan-card li p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.plan-card ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-card li {
+  display: grid;
+  grid-template-columns: 13px 1fr;
+  gap: 8px;
+}
+
+.plan-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: #22c55e;
+}
+
+.plan-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.plan-tools code {
+  border-radius: 5px;
+  background: var(--card-soft);
+  padding: 2px 5px;
+}
+
+.plan-revisions {
+  border-radius: 9px;
+  background: var(--card-soft);
+  padding: 8px;
+  color: var(--muted);
+}
+
+.plan-diff-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 8px;
+  margin-top: 7px;
+  font-size: 12px;
+}
+
+.plan-diff-grid code {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.plan-revise {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.plan-revise input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  padding: 8px 10px;
+  color: var(--text);
+}
+
+.plan-card button {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  padding: 7px 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.plan-card button:hover {
+  border-color: var(--line-strong);
 }
 
 .message-body h1,
@@ -1611,6 +1976,100 @@ button {
   font-size: 14px;
 }
 
+.settings-block-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+.settings-block-title h2 {
+  border-bottom: 0;
+  padding: 0;
+}
+
+.settings-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-actions button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 5px 9px;
+  color: var(--text);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  background: var(--card-soft);
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-pill.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-pill.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-pill.danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.local-health-list {
+  display: grid;
+}
+
+.local-health-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.local-health-row:first-child {
+  border-top: 0;
+}
+
+.local-health-row p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.local-health-row code {
+  display: block;
+  max-height: 88px;
+  margin-top: 7px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--card-soft);
+  padding: 7px;
+  color: var(--text);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .settings-row,
 .settings-kv {
   padding: 13px 14px;
@@ -1676,6 +2135,7 @@ button {
 }
 
 .primary-setting-button,
+.device-form button,
 .model-form button,
 .server-form button,
 .wide-open-button {
@@ -1690,6 +2150,7 @@ button {
   color: var(--accent-text);
 }
 
+.device-form,
 .model-form,
 .server-form {
   display: grid;
@@ -1703,10 +2164,39 @@ button {
   flex-wrap: wrap;
 }
 
+.connection-mode-picker {
+  display: inline-flex;
+  width: fit-content;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-soft);
+}
+
+.connection-mode-picker button {
+  min-width: 92px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 12px;
+}
+
+.connection-mode-picker button + button {
+  border-left: 1px solid var(--line);
+}
+
+.connection-mode-picker button.active {
+  background: var(--card);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 .server-actions button {
   flex: 1 1 180px;
 }
 
+.device-form input,
 .model-form input,
 .server-form input {
   min-width: 0;
@@ -1718,6 +2208,13 @@ button {
   outline: none;
 }
 
+.server-form input:disabled {
+  cursor: not-allowed;
+  background: var(--card-soft);
+  color: var(--muted);
+}
+
+.device-form p,
 .server-form p {
   margin: 0;
   color: var(--muted);

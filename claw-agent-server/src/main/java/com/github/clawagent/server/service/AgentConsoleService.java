@@ -38,6 +38,7 @@ import com.github.clawagent.server.service.ProcessManagementService.ProcessView;
 import com.github.clawagent.server.config.ServerAuthProperties;
 import com.github.clawagent.server.dto.ApprovalPolicyView;
 import com.github.clawagent.server.dto.AuthConfigView;
+import com.github.clawagent.server.dto.AuthRolePolicyView;
 import com.github.clawagent.server.dto.CommandRunView;
 import com.github.clawagent.server.dto.CostConfigView;
 import com.github.clawagent.server.dto.CostRuleView;
@@ -137,6 +138,7 @@ public class AgentConsoleService {
     private final ProcessManagementService processManagementService;
     private final ClawAgentProperties properties;
     private final ServerAuthProperties authProperties;
+    private final LocalUserService localUserService;
     private final AgentEventStore eventStore;
     /** Service 内部 JSON 工具，只用于模型在线测试和轻量状态接口。 */
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -151,6 +153,7 @@ public class AgentConsoleService {
                                ProcessManagementService processManagementService,
                                ClawAgentProperties properties,
                                ServerAuthProperties authProperties,
+                               LocalUserService localUserService,
                                @Qualifier("agentEventStore") AgentEventStore eventStore) {
         this.runtime = runtime;
         this.toolRegistry = toolRegistry;
@@ -160,6 +163,7 @@ public class AgentConsoleService {
         this.processManagementService = processManagementService;
         this.properties = properties;
         this.authProperties = authProperties;
+        this.localUserService = localUserService;
         this.eventStore = eventStore;
     }
 
@@ -1537,9 +1541,31 @@ public class AgentConsoleService {
 
     private AuthConfigView toAuthConfigView(ServerAuthProperties authProperties) {
         return new AuthConfigView(
+                authProperties.isRequired(),
                 authProperties.isApiTokenRequired(),
                 List.copyOf(authProperties.getProtectedPathPatterns()),
-                List.copyOf(authProperties.getExcludedPathPatterns()));
+                List.copyOf(authProperties.getExcludedPathPatterns()),
+                localUserService.isInitialized(),
+                localUserService.count(),
+                localUserService.ownerExists(),
+                localUserService.supportedRoles(),
+                toAuthRolePolicyViews(authProperties));
+    }
+
+    private Map<String, AuthRolePolicyView> toAuthRolePolicyViews(ServerAuthProperties authProperties) {
+        Map<String, AuthRolePolicyView> result = new LinkedHashMap<>();
+        authProperties.getRolePolicies().forEach((role, policy) -> {
+            if (role == null || role.isBlank() || policy == null) {
+                return;
+            }
+            // 快照只做脱敏后的结构化展示，真正执行仍由 TaskPolicyEnrichmentService 重新解析配置。
+            result.put(role.trim(), new AuthRolePolicyView(
+                    policy.isEnabled(),
+                    nullToEmpty(policy.getPermissionMode()),
+                    nullToEmpty(policy.getApprovalMode()),
+                    List.copyOf(policy.getApprovedToolIds() == null ? List.of() : policy.getApprovedToolIds())));
+        });
+        return result;
     }
 
     private void applyModelConfigUpdate(ModelConfigUpdate update) {
@@ -1835,7 +1861,7 @@ public class AgentConsoleService {
         policyMetadata.put("approvedToolIds", String.join(",", normalizeConfigList(local.getApprovedToolIds())));
         policyMetadata.put("policy.approval.source", "local.permission-mode/local.approved-tool-ids");
         policyMetadata.put("policy.approval.scope", "local");
-        policyMetadata.put("policy.resolutionOrder", "local>channel>task>agent-isolation>tool-enforcement");
+        policyMetadata.put("policy.resolutionOrder", "local>channel>user>api-token>device>task>agent-role>agent-metadata>agent-isolation>tool-enforcement");
         ApprovalPolicyResolution approvalResolution = ApprovalPolicyResolution.fromTaskMetadata(policyMetadata);
         ApprovalPolicy approvalPolicy = approvalResolution.policy();
         PermissionPolicy permissionPolicy = new PermissionPolicy(
@@ -1871,16 +1897,26 @@ public class AgentConsoleService {
                 new PolicyResolutionLayerView(10, "local", "local", "local.*", "active",
                         "本地配置是当前单用户默认策略来源，提供审批模式、工具白名单、allowed roots 和敏感路径。"),
                 new PolicyResolutionLayerView(20, "channel", "channel", "ChannelDefinition.approvalMode/approvedToolIds", "partial",
-                        "Channel 已保存审批模式和工具白名单；当前主要用于入站任务 metadata，完整合并解释后续增强。"),
-                new PolicyResolutionLayerView(30, "task", "task", "AgentTask.metadata", "active",
+                        "Channel 入站会写入审批模式和工具白名单，进入任务策略合并链路。"),
+                new PolicyResolutionLayerView(30, "user", "user", "LocalUser.metadata", "partial",
+                        "本地用户 metadata 可提供 permissionMode/approvedToolIds，当前先作为轻量用户维度策略。"),
+                new PolicyResolutionLayerView(40, "api-token", "api-token", "ApiToken.permissionMode/approvedToolIds/scopes", "active",
+                        "API Token 可声明调用方权限模式、工具白名单和接口 scope，程序接入会先经过该层收紧。"),
+                new PolicyResolutionLayerView(50, "device", "device", "DeviceRegistry.permissionMode/approvedToolIds", "active",
+                        "已配对 active 设备可绑定审批模式和工具白名单，Web/API/桌面入口会合并该策略。"),
+                new PolicyResolutionLayerView(60, "task", "task", "AgentTask.metadata", "active",
                         "任务 metadata 可携带本次实际审批模式、已批准工具和恢复上下文，优先反映单次任务授权。"),
-                new PolicyResolutionLayerView(40, "agent-isolation", "agent", "agent.isolation", "active",
+                new PolicyResolutionLayerView(70, "agent-role", "agent", "clawagent.agents.policies", "active",
+                        "Agent 角色策略作为配置模板参与合并，适合限制 coder、reviewer 等角色默认工具边界。"),
+                new PolicyResolutionLayerView(80, "agent-metadata", "agent", "agent.permissionMode/agent.approvedToolIds", "active",
+                        "调度层可在单个子 Agent metadata 中声明更严格的工具权限，不能放宽用户或设备策略。"),
+                new PolicyResolutionLayerView(90, "agent-isolation", "agent", "agent.isolation", "active",
                         "只读子 Agent 强制 ask 并清空高危批准，ToolExecutionGuard 会拦截非 low 风险工具。"),
-                new PolicyResolutionLayerView(90, "tool-enforcement", "tool", "execute/filesystem guard", "active",
+                new PolicyResolutionLayerView(100, "tool-enforcement", "tool", "execute/filesystem guard", "active",
                         "底层工具最终执行 allowed roots、敏感路径和风险分类校验，不能被页面策略绕过。")
         );
         List<String> pending = List.of(
-                "Channel/User/Agent 维度策略合并与优先级解释",
+                "企业级角色/组织/通道/设备权限矩阵",
                 "字段级可视化策略编辑表单"
         );
         return new PolicySnapshotView(approval, permission, resolutionOrder, rules, pending);
@@ -1930,6 +1966,7 @@ public class AgentConsoleService {
         items.add(toolHealth());
         items.add(allowedRootsHealth());
         items.add(executePathHealth());
+        items.add(workerJarHealth());
         items.add(defaultShellHealth());
         items.add(permissionModeHealth());
         items.add(sensitivePathHealth());
@@ -2062,6 +2099,45 @@ public class AgentConsoleService {
         }
         return new LocalHealthItemView("execute-path", "执行目录", "ok", "执行目录在允许范围内",
                 "cwd=" + cwd + "；allowedRoots=" + allowedRoots);
+    }
+
+    private LocalHealthItemView workerJarHealth() {
+        ClawAgentProperties.Tool executeTool = properties.getToolkit().getTools().get(ToolkitRegistry.TOOL_EXECUTE);
+        Map<String, String> env = executeTool == null || executeTool.getEnv() == null ? Map.of() : executeTool.getEnv();
+        if (!Boolean.parseBoolean(firstNonBlank(env.get("WORKER_ENABLED"), "false"))) {
+            return new LocalHealthItemView("worker-jar", "隔离 Worker", "ok", "隔离 worker 未启用", "WORKER_ENABLED=false");
+        }
+        String configured = firstNonBlank(env.get("WORKER_JAR"), "claw-agent-worker/target/claw-agent-worker-1.0.0-SNAPSHOT.jar");
+        List<Path> checkedPaths = workerJarCandidates(configured);
+        return checkedPaths.stream()
+                .filter(Files::isRegularFile)
+                .findFirst()
+                .map(path -> new LocalHealthItemView("worker-jar", "隔离 Worker", "ok", "worker jar 可用",
+                        "WORKER_JAR=" + configured + "；resolved=" + path))
+                .orElseGet(() -> new LocalHealthItemView("worker-jar", "隔离 Worker", "error",
+                        "worker jar 不存在",
+                        "WORKER_JAR=" + configured + "；user.dir=" + Path.of("").toAbsolutePath().normalize()
+                                + "；checked=" + checkedPaths
+                                + "；请先执行 mvn -pl claw-agent-worker -DskipTests package，或配置绝对路径"));
+    }
+
+    private List<Path> workerJarCandidates(String configured) {
+        Path configuredPath = Path.of(configured);
+        List<Path> candidates = new ArrayList<>();
+        Path direct = configuredPath.toAbsolutePath().normalize();
+        candidates.add(direct);
+        if (!configuredPath.isAbsolute()) {
+            Path current = Path.of("").toAbsolutePath().normalize();
+            while (current != null) {
+                Path candidate = current.resolve(configuredPath).normalize();
+                if (!candidates.contains(candidate)) {
+                    candidates.add(candidate);
+                }
+                // 本地开发可能从模块目录或 IDE 启动，健康检查和执行器保持同一套向上查找规则。
+                current = current.getParent();
+            }
+        }
+        return candidates;
     }
 
     private LocalHealthItemView allowedRootsHealth() {

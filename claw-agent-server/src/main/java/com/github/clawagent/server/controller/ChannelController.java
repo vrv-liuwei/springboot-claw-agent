@@ -10,12 +10,16 @@ import com.github.clawagent.channel.ChannelConnectivityStatus;
 import com.github.clawagent.channel.ChannelOutboundClient;
 import com.github.clawagent.channel.ChannelSendResult;
 import com.github.clawagent.channel.ChannelStreamClientManager;
+import com.github.clawagent.channel.ChannelStreamReloadResult;
 import com.github.clawagent.channel.ChannelStreamStatus;
 import com.github.clawagent.core.AgentEvent;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.core.ChannelInboundMessage;
+import com.github.clawagent.server.dto.ChannelUserBindingRequest;
+import com.github.clawagent.server.dto.ChannelUserBindingView;
 import com.github.clawagent.server.dto.ChannelOutboundTestRequest;
 import com.github.clawagent.server.dto.ChannelOutboundTestResponse;
+import com.github.clawagent.server.service.ChannelUserBindingService;
 import com.github.clawagent.spring.ClawAgentProperties;
 import com.github.clawagent.spi.AgentEventStore;
 import com.github.clawagent.spi.ChannelRegistry;
@@ -61,12 +65,14 @@ public class ChannelController {
     private final ChannelStreamClientManager channelStreamClientManager;
     private final AgentEventStore eventStore;
     private final ClawAgentProperties properties;
+    private final ChannelUserBindingService channelUserBindingService;
 
     public ChannelController(ChannelRegistry channelRegistry, ChannelAdapterRegistry channelAdapterRegistry, ChannelRouter channelRouter,
                              ChannelOutboundClient channelOutboundClient,
                              ChannelStreamClientManager channelStreamClientManager,
                              @Qualifier("agentEventStore") AgentEventStore eventStore,
-                             ClawAgentProperties properties) {
+                             ClawAgentProperties properties,
+                             ChannelUserBindingService channelUserBindingService) {
         this.channelRegistry = channelRegistry;
         this.channelAdapterRegistry = channelAdapterRegistry;
         this.channelRouter = channelRouter;
@@ -74,6 +80,7 @@ public class ChannelController {
         this.channelStreamClientManager = channelStreamClientManager;
         this.eventStore = eventStore;
         this.properties = properties;
+        this.channelUserBindingService = channelUserBindingService;
     }
 
     /**
@@ -94,14 +101,18 @@ public class ChannelController {
 
     /**
      * 重新扫描外部 Channel adapter jar。
-     * 普通入站、出站和连通性检查会立即使用新注册表；已启动的 Stream 长连接仍按原实例运行。
+     * 普通入站、出站和连通性检查会立即使用新注册表；已启动且支持 stop 的 Stream 会自动重启到新 adapter。
      */
     @PostMapping("/channels/adapters/reload")
     public ChannelAdapterReloadResult reloadChannelAdapters() {
         ChannelAdapterReloadResult result = channelAdapterRegistry.reloadExternalAdapters();
+        ChannelStreamReloadResult streamReload = restartRunningStreamsAfterAdapterChange();
         recordChannelAudit("channel.adapters_reloaded", "Channel adapter 已重新扫描", null, null, Map.of(
                 "candidateCount", String.valueOf(result.candidateCount()),
-                "activeCount", String.valueOf(result.activeCount())));
+                "activeCount", String.valueOf(result.activeCount()),
+                "streamRunningCount", String.valueOf(streamReload.runningCount()),
+                "streamRestartedCount", String.valueOf(streamReload.restartedCount()),
+                "streamFailedCount", String.valueOf(streamReload.failedCount())));
         return result;
     }
 
@@ -129,11 +140,48 @@ public class ChannelController {
             Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
         }
         ChannelAdapterReloadResult result = channelAdapterRegistry.reloadExternalAdapters();
+        ChannelStreamReloadResult streamReload = restartRunningStreamsAfterAdapterChange();
         recordChannelAudit("channel.adapter_uploaded", "Channel adapter jar 已导入", null, null, Map.of(
                 "file", safeFilename,
                 "candidateCount", String.valueOf(result.candidateCount()),
-                "activeCount", String.valueOf(result.activeCount())));
+                "activeCount", String.valueOf(result.activeCount()),
+                "streamRunningCount", String.valueOf(streamReload.runningCount()),
+                "streamRestartedCount", String.valueOf(streamReload.restartedCount()),
+                "streamFailedCount", String.valueOf(streamReload.failedCount())));
         return result;
+    }
+
+    /**
+     * 删除外部 Channel adapter jar。
+     * 删除后立即重新扫描 adapter；已启动且支持 stop 的 Stream 会自动重启到当前生效 adapter。
+     */
+    @DeleteMapping("/channels/adapters/{filename}")
+    public Map<String, Object> deleteChannelAdapter(@PathVariable("filename") String filename) throws IOException {
+        String safeFilename = Path.of(Optional.ofNullable(filename).orElse("")).getFileName().toString();
+        if (safeFilename.isBlank() || !safeFilename.equals(filename) || !safeFilename.toLowerCase().endsWith(".jar")) {
+            throw new IllegalArgumentException("只能删除 adapter 目录下的 .jar 文件。");
+        }
+        Path adapterDir = adapterUploadDirectory();
+        Path target = adapterDir.resolve(safeFilename).normalize();
+        if (!target.startsWith(adapterDir)) {
+            throw new IllegalArgumentException("非法的 adapter 文件名：" + filename);
+        }
+        boolean deleted = Files.deleteIfExists(target);
+        ChannelAdapterReloadResult result = channelAdapterRegistry.reloadExternalAdapters();
+        ChannelStreamReloadResult streamReload = restartRunningStreamsAfterAdapterChange();
+        recordChannelAudit("channel.adapter_deleted", "Channel adapter jar 已删除", null, null, Map.of(
+                "file", safeFilename,
+                "deleted", String.valueOf(deleted),
+                "candidateCount", String.valueOf(result.candidateCount()),
+                "activeCount", String.valueOf(result.activeCount()),
+                "streamRunningCount", String.valueOf(streamReload.runningCount()),
+                "streamRestartedCount", String.valueOf(streamReload.restartedCount()),
+                "streamFailedCount", String.valueOf(streamReload.failedCount())));
+        return Map.of(
+                "file", safeFilename,
+                "deleted", deleted,
+                "reload", result,
+                "streamReload", streamReload);
     }
 
     /**
@@ -192,6 +240,44 @@ public class ChannelController {
         recordChannelAudit("channel.deleted", deleted ? "Channel 配置已删除" : "Channel 删除未命中", channelId, null,
                 Map.of("deleted", String.valueOf(deleted)));
         return Map.of("deleted", deleted, "channelId", channelId);
+    }
+
+    /**
+     * 列出当前 Channel 的外部用户绑定。
+     * 绑定只保存外部用户与本地用户的映射，不保存飞书、钉钉或 DDIO 凭证。
+     */
+    @GetMapping("/channels/{channelId}/users")
+    public List<ChannelUserBindingView> channelUserBindings(@PathVariable("channelId") String channelId) {
+        return requireChannelUserBindingService().list(channelId);
+    }
+
+    /**
+     * 绑定外部 IM 用户到本地用户，让通道入站任务可以复用本地用户权限策略。
+     */
+    @PostMapping("/channels/{channelId}/users")
+    public ChannelUserBindingView bindChannelUser(
+            @PathVariable("channelId") String channelId,
+            @RequestBody ChannelUserBindingRequest request) {
+        ChannelUserBindingView binding = requireChannelUserBindingService().bind(channelId, request);
+        recordChannelAudit("channel.user_bound", "Channel 外部用户已绑定本地用户", channelId, null, Map.of(
+                "externalUserId", binding.externalUserId(),
+                "localUserId", binding.localUserId()));
+        return binding;
+    }
+
+    /**
+     * 解绑外部 IM 用户。这里使用 query 参数承载 externalUserId，避免平台用户 ID 中的特殊字符被路径拆分。
+     */
+    @DeleteMapping("/channels/{channelId}/users")
+    public Map<String, Object> unbindChannelUser(
+            @PathVariable("channelId") String channelId,
+            @RequestParam("externalUserId") String externalUserId) {
+        boolean unbound = requireChannelUserBindingService().unbind(channelId, externalUserId);
+        recordChannelAudit("channel.user_unbound", unbound ? "Channel 外部用户已解绑" : "Channel 外部用户解绑未命中",
+                channelId, null, Map.of(
+                        "externalUserId", stringValue(externalUserId),
+                        "unbound", String.valueOf(unbound)));
+        return Map.of("channelId", channelId, "externalUserId", stringValue(externalUserId), "unbound", unbound);
     }
 
     /**
@@ -379,6 +465,21 @@ public class ChannelController {
             return Optional.ofNullable(resolved.getParent()).orElse(Path.of(".")).toAbsolutePath().normalize();
         }
         return resolved.toAbsolutePath().normalize();
+    }
+
+    private ChannelStreamReloadResult restartRunningStreamsAfterAdapterChange() {
+        if (channelStreamClientManager == null || channelRegistry == null) {
+            return ChannelStreamReloadResult.empty();
+        }
+        // 外部 adapter 变更后，长连接必须重新绑定到当前生效 adapter；不支持 stop 的 SDK 会保留诊断状态。
+        return channelStreamClientManager.restartRunningStreams(channelRegistry.list());
+    }
+
+    private ChannelUserBindingService requireChannelUserBindingService() {
+        if (channelUserBindingService == null) {
+            throw new IllegalStateException("Channel 用户绑定服务未启用");
+        }
+        return channelUserBindingService;
     }
 
     private Path resolveRuntimePath(String configuredPath) {

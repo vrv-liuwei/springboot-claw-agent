@@ -8,11 +8,13 @@ import type {
   ApiTokenCreateRequest,
   ApiTokenCreateResponse,
   ApiTokenView,
+  AuthSetupView,
   AttachmentParseResponse,
   AutomationDefinition,
   AutomationRun,
   AutomationUpsertRequest,
   ChannelDefinition,
+  ChannelAdapterDeleteResult,
   ChannelAdapterDescriptor,
   ChannelAdapterReloadResult,
   ChannelConnectivityStatus,
@@ -21,10 +23,29 @@ import type {
   ChannelOutboundTestRequest,
   ChannelOutboundTestResponse,
   ChannelStreamStatus,
+  ChannelUserBindingRequest,
+  ChannelUserBindingView,
   DeviceRegisterRequest,
+  DevicePairRequest,
+  DevicePairResponse,
+  DevicePairingCreateRequest,
+  DevicePairingCodeResponse,
+  DevicePermissionUpdateRequest,
+  DeviceSecretRotateResponse,
+  DeviceSecretVerifyRequest,
+  DeviceSecretVerifyResponse,
+  DeviceUserBindRequest,
   DeviceView,
   HealthStatus,
   LocalHealthView,
+  LocalUserCreateRequest,
+  LocalUserCurrentResponse,
+  LocalUserLoginRequest,
+  LocalUserLoginResponse,
+  LocalUserPasswordChangeRequest,
+  LocalUserPermissionUpdateRequest,
+  LocalUserSessionView,
+  LocalUserView,
   FileChangeView,
   FileReviewView,
   DevelopmentTaskSummary,
@@ -43,7 +64,15 @@ import type {
   ModelApiTestResponse,
   ModelConfigUpsertRequest,
   ModelConfigUpdate,
+  PlanCreateRequest,
+  PlanDraft,
+  PlanReviseRequest,
+  PlanRevisionSummaryView,
+  PlanRunRequest,
+  PlanTemplateView,
   PolicyConfigUpdate,
+  PolicyResolveRequest,
+  PolicyResolveView,
   ResumeStateView,
   RuntimeConfigSnapshot,
   SessionContextClearRequest,
@@ -54,6 +83,9 @@ import type {
   SkillImportRequest,
   SkillInstallRequest,
   SkillRegistration,
+  SubAgentBatchTaskRequest,
+  SubAgentBatchTaskResponse,
+  SubAgentPlanDispatchRequest,
   SubAgentTaskRequest,
   SubAgentTaskResponse,
   SystemLogLine,
@@ -68,14 +100,24 @@ import type {
 type RequestOptions = {
   method?: string;
   body?: unknown;
+  headers?: Record<string, string>;
 };
+
+const AUTH_SESSION_STORAGE_KEY = 'clawagent.auth.sessionToken';
+
+function authHeaders(sessionToken?: string): Record<string, string> {
+  const token = (sessionToken || window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY) || '').trim();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await fetch(path, {
     method: options.method || 'GET',
     headers: {
       Accept: 'application/json',
+      ...authHeaders(),
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
@@ -95,7 +137,7 @@ export const api = {
   uploadChannelAdapter: (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    return fetch('/api/v1/channels/adapters/upload', { method: 'POST', body: form }).then(async (response) => {
+    return fetch('/api/v1/channels/adapters/upload', { method: 'POST', headers: authHeaders(), body: form }).then(async (response) => {
       if (!response.ok) {
         const body = await response.text();
         throw new Error(`${response.status} ${response.statusText}: ${body || 'empty body'}`);
@@ -103,6 +145,8 @@ export const api = {
       return response.json() as Promise<ChannelAdapterReloadResult>;
     });
   },
+  deleteChannelAdapter: (filename: string) =>
+    requestJson<ChannelAdapterDeleteResult>(`/api/v1/channels/adapters/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
   channel: (channelId: string) =>
     requestJson<ChannelDefinition>(`/api/v1/channels/${encodeURIComponent(channelId)}`),
   saveChannel: (body: ChannelDefinition) =>
@@ -119,6 +163,15 @@ export const api = {
     requestJson<ChannelStreamStatus>(`/api/v1/channels/${encodeURIComponent(channelId)}/stream/start`, { method: 'POST' }),
   stopChannelStream: (channelId: string) =>
     requestJson<ChannelStreamStatus>(`/api/v1/channels/${encodeURIComponent(channelId)}/stream/stop`, { method: 'POST' }),
+  channelUserBindings: (channelId: string) =>
+    requestJson<ChannelUserBindingView[]>(`/api/v1/channels/${encodeURIComponent(channelId)}/users`),
+  bindChannelUser: (channelId: string, body: ChannelUserBindingRequest) =>
+    requestJson<ChannelUserBindingView>(`/api/v1/channels/${encodeURIComponent(channelId)}/users`, { method: 'POST', body }),
+  unbindChannelUser: (channelId: string, externalUserId: string) =>
+    requestJson<{ channelId: string; externalUserId: string; unbound: boolean }>(
+      `/api/v1/channels/${encodeURIComponent(channelId)}/users?externalUserId=${encodeURIComponent(externalUserId)}`,
+      { method: 'DELETE' },
+    ),
   submitChannelMessage: (body: ChannelInboundMessage) =>
     requestJson<ChannelInboundResult>('/api/v1/channels/inbound', { method: 'POST', body }),
   testChannelOutbound: (channelId: string, body: ChannelOutboundTestRequest) =>
@@ -126,13 +179,51 @@ export const api = {
   apiTokens: () => requestJson<ApiTokenView[]>('/api/v1/auth/tokens'),
   createApiToken: (body: ApiTokenCreateRequest) =>
     requestJson<ApiTokenCreateResponse>('/api/v1/auth/tokens', { method: 'POST', body }),
-  revokeApiToken: (tokenId: string) =>
+  deleteApiToken: (tokenId: string) =>
     requestJson<ApiTokenView>(`/api/v1/auth/tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }),
+  loginLocalUser: (body: LocalUserLoginRequest) =>
+    requestJson<LocalUserLoginResponse>('/api/v1/auth/login', { method: 'POST', body }),
+  currentLocalUser: (sessionToken: string) =>
+    requestJson<LocalUserCurrentResponse>('/api/v1/auth/me', {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    }),
+  logoutLocalUser: (sessionToken: string) =>
+    requestJson<{ success: boolean }>('/api/v1/auth/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    }),
+  authSetupStatus: () => requestJson<AuthSetupView>('/api/v1/auth/setup'),
+  setupOwner: (body: LocalUserCreateRequest) =>
+    requestJson<LocalUserView>('/api/v1/auth/setup', { method: 'POST', body }),
+  localUsers: () => requestJson<LocalUserView[]>('/api/v1/auth/users'),
+  createLocalUser: (body: LocalUserCreateRequest) =>
+    requestJson<LocalUserView>('/api/v1/auth/users', { method: 'POST', body }),
+  changeLocalUserPassword: (userId: string, body: LocalUserPasswordChangeRequest) =>
+    requestJson<LocalUserView>(`/api/v1/auth/users/${encodeURIComponent(userId)}/password`, { method: 'POST', body }),
+  updateLocalUserPermissions: (userId: string, body: LocalUserPermissionUpdateRequest) =>
+    requestJson<LocalUserView>(`/api/v1/auth/users/${encodeURIComponent(userId)}/permissions`, { method: 'POST', body }),
+  disableLocalUser: (userId: string) =>
+    requestJson<LocalUserView>(`/api/v1/auth/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+  localUserSessions: () => requestJson<LocalUserSessionView[]>('/api/v1/auth/sessions'),
+  revokeLocalUserSession: (sessionId: string) =>
+    requestJson<LocalUserSessionView>(`/api/v1/auth/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
   devices: () => requestJson<DeviceView[]>('/api/v1/auth/devices'),
   registerDevice: (body: DeviceRegisterRequest) =>
     requestJson<DeviceView>('/api/v1/auth/devices', { method: 'POST', body }),
+  createDevicePairingCode: (body: DevicePairingCreateRequest) =>
+    requestJson<DevicePairingCodeResponse>('/api/v1/auth/devices/pairing-codes', { method: 'POST', body }),
+  pairDevice: (body: DevicePairRequest) =>
+    requestJson<DevicePairResponse>('/api/v1/auth/devices/pair', { method: 'POST', body }),
   heartbeatDevice: (deviceId: string) =>
     requestJson<DeviceView>(`/api/v1/auth/devices/${encodeURIComponent(deviceId)}/heartbeat`, { method: 'POST' }),
+  verifyDeviceSecret: (deviceId: string, body: DeviceSecretVerifyRequest) =>
+    requestJson<DeviceSecretVerifyResponse>(`/api/v1/auth/devices/${encodeURIComponent(deviceId)}/verify`, { method: 'POST', body }),
+  rotateDeviceSecret: (deviceId: string) =>
+    requestJson<DeviceSecretRotateResponse>(`/api/v1/auth/devices/${encodeURIComponent(deviceId)}/secret/rotate`, { method: 'POST' }),
+  bindDeviceUser: (deviceId: string, body: DeviceUserBindRequest) =>
+    requestJson<DeviceView>(`/api/v1/auth/devices/${encodeURIComponent(deviceId)}/user`, { method: 'POST', body }),
+  updateDevicePermissions: (deviceId: string, body: DevicePermissionUpdateRequest) =>
+    requestJson<DeviceView>(`/api/v1/auth/devices/${encodeURIComponent(deviceId)}/permissions`, { method: 'POST', body }),
   revokeDevice: (deviceId: string) =>
     requestJson<DeviceView>(`/api/v1/auth/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
   createSessionId: () => requestJson<{ sessionId: string }>('/api/v1/sessions/id', { method: 'POST' }),
@@ -142,10 +233,10 @@ export const api = {
     channelId: string;
     userId: string;
     metadata: Record<string, unknown>;
-  }, signal?: AbortSignal) =>
+  }, signal?: AbortSignal, sessionToken?: string) =>
     fetch('/api/v1/tasks/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders(sessionToken) },
       body: JSON.stringify(body),
       signal,
     }),
@@ -154,10 +245,34 @@ export const api = {
     channelId: string;
     userId: string;
     metadata: Record<string, unknown>;
-  }, signal?: AbortSignal) =>
+  }, signal?: AbortSignal, sessionToken?: string) =>
     fetch(`/api/v1/tasks/${encodeURIComponent(taskId)}/resume/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders(sessionToken) },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  plans: (sessionId?: string, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (sessionId) params.set('sessionId', sessionId);
+    return requestJson<PlanDraft[]>(`/api/v1/plans?${params.toString()}`);
+  },
+  planTemplates: () => requestJson<PlanTemplateView[]>('/api/v1/plans/templates'),
+  plan: (planId: string) => requestJson<PlanDraft>(`/api/v1/plans/${encodeURIComponent(planId)}`),
+  planRevisionSummary: (planId: string) =>
+    requestJson<PlanRevisionSummaryView | null>(`/api/v1/plans/${encodeURIComponent(planId)}/revision-summary`),
+  createPlan: (body: PlanCreateRequest) =>
+    requestJson<PlanDraft>('/api/v1/plans', { method: 'POST', body }),
+  revisePlan: (planId: string, body: PlanReviseRequest) =>
+    requestJson<PlanDraft>(`/api/v1/plans/${encodeURIComponent(planId)}/revise`, { method: 'POST', body }),
+  approvePlan: (planId: string) =>
+    requestJson<PlanDraft>(`/api/v1/plans/${encodeURIComponent(planId)}/approve`, { method: 'POST' }),
+  cancelPlan: (planId: string) =>
+    requestJson<PlanDraft>(`/api/v1/plans/${encodeURIComponent(planId)}/cancel`, { method: 'POST' }),
+  runPlanStream: (planId: string, body: PlanRunRequest, signal?: AbortSignal, sessionToken?: string) =>
+    fetch(`/api/v1/plans/${encodeURIComponent(planId)}/run/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(sessionToken) },
       body: JSON.stringify(body),
       signal,
     }),
@@ -330,6 +445,10 @@ export const api = {
     requestJson<AgentOrchestrationGraphView>(`/api/v1/agents/${encodeURIComponent(taskId)}/graph?depth=${depth}`),
   createSubAgentTask: (taskId: string, body: SubAgentTaskRequest) =>
     requestJson<SubAgentTaskResponse>(`/api/v1/agents/${encodeURIComponent(taskId)}/subtasks`, { method: 'POST', body }),
+  createSubAgentTasks: (taskId: string, body: SubAgentBatchTaskRequest) =>
+    requestJson<SubAgentBatchTaskResponse>(`/api/v1/agents/${encodeURIComponent(taskId)}/subtasks/batch`, { method: 'POST', body }),
+  createSubAgentTasksFromPlan: (taskId: string, body: SubAgentPlanDispatchRequest) =>
+    requestJson<SubAgentBatchTaskResponse>(`/api/v1/agents/${encodeURIComponent(taskId)}/subtasks/from-plan`, { method: 'POST', body }),
   fileReview: (taskId: string, change: FileChangeView) => {
     const params = new URLSearchParams({
       stepId: change.stepId || '',
@@ -432,6 +551,13 @@ export const api = {
     type?: string;
     sessionId?: string;
     taskId?: string;
+    userId?: string;
+    channelId?: string;
+    toolId?: string;
+    riskLevel?: string;
+    detailKey?: string;
+    detailValue?: string;
+    q?: string;
     limit?: number;
   }) => {
     const search = new URLSearchParams();
@@ -510,6 +636,8 @@ export const api = {
     requestJson<RuntimeConfigSnapshot>('/api/v1/config/model', { method: 'PUT', body }),
   savePolicyConfig: (body: PolicyConfigUpdate) =>
     requestJson<RuntimeConfigSnapshot>('/api/v1/config/policy', { method: 'PUT', body }),
+  resolvePolicy: (body: PolicyResolveRequest) =>
+    requestJson<PolicyResolveView>('/api/v1/config/policy/resolve', { method: 'POST', body }),
   saveModelDefinition: (body: ModelConfigUpsertRequest) =>
     requestJson<RuntimeConfigSnapshot>('/api/v1/config/models', { method: 'POST', body }),
   testModelApi: (body: ModelApiTestRequest) =>

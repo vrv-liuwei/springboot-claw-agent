@@ -1,9 +1,13 @@
 package com.github.clawagent.server.controller;
 
+import com.github.clawagent.server.support.TestIdentityStores;
+
 import com.github.clawagent.channel.ChannelAdapterRegistry;
 import com.github.clawagent.channel.ChannelAdapterReloadResult;
 import com.github.clawagent.channel.ChannelRuntimeAdapter;
 import com.github.clawagent.core.ChannelDefinition;
+import com.github.clawagent.server.dto.ChannelUserBindingRequest;
+import com.github.clawagent.server.service.ChannelUserBindingService;
 import com.github.clawagent.spring.ClawAgentProperties;
 import com.github.clawagent.spi.ChannelRegistry;
 import org.junit.jupiter.api.Test;
@@ -33,7 +37,7 @@ class ChannelControllerTest {
         ChannelDefinition builtin = channel("feishu", "feishu", false, Map.of("builtin", "true"));
         ChannelDefinition yamlAccount = channel("feishu-main", "feishu", true, Map.of("channel.isDefaultAccount", "true"));
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of(builtin, yamlAccount)),
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         ChannelDefinition resolved = controller.resolveInboundChannel("feishu").orElseThrow();
 
@@ -45,7 +49,7 @@ class ChannelControllerTest {
         ChannelDefinition builtin = channel("dingtalk", "dingtalk", false, Map.of("builtin", "true"));
         ChannelDefinition yamlAccount = channel("dingtalk-main", "dingtalk", true, Map.of("channel.accountId", "main"));
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of(builtin, yamlAccount)),
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         ChannelDefinition resolved = controller.resolveInboundChannel("dingtalk").orElseThrow();
 
@@ -57,7 +61,7 @@ class ChannelControllerTest {
         ChannelDefinition exact = channel("feishu", "feishu", true, Map.of("builtin", "true"));
         ChannelDefinition yamlAccount = channel("feishu-main", "feishu", true, Map.of("channel.isDefaultAccount", "true"));
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of(exact, yamlAccount)),
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         ChannelDefinition resolved = controller.resolveInboundChannel("feishu").orElseThrow();
 
@@ -67,20 +71,20 @@ class ChannelControllerTest {
     @Test
     void channelAdaptersReturnsRuntimeAdapterDiagnostics() {
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
-                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, null);
+                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, null, null);
 
         var adapters = controller.channelAdapters();
 
         assertEquals(1, adapters.size());
         assertEquals("testim", adapters.get(0).type());
-        assertEquals("custom", adapters.get(0).source());
+        assertEquals("spring-bean", adapters.get(0).source());
         assertTrue(adapters.get(0).active());
     }
 
     @Test
     void reloadChannelAdaptersReturnsRefreshedDiagnostics() {
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
-                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, null);
+                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, null, null);
 
         var result = controller.reloadChannelAdapters();
 
@@ -94,7 +98,7 @@ class ChannelControllerTest {
         ClawAgentProperties properties = new ClawAgentProperties();
         properties.getChannels().setAdapterPath(List.of(tempDir.toString()));
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
-                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, properties);
+                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, properties, null);
 
         ChannelAdapterReloadResult result = controller.uploadChannelAdapter(new TestMultipartFile(
                 "custom-adapter.jar", new byte[]{0x50, 0x4b, 0x03, 0x04}));
@@ -108,10 +112,55 @@ class ChannelControllerTest {
         ClawAgentProperties properties = new ClawAgentProperties();
         properties.getChannels().setAdapterPath(List.of(tempDir.toString()));
         ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
-                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, properties);
+                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, properties, null);
 
         assertThrows(IllegalArgumentException.class, () -> controller.uploadChannelAdapter(
                 new TestMultipartFile("custom-adapter.txt", new byte[]{1})));
+    }
+
+    @Test
+    void deleteChannelAdapterRemovesJarAndReloadsAdapters() throws Exception {
+        ClawAgentProperties properties = new ClawAgentProperties();
+        properties.getChannels().setAdapterPath(List.of(tempDir.toString()));
+        Path adapterJar = tempDir.resolve("custom-adapter.jar");
+        Files.write(adapterJar, new byte[]{0x50, 0x4b, 0x03, 0x04});
+        ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
+                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, properties, null);
+
+        Map<String, Object> result = controller.deleteChannelAdapter("custom-adapter.jar");
+
+        assertEquals("custom-adapter.jar", result.get("file"));
+        assertEquals(Boolean.TRUE, result.get("deleted"));
+        assertTrue(Files.notExists(adapterJar));
+    }
+
+    @Test
+    void deleteChannelAdapterRejectsPathTraversalAndNonJarFile() {
+        ClawAgentProperties properties = new ClawAgentProperties();
+        properties.getChannels().setAdapterPath(List.of(tempDir.toString()));
+        ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
+                new ChannelAdapterRegistry(List.of(new TestRuntimeAdapter())), null, null, null, null, properties, null);
+
+        // 删除接口只能操作 adapter 目录下的 jar，避免通过文件名越权删除其他路径。
+        assertThrows(IllegalArgumentException.class, () -> controller.deleteChannelAdapter("..\\custom-adapter.jar"));
+        assertThrows(IllegalArgumentException.class, () -> controller.deleteChannelAdapter("custom-adapter.txt"));
+    }
+
+    @Test
+    void channelUserBindingEndpointsPersistAndUnbindExternalUser() {
+        ChannelUserBindingService bindingService = TestIdentityStores.channelUserBindingService(tempDir);
+        ChannelController controller = new ChannelController(new FixedChannelRegistry(List.of()),
+                null, null, null, null, null, null, bindingService);
+
+        var binding = controller.bindChannelUser("feishu-main", new ChannelUserBindingRequest(
+                "ou_123", "张三", "local-1", "admin", Map.of("source", "test")));
+
+        assertEquals("feishu-main", binding.channelId());
+        assertEquals("ou_123", binding.externalUserId());
+        assertEquals("local-1", binding.localUserId());
+        assertEquals(1, controller.channelUserBindings("feishu-main").size());
+        assertTrue((Boolean) controller.unbindChannelUser("feishu-main", "ou_123").get("unbound"));
+        assertEquals("unbound", controller.channelUserBindings("feishu-main").get(0).status());
     }
 
     private static ChannelDefinition channel(String id, String type, boolean enabled, Map<String, String> metadata) {

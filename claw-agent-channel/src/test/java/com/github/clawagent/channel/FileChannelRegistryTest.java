@@ -1,5 +1,7 @@
 package com.github.clawagent.channel;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.clawagent.core.ChannelDefinition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -16,6 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FileChannelRegistryTest {
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @TempDir
     Path tempDir;
 
@@ -43,8 +47,6 @@ class FileChannelRegistryTest {
                 "  工作群  ",
                 "",
                 true,
-                true,
-                false,
                 "invalid-mode",
                 List.of(" builtin.execute.command ", "", "builtin.execute.command"),
                 "",
@@ -238,5 +240,86 @@ class FileChannelRegistryTest {
         assertEquals("[\"*\"]", show.metadata().get("allowFrom"));
         assertTrue(prod.enabled());
         assertEquals("http://127.0.0.1:19790", prod.metadata().get("baseUrl"));
+    }
+
+    @Test
+    void savePreservesOpenClawGroupedAccounts() throws Exception {
+        Path storePath = tempDir.resolve("channels.json");
+        Files.writeString(storePath, """
+                {
+                  "channels": {
+                    "feishu": {
+                      "defaultAccount": "main",
+                      "accounts": {
+                        "main": {
+                          "name": "主助手",
+                          "enabled": true,
+                          "appId": "cli_main"
+                        }
+                      }
+                    }
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        FileChannelRegistry registry = new FileChannelRegistry(storePath);
+        registry.save(new ChannelDefinition(
+                "feishu-coder",
+                "代码助手",
+                "feishu",
+                true,
+                "auto",
+                List.of("builtin.time"),
+                "/api/v1/channels/feishu-coder/inbound",
+                Map.of(
+                        "channel.configStyle", "accounts",
+                        "channel.accountId", "coder",
+                        "channel.defaultAccount", "main",
+                        "appId", "cli_coder",
+                        "allowFrom", "[\"*\"]"),
+                null,
+                null));
+
+        JsonNode root = objectMapper.readTree(Files.readString(storePath, StandardCharsets.UTF_8));
+        assertTrue(root.path("channels").path("feishu").path("accounts").isObject());
+        assertEquals("main", root.path("channels").path("feishu").path("defaultAccount").asText());
+        assertEquals("cli_coder", root.path("channels").path("feishu").path("accounts").path("coder").path("appId").asText());
+        assertTrue(root.path("channels").path("feishu").path("accounts").path("coder").path("allowFrom").isArray());
+        assertTrue(new FileChannelRegistry(storePath).find("feishu-coder").isPresent());
+    }
+
+    @Test
+    void deletePreservesOpenClawGroupedAccounts() throws Exception {
+        Path storePath = tempDir.resolve("channels.json");
+        Files.writeString(storePath, """
+                {
+                  "channels": {
+                    "feishu": {
+                      "defaultAccount": "main",
+                      "accounts": {
+                        "main": {
+                          "name": "主助手",
+                          "enabled": true,
+                          "appId": "cli_main"
+                        },
+                        "coder": {
+                          "name": "代码助手",
+                          "enabled": true,
+                          "appId": "cli_coder"
+                        }
+                      }
+                    }
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        FileChannelRegistry registry = new FileChannelRegistry(storePath);
+        assertTrue(registry.delete("feishu-coder"));
+
+        JsonNode root = objectMapper.readTree(Files.readString(storePath, StandardCharsets.UTF_8));
+        assertTrue(root.path("channels").path("feishu").path("accounts").isObject());
+        assertTrue(root.path("channels").path("feishu").path("accounts").has("main"));
+        assertFalse(root.path("channels").path("feishu").path("accounts").has("coder"));
+        assertFalse(new FileChannelRegistry(storePath).find("feishu-coder").isPresent());
     }
 }

@@ -9,6 +9,7 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -29,6 +30,7 @@ import com.github.clawagent.channel.ChannelRuntimeAdapter;
 import com.github.clawagent.channel.ChannelSessionMapper;
 import com.github.clawagent.channel.ChannelStreamClientManager;
 import com.github.clawagent.channel.ChannelStreamStatus;
+import com.github.clawagent.channel.ChannelUserBindingResolver;
 import com.github.clawagent.channel.FileChannelRegistry;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.mcp.FileMcpRegistry;
@@ -48,11 +50,17 @@ import com.github.clawagent.model.SpringAiChatClientModelClient;
 import com.github.clawagent.model.StreamingLlmResponseGenerator;
 import com.github.clawagent.model.ToolCallingAgentPlanner;
 import com.github.clawagent.persistence.sqlite.SqliteTaskStore;
+import com.github.clawagent.persistence.sqlite.SqliteApiTokenStore;
+import com.github.clawagent.persistence.sqlite.SqliteChannelUserBindingStore;
+import com.github.clawagent.persistence.sqlite.SqliteDeviceStore;
+import com.github.clawagent.persistence.sqlite.SqliteLocalUserSessionStore;
+import com.github.clawagent.persistence.sqlite.SqliteLocalUserStore;
 import com.github.clawagent.runtime.AgentRuntime;
 import com.github.clawagent.runtime.DefaultAgentRuntime;
 import com.github.clawagent.runtime.DefaultMemoryCandidateProcessor;
 import com.github.clawagent.runtime.InMemoryAgentEventStore;
 import com.github.clawagent.runtime.InMemoryAutomationStore;
+import com.github.clawagent.runtime.InMemoryPlanStore;
 import com.github.clawagent.runtime.InMemorySessionMessageStore;
 import com.github.clawagent.runtime.InMemorySessionStore;
 import com.github.clawagent.runtime.InMemoryTaskStore;
@@ -66,6 +74,7 @@ import com.github.clawagent.runtime.ToolOutputResponseGenerator;
 import com.github.clawagent.security.DefaultToolExecutionGuard;
 import com.github.clawagent.skill.ExternalSkillInstallTool;
 import com.github.clawagent.skill.FileSkillRegistry;
+import com.github.clawagent.skill.SkillProcessExecutor;
 import com.github.clawagent.skill.SkillRegistry;
 import com.github.clawagent.spi.AgentCallback;
 import com.github.clawagent.spi.AgentEventStore;
@@ -74,13 +83,18 @@ import com.github.clawagent.spi.AgentResponseGenerator;
 import com.github.clawagent.spi.AgentRuntimeInterceptor;
 import com.github.clawagent.spi.AgentTool;
 import com.github.clawagent.spi.AgentToolRegistry;
+import com.github.clawagent.spi.ApiTokenStore;
 import com.github.clawagent.spi.AutomationStore;
 import com.github.clawagent.spi.ChatOptions;
 import com.github.clawagent.spi.ChannelRegistry;
+import com.github.clawagent.spi.ChannelUserBindingStore;
+import com.github.clawagent.spi.DeviceStore;
 import com.github.clawagent.spi.EmbeddingClient;
 import com.github.clawagent.spi.EmbeddingOptions;
 import com.github.clawagent.spi.FileStorageProvider;
 import com.github.clawagent.spi.KnowledgeProvider;
+import com.github.clawagent.spi.LocalUserSessionStore;
+import com.github.clawagent.spi.LocalUserStore;
 import com.github.clawagent.spi.MemoryCandidateProcessor;
 import com.github.clawagent.spi.MemoryPromoter;
 import com.github.clawagent.spi.MemoryContextBuilder;
@@ -88,6 +102,7 @@ import com.github.clawagent.spi.MemoryExtractor;
 import com.github.clawagent.spi.MemoryIntentClassifier;
 import com.github.clawagent.spi.MemoryProvider;
 import com.github.clawagent.spi.ModelClient;
+import com.github.clawagent.spi.PlanStore;
 import com.github.clawagent.spi.SessionMessageStore;
 import com.github.clawagent.spi.SessionStore;
 import com.github.clawagent.spi.SessionSummarizer;
@@ -98,6 +113,8 @@ import com.github.clawagent.spring.automation.AutomationSchedulerService;
 import com.github.clawagent.toolkit.ToolkitProperties;
 import com.github.clawagent.toolkit.ToolkitRegistry;
 import com.github.clawagent.toolkit.ToolkitToolProperties;
+import com.github.clawagent.toolkit.execute.ExecuteToolkitProperties;
+import com.github.clawagent.toolkit.execute.WorkerCommandExecutor;
 
 /**
  * Spring Boot 自动配置入口。
@@ -140,6 +157,43 @@ public class ClawAgentAutoConfiguration {
     public EmbeddingClient embeddingClient(ClawAgentProperties properties) {
         ClawAgentProperties.Embedding config = properties.getMemory().getVector().getEmbedding();
         return new OpenAiCompatibleEmbeddingClient(config.getBaseUrl(), resolveApiKey(config.getApiKey(), config.getApiKeyEnv()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public com.github.clawagent.intent.PendingActionService pendingActionService() {
+        return new com.github.clawagent.intent.InMemoryPendingActionService();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public List<com.github.clawagent.intent.IntentDefinition> intentDefinitions(ClawAgentProperties properties) {
+        return new com.github.clawagent.intent.IntentCatalogLoader().loadDefaultCatalog(
+                properties.getIntent().getThreshold());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public com.github.clawagent.intent.IntentHandlerRegistry intentHandlerRegistry(Map<String, com.github.clawagent.intent.IntentHandler> handlers) {
+        return new com.github.clawagent.intent.IntentHandlerRegistry(handlers);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public com.github.clawagent.intent.IntentRoutingService intentRoutingService(
+            List<com.github.clawagent.intent.IntentDefinition> definitions,
+            com.github.clawagent.intent.IntentHandlerRegistry handlerRegistry,
+            com.github.clawagent.intent.PendingActionService pendingActionService,
+            EmbeddingClient embeddingClient,
+            EmbeddingOptions embeddingOptions,
+            ClawAgentProperties properties) {
+        return new com.github.clawagent.intent.IntentRoutingService(
+                definitions,
+                handlerRegistry,
+                pendingActionService,
+                embeddingClient,
+                embeddingOptions,
+                properties.getIntent().isEnabled());
     }
 
     @Bean
@@ -278,6 +332,36 @@ public class ClawAgentAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public ApiTokenStore apiTokenStore(ClawAgentProperties properties) {
+        return new SqliteApiTokenStore(resolveRuntimePath(properties.getPersistence().getSqlite().getPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public LocalUserStore localUserStore(ClawAgentProperties properties) {
+        return new SqliteLocalUserStore(resolveRuntimePath(properties.getPersistence().getSqlite().getPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public LocalUserSessionStore localUserSessionStore(ClawAgentProperties properties) {
+        return new SqliteLocalUserSessionStore(resolveRuntimePath(properties.getPersistence().getSqlite().getPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public DeviceStore deviceStore(ClawAgentProperties properties) {
+        return new SqliteDeviceStore(resolveRuntimePath(properties.getPersistence().getSqlite().getPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ChannelUserBindingStore channelUserBindingStore(ClawAgentProperties properties) {
+        return new SqliteChannelUserBindingStore(resolveRuntimePath(properties.getPersistence().getSqlite().getPath()));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public SessionStore sessionStore(@Qualifier("taskStore") TaskStore taskStore) {
         if (taskStore instanceof SessionStore sessionStore) {
             return sessionStore;
@@ -310,6 +394,15 @@ public class ClawAgentAutoConfiguration {
             return todoStore;
         }
         return new InMemoryTodoStore();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public PlanStore planStore(@Qualifier("taskStore") TaskStore taskStore) {
+        if (taskStore instanceof PlanStore planStore) {
+            return planStore;
+        }
+        return new InMemoryPlanStore();
     }
 
     @Bean
@@ -383,7 +476,11 @@ public class ClawAgentAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public SkillRegistry skillRegistry(ClawAgentProperties properties, AgentToolRegistry toolRegistry) {
-        return new FileSkillRegistry(resolveRuntimePaths(properties.getSkills().getPath()), toolRegistry);
+        ExecuteToolkitProperties executeProperties = executeToolkitProperties(properties);
+        return new FileSkillRegistry(
+                resolveRuntimePaths(properties.getSkills().getPath()),
+                toolRegistry,
+                skillProcessExecutor(executeProperties));
     }
 
     @Bean
@@ -445,9 +542,14 @@ public class ClawAgentAutoConfiguration {
             AgentRuntime agentRuntime,
             ChannelRegistry channelRegistry,
             ChannelSessionMapper channelSessionMapper,
-            ChannelOutboundClient channelOutboundClient) {
+            ChannelOutboundClient channelOutboundClient,
+            com.github.clawagent.intent.IntentRoutingService intentRoutingService,
+            com.github.clawagent.intent.PendingActionService pendingActionService,
+            ObjectProvider<ChannelUserBindingResolver> channelUserBindingResolverProvider) {
         // ChannelRouter 是 IM/Webhook/API 入站的统一入口，server 只做 HTTP 参数适配。
-        return new ChannelRouter(agentRuntime, channelRegistry, channelSessionMapper, channelOutboundClient);
+        return new ChannelRouter(agentRuntime, channelRegistry, channelSessionMapper, channelOutboundClient,
+                intentRoutingService, pendingActionService,
+                channelUserBindingResolverProvider.getIfAvailable(ChannelUserBindingResolver::none));
     }
 
     @Bean
@@ -526,6 +628,7 @@ public class ClawAgentAutoConfiguration {
             List<ToolExecutionGuard> toolGuards,
             List<AgentCallback> callbacks,
             List<AgentRuntimeInterceptor> runtimeInterceptors,
+            com.github.clawagent.intent.PendingActionService pendingActionService,
             ClawAgentProperties properties) {
         return new DefaultAgentRuntime(
                 planner,
@@ -543,7 +646,8 @@ public class ClawAgentAutoConfiguration {
                 toolGuards,
                 callbacks,
                 properties.getRuntime().getMaxReactRounds(),
-                runtimeInterceptors);
+                runtimeInterceptors,
+                pendingActionService);
     }
 
     @Bean
@@ -623,6 +727,41 @@ public class ClawAgentAutoConfiguration {
         }
         target.setTools(tools);
         return target;
+    }
+
+    private ExecuteToolkitProperties executeToolkitProperties(ClawAgentProperties properties) {
+        ToolkitToolProperties execute = toolkitProperties(properties).tool(ToolkitRegistry.TOOL_EXECUTE);
+        return ExecuteToolkitProperties.fromEnv(execute.getEnv());
+    }
+
+    private SkillProcessExecutor skillProcessExecutor(ExecuteToolkitProperties executeProperties) {
+        if (executeProperties == null || !executeProperties.isWorkerEnabled()) {
+            return null;
+        }
+        WorkerCommandExecutor workerCommandExecutor = new WorkerCommandExecutor(executeProperties);
+        return (commandLine, cwd, env, timeoutMs) -> {
+            // Script Skill 属于 shell/script 权限域；启用 worker 后统一进入隔离进程执行。
+            WorkerCommandExecutor.WorkerExecutionResult result = workerCommandExecutor.execute(
+                    commandLine,
+                    cwd.toPath().toAbsolutePath().normalize(),
+                    timeoutMs,
+                    env);
+            return new SkillProcessExecutor.Result(
+                    result.exitCode(),
+                    result.timedOut(),
+                    result.elapsedMs(),
+                    result.stdout(),
+                    result.stderr(),
+                    true,
+                    result.stdoutTruncated(),
+                    result.stderrTruncated(),
+                    result.resourceLimited(),
+                    result.resourceLimitReason(),
+                    result.cpuTimeMs(),
+                    result.memoryBytes(),
+                    result.workerPoolWaitMs(),
+                    result.workerEnvBlockedCount());
+        };
     }
 
     private List<Path> resolveRuntimePaths(List<String> paths) {

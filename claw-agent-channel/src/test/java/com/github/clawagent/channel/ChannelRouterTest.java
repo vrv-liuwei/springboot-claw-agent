@@ -35,8 +35,6 @@ class ChannelRouterTest {
                 "飞书",
                 "feishu",
                 true,
-                true,
-                false,
                 "auto",
                 List.of("builtin.execute.command"),
                 "/api/v1/channels/feishu/inbound",
@@ -71,8 +69,6 @@ class ChannelRouterTest {
                 "钉钉",
                 "dingtalk",
                 true,
-                true,
-                true,
                 "ask",
                 List.of(),
                 "/api/v1/channels/dingtalk/inbound",
@@ -86,6 +82,43 @@ class ChannelRouterTest {
         assertEquals("dingtalk", outboundClient.channelId);
         assertEquals("chat-1", outboundClient.conversationId);
         assertEquals("ok", outboundClient.text);
+    }
+
+    @Test
+    void appliesChannelUserBindingResolverBeforeSubmittingRuntimeTask() {
+        CapturingRuntime runtime = new CapturingRuntime();
+        ChannelDefinition channel = new ChannelDefinition(
+                "feishu-main",
+                "飞书主账号",
+                "feishu",
+                true,
+                "ask",
+                List.of(),
+                "/api/v1/channels/feishu/inbound",
+                Map.of(),
+                null,
+                null);
+        ChannelUserBindingResolver resolver = (definition, message, metadata) -> {
+            assertEquals("feishu-main", definition.id());
+            assertEquals("open-user-1", message.externalUserId());
+            return new java.util.LinkedHashMap<>() {{
+                putAll(metadata);
+                put("localUserId", "local-user-1");
+                put("user.id", "local-user-1");
+                put("user.username", "alice");
+                put("channel.userBindingId", "binding-1");
+            }};
+        };
+        ChannelRouter router = new ChannelRouter(runtime, new SingleChannelRegistry(channel), new ChannelSessionMapper(),
+                null, null, null, resolver);
+
+        router.receive("feishu-main", new ChannelInboundMessage(
+                "feishu-main", "chat-1", "open-user-1", "text", "ping", Map.of(), Map.of()));
+
+        Map<String, String> metadata = runtime.lastRequest.metadata();
+        assertEquals("local-user-1", metadata.get("localUserId"));
+        assertEquals("alice", metadata.get("user.username"));
+        assertEquals("binding-1", metadata.get("channel.userBindingId"));
     }
 
     private static class SingleChannelRegistry implements ChannelRegistry {
@@ -247,11 +280,11 @@ class ChannelRouterTest {
         private String text;
 
         @Override
-        public boolean sendText(ChannelDefinition channel, ChannelInboundMessage sourceMessage, String text) {
+        public ChannelSendResult sendTextDetailed(ChannelDefinition channel, ChannelInboundMessage sourceMessage, String text) {
             this.channelId = channel.id();
             this.conversationId = sourceMessage.externalConversationId();
             this.text = text;
-            return true;
+            return ChannelSendResult.sent("sent", Map.of());
         }
     }
 }

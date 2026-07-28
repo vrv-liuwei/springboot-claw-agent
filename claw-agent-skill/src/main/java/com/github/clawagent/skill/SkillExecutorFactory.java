@@ -10,8 +10,16 @@ import java.util.Map;
 final class SkillExecutorFactory {
     private final SkillExecutor documentExecutor = new DocumentSkillExecutor();
     private final SkillExecutor httpExecutor = new HttpSkillExecutor();
-    private final SkillExecutor scriptExecutor = new ScriptSkillExecutor();
+    private final SkillExecutor scriptExecutor;
     private final SkillExecutor javaExecutor = new JavaSkillExecutor();
+
+    SkillExecutorFactory() {
+        this(null);
+    }
+
+    SkillExecutorFactory(SkillProcessExecutor processExecutor) {
+        this.scriptExecutor = new ScriptSkillExecutor(processExecutor);
+    }
 
     SkillExecutor executorFor(Map<String, Object> config) {
         String type = stringValue(config, "type", "document").trim().toLowerCase();

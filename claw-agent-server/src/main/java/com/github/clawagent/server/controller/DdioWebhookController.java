@@ -123,6 +123,9 @@ public class DdioWebhookController {
 
     private void processDdioMessageAsync(ChannelDefinition channel, Map<String, Object> enriched, String messageKey) {
         try {
+            if (channelAdapterRegistry.find("ddio").isEmpty()) {
+                throw new IllegalStateException("DDIO Channel Adapter 未注册，请确认已引入 claw-agent-channel-ddio 模块");
+            }
             var adapted = ChannelInboundPayloadAdapter.adaptWithResponse(channelAdapterRegistry, channel, channel.id(), enriched);
             Object result = channelRouter.receive(channel.id(), adapted.message());
             LOGGER.info("DDIO webhook async result messageKey={} result={}", messageKey, result);

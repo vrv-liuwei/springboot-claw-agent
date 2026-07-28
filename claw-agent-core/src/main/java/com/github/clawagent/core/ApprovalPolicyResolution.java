@@ -18,7 +18,7 @@ public record ApprovalPolicyResolution(
         List<String> conflictNotes
 ) {
     private static final String DEFAULT_RESOLUTION_ORDER =
-            "local>channel>task>agent-isolation>tool-enforcement";
+            "local>channel>user>api-token>device>task>agent-role>agent-metadata>agent-isolation>tool-enforcement";
 
     public ApprovalPolicyResolution {
         source = normalizeText(source, "task.metadata");
@@ -80,7 +80,18 @@ public record ApprovalPolicyResolution(
         if (normalized.startsWith("channel:")) {
             return "channel";
         }
-        if (normalized.startsWith("agent-isolation:")) {
+        if (normalized.startsWith("user:")) {
+            return "user";
+        }
+        if (normalized.startsWith("api-token:")) {
+            return "api-token";
+        }
+        if (normalized.startsWith("device:")) {
+            return "device";
+        }
+        if (normalized.startsWith("agent-isolation:")
+                || normalized.startsWith("agent-role:")
+                || normalized.startsWith("agent:")) {
             return "agent";
         }
         if (normalized.startsWith("local.")) {

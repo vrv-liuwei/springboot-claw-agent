@@ -1,0 +1,602 @@
+{"kind":"deck","id":"pr/ehvk6a","name":"Deck"}
+{"kind":"layout","layoutId":"1a946c7f-ebf8-49cf-8669-859811ac4409","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"1d2e37dd-0469-4c43-8161-269679b3053f","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/p24ux0","slide":1,"title":"ClawAgent","textShapes":11}
+{"kind":"shape","id":"sh/5cny9sz2","slide":1,"bbox":[0,0,1280,8]}
+{"kind":"shape","id":"sh/ipcfex0r","slide":1,"bbox":[0,8,410,712]}
+{"kind":"shape","id":"sh/3qlg721c","slide":1,"bbox":[410,8,10,712]}
+{"kind":"textbox","id":"sh/gnuxcnil","slide":1,"text":"ClawAgent","textPreview":"ClawAgent","textChars":9,"textLines":1,"bbox":[72,86,360,58]}
+{"kind":"textbox","id":"sh/ho3y5sj6","slide":1,"text":"Java Harness Agent Runtime","textPreview":"Java Harness Agent Runtime","textChars":26,"textLines":1,"bbox":[72,152,360,32]}
+{"kind":"textbox","id":"sh/ulcfad0f","slide":1,"text":"面向 Spring Boot 业务系统落地的企业级本地行动 Agent","textPreview":"面向 Spring Boot 业务系统落地的企业级本地行动 Agent","textChars":35,"textLines":1,"bbox":[72,206,330,80]}
+{"kind":"shape","id":"sh/vmlg3i10","slide":1,"name":"定位","bbox":[486,128,610,104]}
+{"kind":"shape","id":"sh/8jax8nip","slide":1,"bbox":[486,128,8,104]}
+{"kind":"textbox","id":"sh/tkjy18ju","slide":1,"text":"定位","textPreview":"定位","textChars":2,"textLines":1,"bbox":[510,148,566,30]}
+{"kind":"textbox","id":"sh/dk32183m","slide":1,"text":"可独立运行、可嵌入业务系统、可审计、可恢复、可扩展的 Spring Boot Runtime。","textPreview":"可独立运行、可嵌入业务系统、可审计、可恢复、可扩展的 Spring Boot Runtime。","textChars":47,"textLines":1,"bbox":[510,188,566,32]}
+{"kind":"shape","id":"sh/sjulsn21","slide":1,"name":"新增重点","bbox":[486,268,610,104]}
+{"kind":"shape","id":"sh/rylkzilg","slide":1,"bbox":[486,268,8,104]}
+{"kind":"textbox","id":"sh/qxs3qdkv","slide":1,"text":"新增重点","textPreview":"新增重点","textChars":4,"textLines":1,"bbox":[510,288,566,30]}
+{"kind":"textbox","id":"sh/5wj2x83a","slide":1,"text":"计划模式、自动化任务、通道与附件、权限治理、Worker/SubAgent、MCP/Skill 生态已进入主链路。","textPreview":"计划模式、自动化任务、通道与附件、权限治理、Worker/SubAgent、MCP/Skill 生态已进入主链路。","textChars":57,"textLines":1,"bbox":[510,328,566,32]}
+{"kind":"shape","id":"sh/4va1o32p","slide":1,"name":"核心判断","bbox":[486,408,610,104]}
+{"kind":"shape","id":"sh/3u1kvylk","slide":1,"bbox":[486,408,8,104]}
+{"kind":"textbox","id":"sh/itsjmtkz","slide":1,"text":"核心判断","textPreview":"核心判断","textChars":4,"textLines":1,"bbox":[510,428,566,30]}
+{"kind":"textbox","id":"sh/hsj2to3e","slide":1,"text":"它不是通用 Agent 生态平台，而是把 Agent 能力接入 Java 企业应用的 Runtime 内核。","textPreview":"它不是通用 Agent 生态平台，而是把 Agent 能力接入 Java 企业应用的 Runtime 内核。","textChars":54,"textLines":1,"bbox":[510,468,566,32]}
+{"kind":"textbox","id":"sh/gra1k32t","slide":1,"text":"项目文档 PPT","textPreview":"项目文档 PPT","textChars":8,"textLines":1,"bbox":[72,600,360,26]}
+{"kind":"textbox","id":"sh/8netwne1","slide":1,"text":"2026-07","textPreview":"2026-07","textChars":7,"textLines":1,"bbox":[72,632,160,20]}
+{"kind":"notes","id":"nt/p24ux0","slide":1,"text":""}
+{"kind":"slide","id":"sl/0ptxuc","slide":2,"title":"目录","textShapes":15}
+{"kind":"shape","id":"sh/ut4fm5s7","slide":2,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/hwvyh0ry","slide":2,"text":"目录","textPreview":"目录","textChars":2,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/gvmxovad","slide":2,"text":"按业务能力和 Agent 技术栈重新组织","textPreview":"按业务能力和 Agent 技术栈重新组织","textChars":20,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/3yxgja94","slide":2,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/2xofq5sj","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"textbox","id":"sh/p0fylkru","slide":2,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[88,156,64,40]}
+{"kind":"textbox","id":"sh/4z6xsfa9","slide":2,"text":"Agent 技术栈视角","textPreview":"Agent 技术栈视角","textChars":11,"textLines":1,"bbox":[176,156,260,36]}
+{"kind":"textbox","id":"sh/r2xgna90","slide":2,"text":"参考图1说明模型、记忆、工具、Runtime、安全治理五层","textPreview":"参考图1说明模型、记忆、工具、Runtime、安全治理五层","textChars":29,"textLines":1,"bbox":[460,161,640,30]}
+{"kind":"shape","id":"sh/q1ofupsf","slide":2,"bbox":[86,216,1020,1.2]}
+{"kind":"textbox","id":"sh/g3ilo3md","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[88,268,64,40]}
+{"kind":"textbox","id":"sh/h4rmx8ny","slide":2,"text":"ClawAgent 架构","textPreview":"ClawAgent 架构","textChars":12,"textLines":1,"bbox":[176,268,260,36]}
+{"kind":"textbox","id":"sh/u103mt4n","slide":2,"text":"项目架构图、系统架构图和执行链路","textPreview":"项目架构图、系统架构图和执行链路","textChars":16,"textLines":1,"bbox":[460,273,640,30]}
+{"kind":"shape","id":"sh/f294vy58","slide":2,"bbox":[86,328,1020,1.2]}
+{"kind":"textbox","id":"sh/472lsnmp","slide":2,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[88,380,64,40]}
+{"kind":"textbox","id":"sh/psbm183a","slide":2,"text":"新增业务功能","textPreview":"新增业务功能","textChars":6,"textLines":1,"bbox":[176,380,260,36]}
+{"kind":"textbox","id":"sh/25k3qd4j","slide":2,"text":"Plan、自动化、通道附件、MCP/Skill、权限、Worker/SubAgent","textPreview":"Plan、自动化、通道附件、MCP/Skill、权限、Worker/SubAgent","textChars":42,"textLines":1,"bbox":[460,385,640,30]}
+{"kind":"shape","id":"sh/36t4zil4","slide":2,"bbox":[86,440,1020,1.2]}
+{"kind":"textbox","id":"sh/cv25wnml","slide":2,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[88,492,64,40]}
+{"kind":"textbox","id":"sh/dwvm5s36","slide":2,"text":"场景与竞品比较","textPreview":"场景与竞品比较","textChars":7,"textLines":1,"bbox":[176,492,260,36]}
+{"kind":"textbox","id":"sh/1g7utore","slide":2,"text":"使用场景、OpenClaw/Hermes/AgentScope 比较、优缺点和边界","textPreview":"使用场景、OpenClaw/Hermes/AgentScope 比较、优缺点和边界","textChars":41,"textLines":1,"bbox":[460,497,640,30]}
+{"kind":"shape","id":"sh/0fyd0jat","slide":2,"bbox":[86,552,1020,1.2]}
+{"kind":"notes","id":"nt/0ptxuc","slide":2,"text":""}
+{"kind":"slide","id":"sl/jvj9c5","slide":3,"title":"按图1视角：Agent 技术栈覆盖情况","textShapes":16}
+{"kind":"shape","id":"sh/hgvmhk7y","slide":3,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/ut43mp8n","slide":3,"text":"按图1视角：Agent 技术栈覆盖情况","textPreview":"按图1视角：Agent 技术栈覆盖情况","textChars":19,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/ved4fup8","slide":3,"text":"从现代 Agent 通用分层看 ClawAgent 已覆盖哪些主链路","textPreview":"从现代 Agent 通用分层看 ClawAgent 已覆盖哪些主链路","textChars":34,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/4jm5szqp","slide":3,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/5kfml47a","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/ih4nqp8j","slide":3,"bbox":[72,140,180,58]}
+{"kind":"shape","id":"sh/jid4jup4","slide":3,"bbox":[72,140,8,58]}
+{"kind":"textbox","id":"sh/kn2lgvql","slide":3,"text":"模型层","textPreview":"模型层","textChars":3,"textLines":1,"bbox":[102,156,110,26]}
+{"kind":"textbox","id":"sh/lobm907q","slide":3,"text":"OpenAI-compatible / DeepSeek / Qwen / GLM 等兼容接入；Spring AI 可选适配；支持 chat、embeddings、vision 最终回复。","textPreview":"OpenAI-compatible / DeepSeek / Qwen / GLM 等兼容接入；Spring AI 可选适配；支持 chat、embeddings、vision 最终回复。","textChars":94,"textLines":1,"bbox":[282,150,850,44]}
+{"kind":"shape","id":"sh/1cbidwz6","slide":3,"bbox":[72,226,180,58]}
+{"kind":"shape","id":"sh/0b2hkril","slide":3,"bbox":[72,226,8,58]}
+{"kind":"textbox","id":"sh/fa9gbmh0","slide":3,"text":"记忆层","textPreview":"记忆层","textChars":3,"textLines":1,"bbox":[102,242,110,26]}
+{"kind":"textbox","id":"sh/e90zi10f","slide":3,"text":"SQLite FTS5 + JVector + RRF 混合检索；命中记录、候选审核、长期记忆管理页。","textPreview":"SQLite FTS5 + JVector + RRF 混合检索；命中记录、候选审核、长期记忆管理页。","textChars":51,"textLines":1,"bbox":[282,236,850,44]}
+{"kind":"shape","id":"sh/p0bihgz2","slide":3,"bbox":[72,312,180,58]}
+{"kind":"shape","id":"sh/oz2hobih","slide":3,"bbox":[72,312,8,58]}
+{"kind":"textbox","id":"sh/nyt0f6hw","slide":3,"text":"工具层","textPreview":"工具层","textChars":3,"textLines":1,"bbox":[102,328,110,26]}
+{"kind":"textbox","id":"sh/2dkzm10r","slide":3,"text":"内置 time/weather/web/filesystem/process/execute；业务 AgentTool Bean；MCP tools；Skill tools。","textPreview":"内置 time/weather/web/filesystem/process/execute；业务 AgentTool Bean；MCP tools；Skill tools。","textChars":87,"textLines":1,"bbox":[282,322,850,44]}
+{"kind":"shape","id":"sh/x4vilgze","slide":3,"bbox":[72,398,180,58]}
+{"kind":"shape","id":"sh/c3mhsbit","slide":3,"bbox":[72,398,8,58]}
+{"kind":"textbox","id":"sh/wjut4ju1","slide":3,"text":"Runtime 层","textPreview":"Runtime 层","textChars":9,"textLines":1,"bbox":[102,414,110,26]}
+{"kind":"textbox","id":"sh/hknadobm","slide":3,"text":"DefaultAgentRuntime 管会话、任务、步骤、事件、ReAct、Tool Calling、Plan 执行、SSE。","textPreview":"DefaultAgentRuntime 管会话、任务、步骤、事件、ReAct、Tool Calling、Plan 执行、SSE。","textChars":64,"textLines":1,"bbox":[282,408,850,44]}
+{"kind":"shape","id":"sh/uhcb29cv","slide":3,"bbox":[72,484,180,58]}
+{"kind":"shape","id":"sh/vilsbetg","slide":3,"bbox":[72,484,8,58]}
+{"kind":"textbox","id":"sh/4net83ud","slide":3,"text":"安全治理层","textPreview":"安全治理层","textChars":5,"textLines":1,"bbox":[102,500,110,26]}
+{"kind":"textbox","id":"sh/5onah8by","slide":3,"text":"ToolGuard、PendingAction、角色策略、API Token、设备、通道绑定、Rate Limit、审计与脱敏。","textPreview":"ToolGuard、PendingAction、角色策略、API Token、设备、通道绑定、Rate Limit、审计与脱敏。","textChars":64,"textLines":1,"bbox":[282,494,850,44]}
+{"kind":"shape","id":"sh/ilwb6tc7","slide":3,"name":"结论","bbox":[930,134,230,402]}
+{"kind":"shape","id":"sh/jm5sfyts","slide":3,"bbox":[930,134,8,402]}
+{"kind":"textbox","id":"sh/kra9wzut","slide":3,"text":"结论","textPreview":"结论","textChars":2,"textLines":1,"bbox":[954,154,186,30]}
+{"kind":"textbox","id":"sh/lsja54be","slide":3,"text":"ClawAgent 不是大而全生态。\n强项在 Java 业务落地。\n评测平台、分布式观测、云沙箱仍是后续边界。","textPreview":"ClawAgent 不是大而全生态。 | 强项在 Java 业务落地。 | 评测平台、分布式观测、云沙箱仍是后续边界。","textChars":55,"textLines":3,"bbox":[958,196,182,330]}
+{"kind":"textbox","id":"sh/n69wb2dw","slide":3,"text":"参考：用户提供的 Agent 技术栈图；本项目 README / CONFIGURATION / pom.xml。","textPreview":"参考：用户提供的 Agent 技术栈图；本项目 README / CONFIGURATION / pom.xml。","textChars":57,"textLines":1,"bbox":[72,642,920,18]}
+{"kind":"notes","id":"nt/jvj9c5","slide":3,"text":""}
+{"kind":"slide","id":"sl/gmoc3u","slide":4,"title":"项目架构图","textShapes":39}
+{"kind":"shape","id":"sh/0zidgf6t","slide":4,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/zy9cnap8","slide":4,"text":"项目架构图","textPreview":"项目架构图","textChars":5,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/yx0ve5on","slide":4,"text":"从入口层、Runtime、能力扩展、数据与治理四层看模块分工","textPreview":"从入口层、Runtime、能力扩展、数据与治理四层看模块分工","textChars":30,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/dwrulk72","slide":4,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/cvidcf6x","slide":4,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/bu9cjapc","slide":4,"bbox":[72,126,184,56]}
+{"kind":"textbox","id":"sh/q90ba5or","slide":4,"text":"入口与界面","textPreview":"入口与界面","textChars":5,"textLines":1,"bbox":[72,143,184,20]}
+{"kind":"shape","id":"sh/p8ruh076","slide":4,"bbox":[292,126,132,56]}
+{"kind":"textbox","id":"sh/o7yt8v6l","slide":4,"text":"REST API","textPreview":"REST API","textChars":8,"textLines":1,"bbox":[298,142,120,22]}
+{"kind":"shape","id":"sh/alsb6p8n","slide":4,"bbox":[446,126,132,56]}
+{"kind":"textbox","id":"sh/bm1sza9s","slide":4,"text":"Web Console","textPreview":"Web Console","textChars":11,"textLines":1,"bbox":[452,142,120,22]}
+{"kind":"shape","id":"sh/cnut8fqd","slide":4,"bbox":[600,126,132,56]}
+{"kind":"textbox","id":"sh/xo3u1kry","slide":4,"text":"React Admin","textPreview":"React Admin","textChars":11,"textLines":1,"bbox":[606,142,120,22]}
+{"kind":"shape","id":"sh/2xsb25sb","slide":4,"bbox":[754,126,132,56]}
+{"kind":"textbox","id":"sh/ni1sva9w","slide":4,"text":"Desktop App","textPreview":"Desktop App","textChars":11,"textLines":1,"bbox":[760,142,120,22]}
+{"kind":"shape","id":"sh/ojat4fqh","slide":4,"bbox":[908,126,132,56]}
+{"kind":"textbox","id":"sh/pkjaxkr2","slide":4,"text":"CLI","textPreview":"CLI","textChars":3,"textLines":1,"bbox":[914,142,120,22]}
+{"kind":"shape","id":"sh/et8by5sf","slide":4,"bbox":[1062,126,132,56]}
+{"kind":"textbox","id":"sh/fuhsrq9k","slide":4,"text":"Channel 入站","textPreview":"Channel 入站","textChars":10,"textLines":1,"bbox":[1068,142,120,22]}
+{"kind":"shape","id":"sh/jmdgj2lg","slide":4,"bbox":[72,218,184,56]}
+{"kind":"textbox","id":"sh/il4zaxkv","slide":4,"text":"运行主链路","textPreview":"运行主链路","textChars":5,"textLines":1,"bbox":[72,235,184,20]}
+{"kind":"shape","id":"sh/5ovilc36","slide":4,"bbox":[292,218,132,56]}
+{"kind":"textbox","id":"sh/4nmhc721","slide":4,"text":"AgentRuntime","textPreview":"AgentRuntime","textChars":12,"textLines":1,"bbox":[298,234,120,22]}
+{"kind":"shape","id":"sh/rqd0n2lc","slide":4,"bbox":[446,218,132,56]}
+{"kind":"textbox","id":"sh/6p4zehkr","slide":4,"text":"Session/Task/Step","textPreview":"Session/Task/Step","textChars":17,"textLines":1,"bbox":[452,234,120,22]}
+{"kind":"shape","id":"sh/tsfipc3i","slide":4,"bbox":[600,218,132,56]}
+{"kind":"textbox","id":"sh/sr6hg72x","slide":4,"text":"Planner Router","textPreview":"Planner Router","textChars":14,"textLines":1,"bbox":[606,234,120,22]}
+{"kind":"shape","id":"sh/7utgbil8","slide":4,"bbox":[754,218,132,56]}
+{"kind":"textbox","id":"sh/mtkz2d4n","slide":4,"text":"ReAct Loop","textPreview":"ReAct Loop","textChars":10,"textLines":1,"bbox":[760,234,120,22]}
+{"kind":"shape","id":"sh/czydcj2l","slide":4,"bbox":[908,218,132,56]}
+{"kind":"textbox","id":"sh/d0reloj6","slide":4,"text":"Tool Calling","textPreview":"Tool Calling","textChars":12,"textLines":1,"bbox":[914,234,120,22]}
+{"kind":"shape","id":"sh/qxgva9kf","slide":4,"bbox":[1062,218,132,56]}
+{"kind":"textbox","id":"sh/bypwje10","slide":4,"text":"SSE Event","textPreview":"SSE Event","textChars":9,"textLines":1,"bbox":[1068,234,120,22]}
+{"kind":"shape","id":"sh/ovyd8z29","slide":4,"bbox":[72,310,184,56]}
+{"kind":"textbox","id":"sh/pw7eh4ju","slide":4,"text":"能力扩展","textPreview":"能力扩展","textChars":4,"textLines":1,"bbox":[72,327,184,20]}
+{"kind":"shape","id":"sh/2tgv69kj","slide":4,"bbox":[292,310,132,56]}
+{"kind":"textbox","id":"sh/3upwfe1o","slide":4,"text":"Toolkit","textPreview":"Toolkit","textChars":7,"textLines":1,"bbox":[298,326,120,22]}
+{"kind":"shape","id":"sh/8r2xk3it","slide":4,"bbox":[446,310,132,56]}
+{"kind":"textbox","id":"sh/9sbet8jy","slide":4,"text":"MCP Client","textPreview":"MCP Client","textChars":10,"textLines":1,"bbox":[452,326,120,22]}
+{"kind":"shape","id":"sh/5c3a50zq","slide":4,"bbox":[600,310,132,56]}
+{"kind":"textbox","id":"sh/4butcvi5","slide":4,"text":"Skill Executor","textPreview":"Skill Executor","textChars":14,"textLines":1,"bbox":[606,326,120,22]}
+{"kind":"shape","id":"sh/jals3qhk","slide":4,"bbox":[754,310,132,56]}
+{"kind":"textbox","id":"sh/i9cbal0z","slide":4,"text":"AgentTool Bean","textPreview":"AgentTool Bean","textChars":14,"textLines":1,"bbox":[760,326,120,22]}
+{"kind":"shape","id":"sh/t03u90zm","slide":4,"bbox":[908,310,132,56]}
+{"kind":"textbox","id":"sh/szutgfi1","slide":4,"text":"SubAgent","textPreview":"SubAgent","textChars":8,"textLines":1,"bbox":[914,326,120,22]}
+{"kind":"shape","id":"sh/rylc7ahg","slide":4,"bbox":[1062,310,132,56]}
+{"kind":"textbox","id":"sh/6xcbe50b","slide":4,"text":"Worker","textPreview":"Worker","textChars":6,"textLines":1,"bbox":[1068,326,120,22]}
+{"kind":"shape","id":"sh/14nudkzy","slide":4,"bbox":[72,402,184,56]}
+{"kind":"textbox","id":"sh/g3etkfid","slide":4,"text":"模型与知识","textPreview":"模型与知识","textChars":5,"textLines":1,"bbox":[72,419,184,20]}
+{"kind":"shape","id":"sh/y9o7ehgv","slide":4,"bbox":[292,402,132,56]}
+{"kind":"textbox","id":"sh/zah87mx0","slide":4,"text":"OpenAI-compatible","textPreview":"OpenAI-compatible","textChars":17,"textLines":1,"bbox":[298,418,120,22]}
+{"kind":"shape","id":"sh/kbq9gryl","slide":4,"bbox":[446,402,132,56]}
+{"kind":"textbox","id":"sh/lczq9cf6","slide":4,"text":"Spring AI optional","textPreview":"Spring AI optional","textChars":18,"textLines":1,"bbox":[452,418,120,22]}
+{"kind":"shape","id":"sh/md8rihgr","slide":4,"bbox":[600,402,132,56]}
+{"kind":"textbox","id":"sh/7eh8bmxc","slide":4,"text":"Memory","textPreview":"Memory","textChars":6,"textLines":1,"bbox":[606,418,120,22]}
+{"kind":"shape","id":"sh/8fq9kryx","slide":4,"bbox":[754,402,132,56]}
+{"kind":"textbox","id":"sh/9gzqdwfi","slide":4,"text":"Knowledge","textPreview":"Knowledge","textChars":9,"textLines":1,"bbox":[760,418,120,22]}
+{"kind":"shape","id":"sh/uhsrm1gn","slide":4,"bbox":[908,402,132,56]}
+{"kind":"textbox","id":"sh/vi18f6x8","slide":4,"text":"Attachment","textPreview":"Attachment","textChars":10,"textLines":1,"bbox":[914,418,120,22]}
+{"kind":"shape","id":"sh/r61836dg","slide":4,"bbox":[1062,402,132,56]}
+{"kind":"textbox","id":"sh/65s7a1cv","slide":4,"text":"Embedding/JVector","textPreview":"Embedding/JVector","textChars":17,"textLines":1,"bbox":[1068,418,120,22]}
+{"kind":"shape","id":"sh/t8jq5gvm","slide":4,"bbox":[72,494,184,56]}
+{"kind":"textbox","id":"sh/s7apcbu1","slide":4,"text":"治理与持久化","textPreview":"治理与持久化","textChars":6,"textLines":1,"bbox":[72,511,184,20]}
+{"kind":"shape","id":"sh/ji1ozmdk","slide":4,"bbox":[292,494,132,56]}
+{"kind":"textbox","id":"sh/ihs76hcz","slide":4,"text":"SQLite Store","textPreview":"SQLite Store","textChars":12,"textLines":1,"bbox":[298,510,120,22]}
+{"kind":"shape","id":"sh/5kjq1wva","slide":4,"bbox":[446,494,132,56]}
+{"kind":"textbox","id":"sh/4jap8ru5","slide":4,"text":"ToolGuard","textPreview":"ToolGuard","textChars":9,"textLines":1,"bbox":[452,510,120,22]}
+{"kind":"shape","id":"sh/vehovmd8","slide":4,"bbox":[600,494,132,56]}
+{"kind":"textbox","id":"sh/ud872hcn","slide":4,"text":"PendingAction","textPreview":"PendingAction","textChars":13,"textLines":1,"bbox":[606,510,120,22]}
+{"kind":"shape","id":"sh/07mdgj69","slide":4,"bbox":[754,494,132,56]}
+{"kind":"textbox","id":"sh/l8vepo7u","slide":4,"text":"Runtime Interceptor","textPreview":"Runtime Interceptor","textChars":19,"textLines":1,"bbox":[760,510,120,22]}
+{"kind":"shape","id":"sh/e54vetoj","slide":4,"bbox":[908,494,132,56]}
+{"kind":"textbox","id":"sh/z6dwnepo","slide":4,"text":"Auth/Device/Token","textPreview":"Auth/Device/Token","textChars":17,"textLines":1,"bbox":[914,510,120,22]}
+{"kind":"shape","id":"sh/8bmdk36l","slide":4,"bbox":[1062,494,132,56]}
+{"kind":"textbox","id":"sh/9cfet876","slide":4,"text":"Audit/RateLimit","textPreview":"Audit/RateLimit","textChars":15,"textLines":1,"bbox":[1068,510,120,22]}
+{"kind":"textbox","id":"sh/m94vitof","slide":4,"text":"关键设计：core / spi 不绑定 Spring；starter 负责装配；runtime 只依赖 Registry、SPI、工具、MCP、Skill、Channel 抽象。","textPreview":"关键设计：core / spi 不绑定 Spring；starter 负责装配；runtime 只依赖 Registry、SPI、工具、MCP、Skill、Channel 抽象。","textChars":89,"textLines":1,"bbox":[76,616,1020,24]}
+{"kind":"notes","id":"nt/gmoc3u","slide":4,"text":""}
+{"kind":"slide","id":"sl/0lojis","slide":5,"title":"系统架构图","textShapes":24}
+{"kind":"shape","id":"sh/twfedovm","slide":5,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/6tov2twb","slide":5,"text":"系统架构图","textPreview":"系统架构图","textChars":5,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/7uxcbedg","slide":5,"text":"围绕 Spring Boot Runtime 的入口、执行、扩展、治理、存储和模型生态","textPreview":"围绕 Spring Boot Runtime 的入口、执行、扩展、治理、存储和模型生态","textChars":43,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/krmd0je5","slide":5,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/5svu9ovq","slide":5,"text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/ip4vy9wz","slide":5,"name":"入口与通道","bbox":[60,146,190,360]}
+{"kind":"shape","id":"sh/jqdc7edk","slide":5,"bbox":[60,146,8,360]}
+{"kind":"textbox","id":"sh/onqdc3e9","slide":5,"text":"入口与通道","textPreview":"入口与通道","textChars":5,"textLines":1,"bbox":[84,166,146,30]}
+{"kind":"textbox","id":"sh/poze58vu","slide":5,"text":"Web Console\nReact Admin\nApp / CLI\nREST API\n飞书/钉钉/DDIO","textPreview":"Web Console | React Admin | App / CLI | REST API | 飞书/钉钉/DDIO","textChars":53,"textLines":5,"bbox":[88,208,142,288]}
+{"kind":"shape","id":"sh/hgf21cju","slide":5,"name":"管理与治理","bbox":[1008,146,190,360]}
+{"kind":"shape","id":"sh/wf61s7i9","slide":5,"bbox":[1008,146,8,360]}
+{"kind":"textbox","id":"sh/vedkz21o","slide":5,"text":"管理与治理","textPreview":"管理与治理","textChars":5,"textLines":1,"bbox":[1032,166,146,30]}
+{"kind":"textbox","id":"sh/ud4jqx03","slide":5,"text":"Admin 配置\n审批策略\nAudit Log\nToken 统计\n设备与角色","textPreview":"Admin 配置 | 审批策略 | Audit Log | Token 统计 | 设备与角色","textChars":38,"textLines":5,"bbox":[1036,208,142,288]}
+{"kind":"shape","id":"sh/9cv2xsjy","slide":5,"bbox":[286,136,690,384]}
+{"kind":"shape","id":"sh/8rm1onid","slide":5,"bbox":[286,136,690,12]}
+{"kind":"textbox","id":"sh/7qdkvi1s","slide":5,"text":"ClawAgent Server / Spring Boot","textPreview":"ClawAgent Server / Spring Boot","textChars":30,"textLines":1,"bbox":[360,162,520,28]}
+{"kind":"shape","id":"sh/mp4jmd07","slide":5,"name":"API Layer","bbox":[340,214,162,38]}
+{"kind":"textbox","id":"sh/t8z29wj2","slide":5,"text":"API Layer","textPreview":"API Layer","textChars":9,"textLines":1,"bbox":[348,224,146,18]}
+{"kind":"shape","id":"sh/snql0rih","slide":5,"name":"Channel Gateway","bbox":[540,214,162,38]}
+{"kind":"textbox","id":"sh/cry5cvqt","slide":5,"text":"Channel Gateway","textPreview":"Channel Gateway","textChars":15,"textLines":1,"bbox":[548,224,146,18]}
+{"kind":"shape","id":"sh/ds7m50re","slide":5,"name":"Admin Service","bbox":[740,214,162,38]}
+{"kind":"textbox","id":"sh/qpwnal8n","slide":5,"text":"Admin Service","textPreview":"Admin Service","textChars":13,"textLines":1,"bbox":[748,224,146,18]}
+{"kind":"shape","id":"sh/bq543q98","slide":5,"bbox":[330,276,590,110]}
+{"kind":"textbox","id":"sh/onel8bqh","slide":5,"text":"DefaultAgentRuntime","textPreview":"DefaultAgentRuntime","textChars":19,"textLines":1,"bbox":[452,296,340,28]}
+{"kind":"shape","id":"sh/ponm1gr2","slide":5,"name":"Planner","bbox":[370,340,146,38]}
+{"kind":"textbox","id":"sh/2lw36l8r","slide":5,"text":"Planner","textPreview":"Planner","textChars":7,"textLines":1,"bbox":[378,350,130,18]}
+{"kind":"shape","id":"sh/3m54zq9w","slide":5,"name":"Session / Task","bbox":[548,340,146,38]}
+{"kind":"textbox","id":"sh/gjel4bql","slide":5,"text":"Session / Task","textPreview":"Session / Task","textChars":14,"textLines":1,"bbox":[556,350,130,18]}
+{"kind":"shape","id":"sh/1knmxgr6","slide":5,"name":"SSE Event","bbox":[726,340,146,38]}
+{"kind":"textbox","id":"sh/jul476ts","slide":5,"text":"SSE Event","textPreview":"SSE Event","textChars":9,"textLines":1,"bbox":[734,350,130,18]}
+{"kind":"shape","id":"sh/itcne1s7","slide":5,"bbox":[330,408,590,84]}
+{"kind":"shape","id":"sh/5w369gby","slide":5,"name":"ToolRegistry","bbox":[370,436,146,38]}
+{"kind":"textbox","id":"sh/kvu5gbad","slide":5,"text":"ToolRegistry","textPreview":"ToolRegistry","textChars":12,"textLines":1,"bbox":[378,446,130,18]}
+{"kind":"shape","id":"sh/7ilob6t4","slide":5,"name":"ToolGuard","bbox":[548,436,146,38]}
+{"kind":"textbox","id":"sh/6hcnilsj","slide":5,"text":"ToolGuard","textPreview":"ToolGuard","textChars":9,"textLines":1,"bbox":[556,446,130,18]}
+{"kind":"shape","id":"sh/tkn6dgbu","slide":5,"name":"Interceptor","bbox":[726,436,146,38]}
+{"kind":"textbox","id":"sh/sju5kba9","slide":5,"text":"Interceptor","textPreview":"Interceptor","textChars":11,"textLines":1,"bbox":[734,446,130,18]}
+{"kind":"shape","id":"sh/fm5ofqt0","slide":5,"bbox":[60,550,1138,80]}
+{"kind":"shape","id":"sh/ulwnmlsf","slide":5,"bbox":[60,550,1138,12]}
+{"kind":"textbox","id":"sh/y1ozyt43","slide":5,"text":"数据、模型与扩展生态","textPreview":"数据、模型与扩展生态","textChars":10,"textLines":1,"bbox":[510,570,230,22]}
+{"kind":"shape","id":"sh/z2xg7y58","slide":5,"name":"SQLite","bbox":[112,596,168,38]}
+{"kind":"textbox","id":"sh/036h03mt","slide":5,"text":"SQLite","textPreview":"SQLite","textChars":6,"textLines":1,"bbox":[120,606,152,18]}
+{"kind":"shape","id":"sh/l4fy9one","slide":5,"name":"Memory / JVector","bbox":[326,596,168,38]}
+{"kind":"textbox","id":"sh/m5oz2t4z","slide":5,"text":"Memory / JVector","textPreview":"Memory / JVector","textChars":16,"textLines":1,"bbox":[334,606,152,18]}
+{"kind":"shape","id":"sh/n6xgby5k","slide":5,"name":"Workspace","bbox":[540,596,168,38]}
+{"kind":"textbox","id":"sh/876h43m5","slide":5,"text":"Workspace","textPreview":"Workspace","textChars":9,"textLines":1,"bbox":[548,606,152,18]}
+{"kind":"shape","id":"sh/98zyd8nq","slide":5,"name":"OpenAI-compatible","bbox":[754,596,168,38]}
+{"kind":"textbox","id":"sh/294fq94v","slide":5,"text":"OpenAI-compatible","textPreview":"OpenAI-compatible","textChars":17,"textLines":1,"bbox":[762,606,152,18]}
+{"kind":"shape","id":"sh/3adgze5g","slide":5,"name":"MCP / Skills","bbox":[968,596,168,38]}
+{"kind":"textbox","id":"sh/54j25c7y","slide":5,"text":"MCP / Skills","textPreview":"MCP / Skills","textChars":12,"textLines":1,"bbox":[976,606,152,18]}
+{"kind":"notes","id":"nt/0lojis","slide":5,"text":""}
+{"kind":"slide","id":"sl/v0v3hf","slide":6,"title":"任务执行链路","textShapes":25}
+{"kind":"shape","id":"sh/jatwfq94","slide":6,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/4b2xovqp","slide":6,"text":"任务执行链路","textPreview":"任务执行链路","textChars":6,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/5cbeh0ra","slide":6,"text":"默认 ReAct 主链路，同时兼容简单问答和原生 Tool Calling","textPreview":"默认 ReAct 主链路，同时兼容简单问答和原生 Tool Calling","textChars":37,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/6dkfq58v","slide":6,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/rytgja90","slide":6,"text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/szmxsvql","slide":6,"bbox":[66,168,152,150]}
+{"kind":"shape","id":"sh/t0vyl0r6","slide":6,"bbox":[80,184,34,34]}
+{"kind":"textbox","id":"sh/mh0fe18b","slide":6,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[80,192,34,14]}
+{"kind":"textbox","id":"sh/n29w769w","slide":6,"text":"接收请求","textPreview":"接收请求","textChars":4,"textLines":1,"bbox":[84,232,116,24]}
+{"kind":"textbox","id":"sh/7e54batc","slide":6,"text":"REST / UI / Channel\n携带 user、device、session","textPreview":"REST / UI / Channel | 携带 user、device、session","textChars":42,"textLines":2,"bbox":[80,266,124,44]}
+{"kind":"shape","id":"sh/6dwni5cr","slide":6,"bbox":[224,228,28,28]}
+{"kind":"shape","id":"sh/tg7mdkbi","slide":6,"bbox":[260,168,152,150]}
+{"kind":"shape","id":"sh/8fe5kfux","slide":6,"bbox":[274,184,34,34]}
+{"kind":"textbox","id":"sh/ja547atg","slide":6,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[274,192,34,14]}
+{"kind":"textbox","id":"sh/ypw3e5cv","slide":6,"text":"策略前置","textPreview":"策略前置","textChars":4,"textLines":1,"bbox":[278,232,116,24]}
+{"kind":"textbox","id":"sh/lcnm90b6","slide":6,"text":"身份、RateLimit、系统意图\nPendingAction 检查","textPreview":"身份、RateLimit、系统意图 | PendingAction 检查","textChars":34,"textLines":2,"bbox":[274,266,124,44]}
+{"kind":"shape","id":"sh/kbelgvu1","slide":6,"bbox":[418,228,28,28]}
+{"kind":"shape","id":"sh/bml43qt4","slide":6,"bbox":[454,168,152,150]}
+{"kind":"shape","id":"sh/alc3alcj","slide":6,"bbox":[468,184,34,34]}
+{"kind":"textbox","id":"sh/ehcnmlwr","slide":6,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[468,192,34,14]}
+{"kind":"textbox","id":"sh/zil4vqxw","slide":6,"text":"规划执行","textPreview":"规划执行","textChars":4,"textLines":1,"bbox":[472,232,116,24]}
+{"kind":"textbox","id":"sh/0ju5oveh","slide":6,"text":"ReAct / Tool Calling\n生成 Todo 与工具调用","textPreview":"ReAct / Tool Calling | 生成 Todo 与工具调用","textChars":34,"textLines":2,"bbox":[468,266,124,44]}
+{"kind":"shape","id":"sh/1k36x0f2","slide":6,"bbox":[612,228,28,28]}
+{"kind":"shape","id":"sh/mlcnq5wn","slide":6,"bbox":[648,168,152,150]}
+{"kind":"shape","id":"sh/nmlozqx8","slide":6,"bbox":[662,184,34,34]}
+{"kind":"textbox","id":"sh/onu5svet","slide":6,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[662,192,34,14]}
+{"kind":"textbox","id":"sh/983610fe","slide":6,"text":"工具治理","textPreview":"工具治理","textChars":4,"textLines":1,"bbox":[666,232,116,24]}
+{"kind":"textbox","id":"sh/a9wnu5wz","slide":6,"text":"ToolGuard 风险判断\n审批、隔离、审计","textPreview":"ToolGuard 风险判断 | 审批、隔离、审计","textChars":23,"textLines":2,"bbox":[662,266,124,44]}
+{"kind":"shape","id":"sh/ba5o3ax4","slide":6,"bbox":[806,228,28,28]}
+{"kind":"shape","id":"sh/l47qt4zm","slide":6,"bbox":[842,168,152,150]}
+{"kind":"shape","id":"sh/k3ypkzy1","slide":6,"bbox":[856,184,34,34]}
+{"kind":"textbox","id":"sh/j2p8ruhg","slide":6,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[856,192,34,14]}
+{"kind":"textbox","id":"sh/yhg7ipgv","slide":6,"text":"观察与续跑","textPreview":"观察与续跑","textChars":5,"textLines":1,"bbox":[860,232,116,24]}
+{"kind":"textbox","id":"sh/t8rqxozi","slide":6,"text":"保存 step/event\n失败可 checkpoint/resume","textPreview":"保存 step/event | 失败可 checkpoint/resume","textChars":35,"textLines":2,"bbox":[856,266,124,44]}
+{"kind":"shape","id":"sh/87y9ojyx","slide":6,"bbox":[1000,228,28,28]}
+{"kind":"shape","id":"sh/76p8vehc","slide":6,"bbox":[1036,168,152,150]}
+{"kind":"shape","id":"sh/65g7m9g7","slide":6,"bbox":[1050,184,34,34]}
+{"kind":"textbox","id":"sh/hcrq1ozu","slide":6,"text":"6","textPreview":"6","textChars":1,"textLines":1,"bbox":[1050,192,34,14]}
+{"kind":"textbox","id":"sh/gbi9sjy9","slide":6,"text":"最终回复","textPreview":"最终回复","textChars":4,"textLines":1,"bbox":[1054,232,116,24]}
+{"kind":"textbox","id":"sh/c3m1grmd","slide":6,"text":"流式 llm.delta\nToken 和审计聚合","textPreview":"流式 llm.delta | Token 和审计聚合","textChars":24,"textLines":2,"bbox":[1050,266,124,44]}
+{"kind":"shape","id":"sh/d4f29wny","slide":6,"name":"为什么默认 ReAct","bbox":[74,386,520,138]}
+{"kind":"shape","id":"sh/qh4jeh4n","slide":6,"bbox":[74,386,8,138]}
+{"kind":"textbox","id":"sh/ridk7m58","slide":6,"text":"为什么默认 ReAct","textPreview":"为什么默认 ReAct","textChars":11,"textLines":1,"bbox":[98,406,476,30]}
+{"kind":"textbox","id":"sh/4fm1c7mh","slide":6,"text":"用户输入不可预测，ReAct 能先思考、再调用工具、再观察结果并继续决策，适合复杂任务和多工具链路。","textPreview":"用户输入不可预测，ReAct 能先思考、再调用工具、再观察结果并继续决策，适合复杂任务和多工具链路。","textChars":50,"textLines":1,"bbox":[98,446,476,66]}
+{"kind":"shape","id":"sh/pgv25cn2","slide":6,"name":"如何兼容 single / tool-calling","bbox":[674,386,520,138]}
+{"kind":"shape","id":"sh/2d4jax4b","slide":6,"bbox":[674,386,8,138]}
+{"kind":"textbox","id":"sh/3edk325w","slide":6,"text":"如何兼容 single / tool-calling","textPreview":"如何兼容 single / tool-calling","textChars":26,"textLines":1,"bbox":[698,406,476,30]}
+{"kind":"textbox","id":"sh/8b6lobml","slide":6,"text":"简单意图可走一次模型或直接工具；模型支持原生 tool_calls 时走 Tool Calling；复杂任务仍回到 ReAct。","textPreview":"简单意图可走一次模型或直接工具；模型支持原生 tool_calls 时走 Tool Calling；复杂任务仍回到 ReAct。","textChars":64,"textLines":1,"bbox":[698,446,476,66]}
+{"kind":"notes","id":"nt/v0v3hf","slide":6,"text":""}
+{"kind":"slide","id":"sl/t9ln7n","slide":7,"title":"新增业务功能总览","textShapes":16}
+{"kind":"shape","id":"sh/ehkjqdo7","slide":7,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/1kb2l87y","slide":7,"text":"新增业务功能总览","textPreview":"新增业务功能总览","textChars":8,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/gj2ls36d","slide":7,"text":"从“能跑 Agent”升级到“能管、能审、能自动化、能接入业务”","textPreview":"从“能跑 Agent”升级到“能管、能审、能自动化、能接入业务”","textChars":32,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/3mtknip4","slide":7,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/2lk3udoj","slide":7,"text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/p8v2ps7u","slide":7,"name":"Plan 计划模式","bbox":[70,146,330,150]}
+{"kind":"shape","id":"sh/o7mlwn6p","slide":7,"bbox":[70,146,8,150]}
+{"kind":"textbox","id":"sh/jq9krypk","slide":7,"text":"Plan 计划模式","textPreview":"Plan 计划模式","textChars":9,"textLines":1,"bbox":[94,166,286,30]}
+{"kind":"textbox","id":"sh/ip0jitof","slide":7,"text":"先生成计划，再修订、确认、执行；支持模板和差异摘要。","textPreview":"先生成计划，再修订、确认、执行；支持模板和差异摘要。","textChars":26,"textLines":1,"bbox":[94,206,286,78]}
+{"kind":"shape","id":"sh/orexwbu9","slide":7,"name":"自动化任务","bbox":[450,146,330,150]}
+{"kind":"shape","id":"sh/9s7y5gvu","slide":7,"bbox":[450,146,8,150]}
+{"kind":"textbox","id":"sh/mpwfu1c3","slide":7,"text":"自动化任务","textPreview":"自动化任务","textChars":5,"textLines":1,"bbox":[474,166,286,30]}
+{"kind":"textbox","id":"sh/nq5w36do","slide":7,"text":"固定间隔、Cron、单次执行、立即运行、重试退避和历史记录。","textPreview":"固定间隔、Cron、单次执行、立即运行、重试退避和历史记录。","textChars":30,"textLines":1,"bbox":[474,206,286,78]}
+{"kind":"shape","id":"sh/wvyx0bul","slide":7,"name":"通道与附件","bbox":[830,146,330,150]}
+{"kind":"shape","id":"sh/xw7y9gvq","slide":7,"bbox":[830,146,8,150]}
+{"kind":"textbox","id":"sh/atgfy1cf","slide":7,"text":"通道与附件","textPreview":"通道与附件","textChars":5,"textLines":1,"bbox":[854,166,286,30]}
+{"kind":"textbox","id":"sh/bupg76d0","slide":7,"text":"飞书/钉钉/DDIO，媒体缓存、附件解析、富文本摘要。","textPreview":"飞书/钉钉/DDIO，媒体缓存、附件解析、富文本摘要。","textChars":27,"textLines":1,"bbox":[854,206,286,78]}
+{"kind":"shape","id":"sh/czuxoru1","slide":7,"name":"身份与权限","bbox":[70,348,330,150]}
+{"kind":"shape","id":"sh/d0nexcvm","slide":7,"bbox":[70,348,8,150]}
+{"kind":"textbox","id":"sh/tgvu18na","slide":7,"text":"身份与权限","textPreview":"身份与权限","textChars":5,"textLines":1,"bbox":[94,368,286,30]}
+{"kind":"textbox","id":"sh/svmds3m5","slide":7,"text":"本地用户、API Token、设备配对、通道绑定、角色策略。","textPreview":"本地用户、API Token、设备配对、通道绑定、角色策略。","textChars":30,"textLines":1,"bbox":[94,408,286,78]}
+{"kind":"shape","id":"sh/7udczy5k","slide":7,"name":"Worker/SubAgent","bbox":[450,348,330,150]}
+{"kind":"shape","id":"sh/6t4vqdoz","slide":7,"bbox":[450,348,8,150]}
+{"kind":"textbox","id":"sh/hkfu5snm","slide":7,"text":"Worker/SubAgent","textPreview":"Worker/SubAgent","textChars":15,"textLines":1,"bbox":[474,368,286,30]}
+{"kind":"textbox","id":"sh/gj6dwnm1","slide":7,"text":"高危命令独立 JVM 隔离，子 Agent 单个/批量/并行派发。","textPreview":"高危命令独立 JVM 隔离，子 Agent 单个/批量/并行派发。","textChars":33,"textLines":1,"bbox":[474,408,286,78]}
+{"kind":"shape","id":"sh/fixc3i5g","slide":7,"name":"MCP/Skill 生态","bbox":[830,348,330,150]}
+{"kind":"shape","id":"sh/uhovud4v","slide":7,"bbox":[830,348,8,150]}
+{"kind":"textbox","id":"sh/poze9sni","slide":7,"text":"MCP/Skill 生态","textPreview":"MCP/Skill 生态","textChars":12,"textLines":1,"bbox":[854,368,286,30]}
+{"kind":"textbox","id":"sh/on6d0nmx","slide":7,"text":"STDIO/HTTP/SSE MCP，Skill 安装启停和多执行器。","textPreview":"STDIO/HTTP/SSE MCP，Skill 安装启停和多执行器。","textChars":35,"textLines":1,"bbox":[854,408,286,78]}
+{"kind":"textbox","id":"sh/mhgje5gj","slide":7,"text":"业务价值：降低接入成本、把高危动作纳入审批和隔离、让 IM/桌面/后台任务共享同一套 Runtime。","textPreview":"业务价值：降低接入成本、把高危动作纳入审批和隔离、让 IM/桌面/后台任务共享同一套 Runtime。","textChars":51,"textLines":1,"bbox":[96,592,1030,30]}
+{"kind":"notes","id":"nt/t9ln7n","slide":7,"text":""}
+{"kind":"slide","id":"sl/r4tzl0","slide":8,"title":"Plan 计划模式","textShapes":16}
+{"kind":"shape","id":"sh/m18be9wz","slide":8,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/9ozupova","slide":8,"text":"Plan 计划模式","textPreview":"Plan 计划模式","textChars":9,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/8nqdgjep","slide":8,"text":"适合复杂需求：先计划、可修改、再执行，而不是直接开跑","textPreview":"适合复杂需求：先计划、可修改、再执行，而不是直接开跑","textChars":26,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/vq1crydg","slide":8,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/apsvitwv","slide":8,"text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/xsjutovm","slide":8,"name":"需求输入","bbox":[78,176,142,38]}
+{"kind":"textbox","id":"sh/wradk3e1","slide":8,"text":"需求输入","textPreview":"需求输入","textChars":4,"textLines":1,"bbox":[86,186,126,18]}
+{"kind":"shape","id":"sh/buxcfuxc","slide":8,"bbox":[226,181,24,28]}
+{"kind":"shape","id":"sh/qtob6pwr","slide":8,"name":"生成 PlanDraft","bbox":[256,176,142,38]}
+{"kind":"textbox","id":"sh/0nm9of6t","slide":8,"text":"生成 PlanDraft","textPreview":"生成 PlanDraft","textChars":12,"textLines":1,"bbox":[264,186,126,18]}
+{"kind":"shape","id":"sh/1ofahkny","slide":8,"bbox":[404,181,24,28]}
+{"kind":"shape","id":"sh/el4rm5on","slide":8,"name":"用户修订/确认","bbox":[434,176,142,38]}
+{"kind":"textbox","id":"sh/zmdsfap8","slide":8,"text":"用户修订/确认","textPreview":"用户修订/确认","textChars":7,"textLines":1,"bbox":[442,186,126,18]}
+{"kind":"shape","id":"sh/ob6tsf6p","slide":8,"bbox":[582,181,24,28]}
+{"kind":"shape","id":"sh/9cfalkna","slide":8,"name":"转换 Todo","bbox":[612,176,142,38]}
+{"kind":"textbox","id":"sh/mpobqpoj","slide":8,"text":"转换 Todo","textPreview":"转换 Todo","textChars":7,"textLines":1,"bbox":[620,186,126,18]}
+{"kind":"shape","id":"sh/nqxsja54","slide":8,"bbox":[760,181,24,28]}
+{"kind":"shape","id":"sh/4v29gv6l","slide":8,"name":"执行 SSE","bbox":[790,176,142,38]}
+{"kind":"textbox","id":"sh/5gba9076","slide":8,"text":"执行 SSE","textPreview":"执行 SSE","textChars":6,"textLines":1,"bbox":[798,186,126,18]}
+{"kind":"shape","id":"sh/5c3qdczu","slide":8,"bbox":[938,181,24,28]}
+{"kind":"shape","id":"sh/kbupkry9","slide":8,"name":"审计差异","bbox":[968,176,142,38]}
+{"kind":"textbox","id":"sh/jal8bmho","slide":8,"text":"审计差异","textPreview":"审计差异","textChars":4,"textLines":1,"bbox":[976,186,126,18]}
+{"kind":"shape","id":"sh/i9c7ihg3","slide":8,"name":"已经具备","bbox":[76,284,342,194]}
+{"kind":"shape","id":"sh/tgnqhwzq","slide":8,"bbox":[76,284,8,194]}
+{"kind":"textbox","id":"sh/sfeporyl","slide":8,"text":"已经具备","textPreview":"已经具备","textChars":4,"textLines":1,"bbox":[100,304,298,30]}
+{"kind":"textbox","id":"sh/7e58fmh0","slide":8,"text":"PlanDraft / PlanItem / PlanStore\nSQLite agent_plan 持久化\n生成、修订、确认、取消、执行\n内置 local-dev / bugfix 等模板","textPreview":"PlanDraft / PlanItem / PlanStore | SQLite agent_plan 持久化 | 生成、修订、确认、取消、执行 | 内置 local-dev / bugfix 等模板","textChars":95,"textLines":4,"bbox":[104,346,294,122]}
+{"kind":"shape","id":"sh/6dw7mhgf","slide":8,"name":"前端体验","bbox":[468,284,342,194]}
+{"kind":"shape","id":"sh/hk7qlwz2","slide":8,"bbox":[468,284,8,194]}
+{"kind":"textbox","id":"sh/gje9sbyh","slide":8,"text":"前端体验","textPreview":"前端体验","textChars":4,"textLines":1,"bbox":[492,304,298,30]}
+{"kind":"textbox","id":"sh/edovq9sn","slide":8,"text":"Admin/App 支持计划开关\n/plan 指令直接创建计划\n计划卡片展示版本差异\n执行阻塞时可修订后继续","textPreview":"Admin/App 支持计划开关 | /plan 指令直接创建计划 | 计划卡片展示版本差异 | 执行阻塞时可修订后继续","textChars":54,"textLines":4,"bbox":[496,346,294,122]}
+{"kind":"shape","id":"sh/zexwzet8","slide":8,"name":"设计边界","bbox":[860,284,342,194]}
+{"kind":"shape","id":"sh/0f6dsjat","slide":8,"bbox":[860,284,8,194]}
+{"kind":"textbox","id":"sh/1gfe14be","slide":8,"text":"设计边界","textPreview":"设计边界","textChars":4,"textLines":1,"bbox":[884,304,298,30]}
+{"kind":"textbox","id":"sh/mh8vu9sz","slide":8,"text":"不另造第二套执行引擎\n确认后复用 Runtime/Todo/ToolGuard\n高危步骤仍走审批和隔离\n后续优化自动重规划策略","textPreview":"不另造第二套执行引擎 | 确认后复用 Runtime/Todo/ToolGuard | 高危步骤仍走审批和隔离 | 后续优化自动重规划策略","textChars":63,"textLines":4,"bbox":[888,346,294,122]}
+{"kind":"textbox","id":"sh/nihw3et4","slide":8,"text":"来源：README Plan API / 当前完成情况。","textPreview":"来源：README Plan API / 当前完成情况。","textChars":28,"textLines":1,"bbox":[72,642,920,18]}
+{"kind":"notes","id":"nt/r4tzl0","slide":8,"text":""}
+{"kind":"slide","id":"sl/mncm7b","slide":9,"title":"智能体自动化任务","textShapes":10}
+{"kind":"shape","id":"sh/cvmtgveh","slide":9,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/budc7qxc","slide":9,"text":"智能体自动化任务","textPreview":"智能体自动化任务","textChars":8,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/at4be5wr","slide":9,"text":"把一次性 Agent 调用扩展成可运维的周期任务","textPreview":"把一次性 Agent 调用扩展成可运维的周期任务","textChars":24,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/lkfudkfe","slide":9,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/kj6tkfet","slide":9,"text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/zidcbax8","slide":9,"name":"调度能力","bbox":[70,148,335,330]}
+{"kind":"shape","id":"sh/yh4bi5wn","slide":9,"bbox":[70,148,8,330]}
+{"kind":"textbox","id":"sh/9ofuhkfa","slide":9,"text":"调度能力","textPreview":"调度能力","textChars":4,"textLines":1,"bbox":[94,168,291,30]}
+{"kind":"textbox","id":"sh/8n6dofep","slide":9,"text":"固定间隔执行\nCron 表达式\n单次计划任务\n立即运行\n启用/暂停/编辑","textPreview":"固定间隔执行 | Cron 表达式 | 单次计划任务 | 立即运行 | 启用/暂停/编辑","textChars":36,"textLines":5,"bbox":[98,210,287,258]}
+{"kind":"shape","id":"sh/654n6lgr","slide":9,"name":"失败治理","bbox":[470,148,335,330]}
+{"kind":"shape","id":"sh/76d4fqhc","slide":9,"bbox":[470,148,8,330]}
+{"kind":"textbox","id":"sh/s7658vyx","slide":9,"text":"失败治理","textPreview":"失败治理","textChars":4,"textLines":1,"bbox":[494,168,291,30]}
+{"kind":"textbox","id":"sh/t8fmh0zi","slide":9,"text":"失败重试\n退避策略\n重试耗尽后暂停\n运行历史保留\n异常链路可追踪","textPreview":"失败重试 | 退避策略 | 重试耗尽后暂停 | 运行历史保留 | 异常链路可追踪","textChars":32,"textLines":5,"bbox":[498,210,287,258]}
+{"kind":"shape","id":"sh/u9ona5g3","slide":9,"name":"运营指标","bbox":[870,148,335,330]}
+{"kind":"shape","id":"sh/faxojaho","slide":9,"bbox":[870,148,8,330]}
+{"kind":"textbox","id":"sh/gb65cfyt","slide":9,"text":"运营指标","textPreview":"运营指标","textChars":4,"textLines":1,"bbox":[894,168,291,30]}
+{"kind":"textbox","id":"sh/hcf6lkze","slide":9,"text":"耗时聚合\nToken 聚合\n工具链路聚合\n管理台页面\n适合巡检/日报/同步任务","textPreview":"耗时聚合 | Token 聚合 | 工具链路聚合 | 管理台页面 | 适合巡检/日报/同步任务","textChars":39,"textLines":5,"bbox":[898,210,287,258]}
+{"kind":"textbox","id":"sh/adkny1gj","slide":9,"text":"典型场景：每天巡检接口状态、定时总结群消息、定期扫描项目文档、失败后自动重试并保留审计记录。","textPreview":"典型场景：每天巡检接口状态、定时总结群消息、定期扫描项目文档、失败后自动重试并保留审计记录。","textChars":46,"textLines":1,"bbox":[96,558,1020,30]}
+{"kind":"notes","id":"nt/mncm7b","slide":9,"text":""}
+{"kind":"slide","id":"sl/kwbwq4","slide":10,"title":"通道、附件与知识库","textShapes":11}
+{"kind":"shape","id":"sh/ql0j2hgb","slide":10,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/dob2dwz2","slide":10,"text":"通道、附件与知识库","textPreview":"通道、附件与知识库","textChars":9,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/cn214ryh","slide":10,"text":"让 IM 消息、文件和本地知识进入同一条 Agent 执行链路","textPreview":"让 IM 消息、文件和本地知识进入同一条 Agent 执行链路","textChars":31,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/zqtkf6hs","slide":10,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/epkj61gn","slide":10,"text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/1sb2hwzy","slide":10,"name":"通道入口","bbox":[70,142,350,184]}
+{"kind":"shape","id":"sh/0r218ryd","slide":10,"bbox":[70,142,8,184]}
+{"kind":"textbox","id":"sh/vu9k32ho","slide":10,"text":"通道入口","textPreview":"通道入口","textChars":4,"textLines":1,"bbox":[94,162,306,30]}
+{"kind":"textbox","id":"sh/utgjuxg3","slide":10,"text":"飞书、钉钉、DDIO\nHTTP / Stream / Bot 标准事件\nChannel 外部用户绑定本地用户\n事件语义 metadata","textPreview":"飞书、钉钉、DDIO | HTTP / Stream / Bot 标准事件 | Channel 外部用户绑定本地用户 | 事件语义 metadata","textChars":68,"textLines":4,"bbox":[98,204,302,112]}
+{"kind":"shape","id":"sh/4zqtgjid","slide":10,"name":"媒体与附件","bbox":[465,142,350,184]}
+{"kind":"shape","id":"sh/50zupozi","slide":10,"bbox":[465,142,8,184]}
+{"kind":"textbox","id":"sh/id8be907","slide":10,"text":"媒体与附件","textPreview":"媒体与附件","textChars":5,"textLines":1,"bbox":[489,162,306,30]}
+{"kind":"textbox","id":"sh/3ehcnehs","slide":10,"text":"媒体 URL / 大小 / 超时限制\n钉钉 downloadCode 下载\n附件存在标记与下载状态\n富文本统一 Markdown 摘要","textPreview":"媒体 URL / 大小 / 超时限制 | 钉钉 downloadCode 下载 | 附件存在标记与下载状态 | 富文本统一 Markdown 摘要","textChars":67,"textLines":4,"bbox":[493,204,302,112]}
+{"kind":"shape","id":"sh/s3atk3i9","slide":10,"name":"知识与记忆","bbox":[860,142,350,184]}
+{"kind":"shape","id":"sh/d4jutozu","slide":10,"bbox":[860,142,8,184]}
+{"kind":"textbox","id":"sh/q18bit03","slide":10,"text":"知识与记忆","textPreview":"知识与记忆","textChars":5,"textLines":1,"bbox":[884,162,306,30]}
+{"kind":"textbox","id":"sh/r2hcryho","slide":10,"text":"AttachmentService 写入知识库\nKnowledgeService 补充上下文\nSQLite FTS5 + JVector\n命中记录和候选审核","textPreview":"AttachmentService 写入知识库 | KnowledgeService 补充上下文 | SQLite FTS5 + JVector | 命中记录和候选审核","textChars":78,"textLines":4,"bbox":[888,204,302,112]}
+{"kind":"shape","id":"sh/876t8zi5","slide":10,"bbox":[115,402,1020,86]}
+{"kind":"textbox","id":"sh/t8fah4zq","slide":10,"text":"处理路径：通道消息 -> ChannelRouter -> PendingAction / 系统意图 -> 附件解析与知识检索 -> AgentRuntime -> 回复到原通道","textPreview":"处理路径：通道消息 -> ChannelRouter -> PendingAction / 系统意图 -> 附件解析与知识检索 -> AgentRuntime -> 回复到原通道","textChars":89,"textLines":1,"bbox":[140,432,970,26]}
+{"kind":"textbox","id":"sh/947al0re","slide":10,"text":"来源：README 通道、系统意图、附件与知识库说明；CONFIGURATION 文档。","textPreview":"来源：README 通道、系统意图、附件与知识库说明；CONFIGURATION 文档。","textChars":44,"textLines":1,"bbox":[72,642,920,18]}
+{"kind":"notes","id":"nt/kwbwq4","slide":10,"text":""}
+{"kind":"slide","id":"sl/19iwl0","slide":11,"title":"MCP、Skill 与 Toolkit 生态","textShapes":10}
+{"kind":"shape","id":"sh/0vipsvq1","slide":11,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/fu9ojq9g","slide":11,"text":"MCP、Skill 与 Toolkit 生态","textPreview":"MCP、Skill 与 Toolkit 生态","textChars":22,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/et07ql8v","slide":11,"text":"统一注册到 AgentToolRegistry，业务工具和外部工具同一套治理","textPreview":"统一注册到 AgentToolRegistry，业务工具和外部工具同一套治理","textChars":38,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/dsr6hgrq","slide":11,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/s7ipobq5","slide":11,"text":"11","textPreview":"11","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/r69of69k","slide":11,"name":"MCP","bbox":[72,146,340,350]}
+{"kind":"shape","id":"sh/q507m18z","slide":11,"bbox":[72,146,8,350]}
+{"kind":"textbox","id":"sh/xovqt07u","slide":11,"text":"MCP","textPreview":"MCP","textChars":3,"textLines":1,"bbox":[96,166,296,30]}
+{"kind":"textbox","id":"sh/c32p0fq9","slide":11,"text":"STDIO 启动、握手、tools/list、tools/call\nHTTP / streamableHttp JSON-RPC\nSSE endpoint/message 兼容\nresources/prompts 查询读取\nautoApprove 通配规则","textPreview":"STDIO 启动、握手、tools/list、tools/call | HTTP / streamableHttp JSON-RPC | SSE endpoint/message 兼容 | resources/prompts 查询读取 | autoApprove 通配规则","textChars":128,"textLines":5,"bbox":[100,208,292,278]}
+{"kind":"shape","id":"sh/e14j2d4b","slide":11,"name":"Skill","bbox":[470,146,340,350]}
+{"kind":"shape","id":"sh/f2d0vilw","slide":11,"bbox":[470,146,8,350]}
+{"kind":"textbox","id":"sh/036143mh","slide":11,"text":"Skill","textPreview":"Skill","textChars":5,"textLines":1,"bbox":[494,166,296,30]}
+{"kind":"textbox","id":"sh/14fix832","slide":11,"text":"本地安装、启用、禁用、列表\nmanifest 保存到 .clawagent/skills\ndocument / http / script / java 执行器\n权限声明校验\n系统 Skill: create/install","textPreview":"本地安装、启用、禁用、列表 | manifest 保存到 .clawagent/skills | document / http / script / java 执行器 | 权限声明校验 | 系统 Skill: create/install","textChars":112,"textLines":5,"bbox":[498,208,292,278]}
+{"kind":"shape","id":"sh/qx4jyt4f","slide":11,"name":"Toolkit","bbox":[868,146,340,350]}
+{"kind":"shape","id":"sh/ryd0ryl0","slide":11,"bbox":[868,146,8,350]}
+{"kind":"textbox","id":"sh/szm103ml","slide":11,"text":"Toolkit","textPreview":"Toolkit","textChars":7,"textLines":1,"bbox":[892,166,296,30]}
+{"kind":"textbox","id":"sh/d0vit836","slide":11,"text":"time / weather / web.fetch / web.search\nfilesystem 读、列、搜、信息、受控写\nexecute 与 process.start\n业务 AgentTool Bean 自动发现\n高危工具接入 ToolGuard","textPreview":"time / weather / web.fetch / web.search | filesystem 读、列、搜、信息、受控写 | execute 与 process.start | 业务 AgentTool Bean 自动发现 | 高危工具接入 ToolGuard","textChars":127,"textLines":5,"bbox":[896,208,292,278]}
+{"kind":"textbox","id":"sh/atojax4j","slide":11,"text":"落地重点：不是把工具分散在不同插件里，而是统一注册、统一审批、统一审计、统一事件流。","textPreview":"落地重点：不是把工具分散在不同插件里，而是统一注册、统一审批、统一审计、统一事件流。","textChars":42,"textLines":1,"bbox":[124,568,1010,28]}
+{"kind":"notes","id":"nt/19iwl0","slide":11,"text":""}
+{"kind":"slide","id":"sl/vh1ogy","slide":12,"title":"身份、权限与审批治理","textShapes":12}
+{"kind":"shape","id":"sh/gb2tgbed","slide":12,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/fatsn6xs","slide":12,"text":"身份、权限与审批治理","textPreview":"身份、权限与审批治理","textChars":10,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/e9kbelw7","slide":12,"text":"从单机 Demo 走向可管可审的本地企业 Agent","textPreview":"从单机 Demo 走向可管可审的本地企业 Agent","textChars":26,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/p0vat0fa","slide":12,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/of2tkvep","slide":12,"text":"12","textPreview":"12","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/3etsrqx4","slide":12,"name":"身份体系","bbox":[74,144,510,168]}
+{"kind":"shape","id":"sh/2dkbilwj","slide":12,"bbox":[74,144,8,168]}
+{"kind":"textbox","id":"sh/54rahwfq","slide":12,"text":"身份体系","textPreview":"身份体系","textChars":4,"textLines":1,"bbox":[98,164,466,30]}
+{"kind":"textbox","id":"sh/4ji98re5","slide":12,"text":"本地 owner 初始化\n用户登录/退出/会话撤销\nAPI Token owner/scope\n当前用户注入任务 userId","textPreview":"本地 owner 初始化 | 用户登录/退出/会话撤销 | API Token owner/scope | 当前用户注入任务 userId","textChars":63,"textLines":4,"bbox":[102,206,462,96]}
+{"kind":"shape","id":"sh/2xsvi983","slide":12,"name":"设备与通道","bbox":[644,144,510,168]}
+{"kind":"shape","id":"sh/3y1wbu9o","slide":12,"bbox":[644,144,8,168]}
+{"kind":"textbox","id":"sh/4zadkzq9","slide":12,"text":"设备与通道","textPreview":"设备与通道","textChars":5,"textLines":1,"bbox":[668,164,466,30]}
+{"kind":"textbox","id":"sh/p0jed4ru","slide":12,"text":"设备配对、密钥校验、心跳\n设备用户绑定\nChannel 外部用户绑定\nToken/User/Device/Channel 合并","textPreview":"设备配对、密钥校验、心跳 | 设备用户绑定 | Channel 外部用户绑定 | Token/User/Device/Channel 合并","textChars":63,"textLines":4,"bbox":[672,206,462,96]}
+{"kind":"shape","id":"sh/q1cvm98f","slide":12,"name":"审批与策略","bbox":[74,364,510,168]}
+{"kind":"shape","id":"sh/b2lwfep0","slide":12,"bbox":[74,364,8,168]}
+{"kind":"textbox","id":"sh/c3udojq5","slide":12,"text":"审批与策略","textPreview":"审批与策略","textChars":5,"textLines":1,"bbox":[98,384,466,30]}
+{"kind":"textbox","id":"sh/d43eho7q","slide":12,"text":"PendingAction 三类确认\n高危工具完整确认文本\n角色策略默认审批模式\nAgent 子任务工具边界","textPreview":"PendingAction 三类确认 | 高危工具完整确认文本 | 角色策略默认审批模式 | Agent 子任务工具边界","textChars":54,"textLines":4,"bbox":[102,426,462,96]}
+{"kind":"shape","id":"sh/y5cvqt8b","slide":12,"name":"入口保护","bbox":[644,364,510,168]}
+{"kind":"shape","id":"sh/z6lwjepw","slide":12,"bbox":[644,364,8,168]}
+{"kind":"textbox","id":"sh/va5c7y54","slide":12,"text":"入口保护","textPreview":"入口保护","textChars":4,"textLines":1,"bbox":[668,384,466,30]}
+{"kind":"textbox","id":"sh/a9wvytoj","slide":12,"text":"单机固定窗口 Rate Limit\n按 Token/User/Device/IP 分桶\nPrompt Injection Defense\nSensitiveDataInterceptor 脱敏","textPreview":"单机固定窗口 Rate Limit | 按 Token/User/Device/IP 分桶 | Prompt Injection Defense | SensitiveDataInterceptor 脱敏","textChars":96,"textLines":4,"bbox":[672,426,462,96]}
+{"kind":"textbox","id":"sh/xwnu9ona","slide":12,"text":"来源：README 当前完成情况、权限治理、通道 Channel 说明。","textPreview":"来源：README 当前完成情况、权限治理、通道 Channel 说明。","textChars":36,"textLines":1,"bbox":[72,642,920,18]}
+{"kind":"notes","id":"nt/vh1ogy","slide":12,"text":""}
+{"kind":"slide","id":"sl/iucyxg","slide":13,"title":"Worker 与 SubAgent","textShapes":10}
+{"kind":"shape","id":"sh/3m1gfq1g","slide":13,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/4nahov21","slide":13,"text":"Worker 与 SubAgent","textPreview":"Worker 与 SubAgent","textChars":17,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/5ojih0jm","slide":13,"text":"把高危执行和并行子任务从主 Runtime 中隔离出来","textPreview":"把高危执行和并行子任务从主 Runtime 中隔离出来","textChars":27,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/qpszq5k7","slide":13,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/rql0jq1c","slide":13,"text":"13","textPreview":"13","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/sruhsv2x","slide":13,"name":"高危命令 Worker","bbox":[76,146,340,362]}
+{"kind":"shape","id":"sh/ds3il0ji","slide":13,"bbox":[76,146,8,362]}
+{"kind":"textbox","id":"sh/6t8ze1kn","slide":13,"text":"高危命令 Worker","textPreview":"高危命令 Worker","textChars":11,"textLines":1,"bbox":[100,166,296,30]}
+{"kind":"textbox","id":"sh/7uhg7618","slide":13,"text":"execute high risk 才启用\n独立 JVM worker 进程\n超时强杀、输出上限\nJVM heap / CPU 时间限制\n主服务侧 worker 并发池","textPreview":"execute high risk 才启用 | 独立 JVM worker 进程 | 超时强杀、输出上限 | JVM heap / CPU 时间限制 | 主服务侧 worker 并发池","textChars":84,"textLines":5,"bbox":[104,208,292,290]}
+{"kind":"shape","id":"sh/f2twrihw","slide":13,"name":"process.start 隔离","bbox":[470,146,340,362]}
+{"kind":"shape","id":"sh/ehkvydgr","slide":13,"bbox":[470,146,8,362]}
+{"kind":"textbox","id":"sh/14bet8z2","slide":13,"text":"process.start 隔离","textPreview":"process.start 隔离","textChars":16,"textLines":1,"bbox":[494,166,296,30]}
+{"kind":"textbox","id":"sh/g32d03yh","slide":13,"text":"后台进程可通过 worker 启动\n返回 pid 后由主服务托管\n记录 worker pid/exitCode/elapsedMs\nstdout/stderr 截断信息回传\n便于审计和排障","textPreview":"后台进程可通过 worker 启动 | 返回 pid 后由主服务托管 | 记录 worker pid/exitCode/elapsedMs | stdout/stderr 截断信息回传 | 便于审计和排障","textChars":94,"textLines":5,"bbox":[498,208,292,290]}
+{"kind":"shape","id":"sh/re9wnyh0","slide":13,"name":"SubAgent 编排","bbox":[864,146,340,362]}
+{"kind":"shape","id":"sh/6d0vutgf","slide":13,"bbox":[864,146,8,362]}
+{"kind":"textbox","id":"sh/tgrep8z6","slide":13,"text":"SubAgent 编排","textPreview":"SubAgent 编排","textChars":11,"textLines":1,"bbox":[888,166,296,30]}
+{"kind":"textbox","id":"sh/sfidw3yl","slide":13,"text":"单个派生、批量派发、并行提交\n默认只读继承项目上下文\nparallel 默认最多 4，硬上限 8\nfrom-plan 可把 PlanItem 转子任务\n高危审批不横向扩散","textPreview":"单个派生、批量派发、并行提交 | 默认只读继承项目上下文 | parallel 默认最多 4，硬上限 8 | from-plan 可把 PlanItem 转子任务 | 高危审批不横向扩散","textChars":85,"textLines":5,"bbox":[892,208,292,290]}
+{"kind":"textbox","id":"sh/ja9cjyh4","slide":13,"text":"边界：worker 不做第二套完整 Runtime；它只负责“在哪里执行、怎么限制、怎么杀掉”。","textPreview":"边界：worker 不做第二套完整 Runtime；它只负责“在哪里执行、怎么限制、怎么杀掉”。","textChars":48,"textLines":1,"bbox":[124,580,1010,28]}
+{"kind":"notes","id":"nt/iucyxg","slide":13,"text":""}
+{"kind":"slide","id":"sl/e4zzjn","slide":14,"title":"管理台、App 与运维视角","textShapes":12}
+{"kind":"shape","id":"sh/5kra5w7m","slide":14,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/ixgruhob","slide":14,"text":"管理台、App 与运维视角","textPreview":"管理台、App 与运维视角","textChars":13,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/jy9s3mpw","slide":14,"text":"前端不只是聊天框，而是把配置、审计、能力边界和本地运行状态显性化","textPreview":"前端不只是聊天框，而是把配置、审计、能力边界和本地运行状态显性化","textChars":32,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/sni90b6d","slide":14,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/dora9w7y","slide":14,"text":"14","textPreview":"14","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/6l0ry1o7","slide":14,"name":"Admin Console","bbox":[72,140,260,378]}
+{"kind":"shape","id":"sh/rm9s76ps","slide":14,"bbox":[72,140,8,378]}
+{"kind":"textbox","id":"sh/0r294b69","slide":14,"text":"Admin Console","textPreview":"Admin Console","textChars":13,"textLines":1,"bbox":[96,160,216,30]}
+{"kind":"textbox","id":"sh/1sbadg7u","slide":14,"text":"总览指标\n会话/任务/Todo\nMCP / Skill\nToken usage\n审计/自动化/文件审查","textPreview":"总览指标 | 会话/任务/Todo | MCP / Skill | Token usage | 审计/自动化/文件审查","textChars":51,"textLines":5,"bbox":[100,202,212,306]}
+{"kind":"shape","id":"sh/9wnyd4vm","slide":14,"name":"Desktop App","bbox":[366,140,260,378]}
+{"kind":"shape","id":"sh/8vex4ze1","slide":14,"bbox":[366,140,8,378]}
+{"kind":"textbox","id":"sh/nu5gbuxg","slide":14,"text":"Desktop App","textPreview":"Desktop App","textChars":11,"textLines":1,"bbox":[390,160,216,30]}
+{"kind":"textbox","id":"sh/mtwf2pwv","slide":14,"text":"聊天工作台\n计划模式开关\n文件审查\n设置页\n设备配对/心跳","textPreview":"聊天工作台 | 计划模式开关 | 文件审查 | 设置页 | 设备配对/心跳","textChars":29,"textLines":5,"bbox":[394,202,212,306]}
+{"kind":"shape","id":"sh/xk7yh4vi","slide":14,"name":"Web Console","bbox":[660,140,260,378]}
+{"kind":"shape","id":"sh/wzyx8zex","slide":14,"bbox":[660,140,8,378]}
+{"kind":"textbox","id":"sh/vy5gfudc","slide":14,"text":"Web Console","textPreview":"Web Console","textChars":11,"textLines":1,"bbox":[684,160,216,30]}
+{"kind":"textbox","id":"sh/axwf69wr","slide":14,"text":"保留轻量入口\n适合快速验证\nREST/SSE 流式任务\n本地服务端口 17891\nHealth API","textPreview":"保留轻量入口 | 适合快速验证 | REST/SSE 流式任务 | 本地服务端口 17891 | Health API","textChars":51,"textLines":5,"bbox":[688,202,212,306]}
+{"kind":"shape","id":"sh/do3e5kfe","slide":14,"name":"运维页面","bbox":[954,140,260,378]}
+{"kind":"shape","id":"sh/c3uxwfet","slide":14,"bbox":[954,140,8,378]}
+{"kind":"textbox","id":"sh/47yxcfmp","slide":14,"text":"运维页面","textPreview":"运维页面","textChars":4,"textLines":1,"bbox":[978,160,216,30]}
+{"kind":"textbox","id":"sh/587ylkna","slide":14,"text":"本地配置健康检查\nWorker jar 路径检查\nChannel 绑定管理\nAuth 角色门禁\n异常任务与日志","textPreview":"本地配置健康检查 | Worker jar 路径检查 | Channel 绑定管理 | Auth 角色门禁 | 异常任务与日志","textChars":55,"textLines":5,"bbox":[982,202,212,306]}
+{"kind":"textbox","id":"sh/i5gfa54j","slide":14,"text":"来源：README 管理台、App、当前完成情况。","textPreview":"来源：README 管理台、App、当前完成情况。","textChars":25,"textLines":1,"bbox":[72,642,920,18]}
+{"kind":"notes","id":"nt/e4zzjn","slide":14,"text":""}
+{"kind":"slide","id":"sl/dz8yn9","slide":15,"title":"审计、记忆与运行数据","textShapes":10}
+{"kind":"shape","id":"sh/ypkvu9wv","slide":15,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/lsvep4fm","slide":15,"text":"审计、记忆与运行数据","textPreview":"审计、记忆与运行数据","textChars":10,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/krmdwze1","slide":15,"text":"让 Agent 每一步都能被复盘，而不是只看到最终回答","textPreview":"让 Agent 每一步都能被复盘，而不是只看到最终回答","textChars":27,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/7udwrexs","slide":15,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/6t4vy9w7","slide":15,"text":"15","textPreview":"15","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/twvetofi","slide":15,"name":"任务事件","bbox":[82,148,330,322]}
+{"kind":"shape","id":"sh/8vmd0jed","slide":15,"bbox":[82,148,8,322]}
+{"kind":"textbox","id":"sh/vixwvyxo","slide":15,"text":"任务事件","textPreview":"任务事件","textChars":4,"textLines":1,"bbox":[106,168,286,30]}
+{"kind":"textbox","id":"sh/ux4v2tw3","slide":15,"text":"task.started / completed\nstep.started / finished\ntool started / succeeded\nllm.delta / llm.completed\nplan.updated","textPreview":"task.started / completed | step.started / finished | tool started / succeeded | llm.delta / llm.completed | plan.updated","textChars":112,"textLines":5,"bbox":[110,210,282,250]}
+{"kind":"shape","id":"sh/c3ux0ru1","slide":15,"name":"审计与回放","bbox":[475,148,330,322]}
+{"kind":"shape","id":"sh/x4ne9wvm","slide":15,"bbox":[475,148,8,322]}
+{"kind":"textbox","id":"sh/a1cvyhcb","slide":15,"text":"审计与回放","textPreview":"审计与回放","textChars":5,"textLines":1,"bbox":[499,168,286,30]}
+{"kind":"textbox","id":"sh/b2lw7mdg","slide":15,"text":"Audit Log / 事件回放\n工具审批记录\n文件审查 / 回滚\n任务恢复和 checkpoint\n敏感字段脱敏","textPreview":"Audit Log / 事件回放 | 工具审批记录 | 文件审查 / 回滚 | 任务恢复和 checkpoint | 敏感字段脱敏","textChars":57,"textLines":5,"bbox":[503,210,282,250]}
+{"kind":"shape","id":"sh/k7ex4bud","slide":15,"name":"Token 与记忆","bbox":[868,148,330,322]}
+{"kind":"shape","id":"sh/l8nedgvy","slide":15,"bbox":[868,148,8,322]}
+{"kind":"textbox","id":"sh/y5wf21c7","slide":15,"text":"Token 与记忆","textPreview":"Token 与记忆","textChars":9,"textLines":1,"bbox":[892,168,286,30]}
+{"kind":"textbox","id":"sh/z65wb6ds","slide":15,"text":"按 model / phase 聚合\nprompt/completion/total tokens\nFTS5 + JVector + RRF\n命中记录\n候选审核管理","textPreview":"按 model / phase 聚合 | prompt/completion/total tokens | FTS5 + JVector + RRF | 命中记录 | 候选审核管理","textChars":82,"textLines":5,"bbox":[896,210,282,250]}
+{"kind":"textbox","id":"sh/8vex8bu9","slide":15,"text":"对企业来说，关键不是 Agent 能不能答，而是它为什么这么做、调用了什么、谁批准的、能不能回放。","textPreview":"对企业来说，关键不是 Agent 能不能答，而是它为什么这么做、调用了什么、谁批准的、能不能回放。","textChars":49,"textLines":1,"bbox":[112,552,1040,28]}
+{"kind":"notes","id":"nt/dz8yn9","slide":15,"text":""}
+{"kind":"slide","id":"sl/iazgr3","slide":16,"title":"多种使用场景","textShapes":15}
+{"kind":"shape","id":"sh/0ral4ryt","slide":16,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/f614vmx8","slide":16,"text":"多种使用场景","textPreview":"多种使用场景","textChars":6,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/e5s32hgn","slide":16,"text":"围绕 Java 企业系统、本地行动和 IM 工作流落地","textPreview":"围绕 Java 企业系统、本地行动和 IM 工作流落地","textChars":27,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/pw3m1wfa","slide":16,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/ovu58ryp","slide":16,"text":"16","textPreview":"16","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/nul4z6xk","slide":16,"name":"企业系统内嵌 Agent","bbox":[70,144,330,150]}
+{"kind":"shape","id":"sh/2ts361gz","slide":16,"bbox":[70,144,8,150]}
+{"kind":"textbox","id":"sh/50zmpcf6","slide":16,"text":"企业系统内嵌 Agent","textPreview":"企业系统内嵌 Agent","textChars":12,"textLines":1,"bbox":[94,164,286,30]}
+{"kind":"textbox","id":"sh/4zqlw7yl","slide":16,"text":"Spring Boot starter 自动装配业务 AgentTool Bean，复用企业权限和审计。","textPreview":"Spring Boot starter 自动装配业务 AgentTool Bean，复用企业权限和审计。","textChars":52,"textLines":1,"bbox":[94,204,286,78]}
+{"kind":"shape","id":"sh/6h47yd0v","slide":16,"name":"本地开发行动助手","bbox":[450,144,330,150]}
+{"kind":"shape","id":"sh/7idory10","slide":16,"bbox":[450,144,8,150]}
+{"kind":"textbox","id":"sh/8jmp03il","slide":16,"text":"本地开发行动助手","textPreview":"本地开发行动助手","textChars":8,"textLines":1,"bbox":[474,164,286,30]}
+{"kind":"textbox","id":"sh/tkv6t8j6","slide":16,"text":"读取项目文件、搜索、执行低危命令，高危动作走审批和 worker 隔离。","textPreview":"读取项目文件、搜索、执行低危命令，高危动作走审批和 worker 隔离。","textChars":36,"textLines":1,"bbox":[474,204,286,78]}
+{"kind":"shape","id":"sh/ul472d0r","slide":16,"name":"IM 协同入口","bbox":[830,144,330,150]}
+{"kind":"shape","id":"sh/vmxovi1c","slide":16,"bbox":[830,144,8,150]}
+{"kind":"textbox","id":"sh/gn6p4nix","slide":16,"text":"IM 协同入口","textPreview":"IM 协同入口","textChars":7,"textLines":1,"bbox":[854,164,286,30]}
+{"kind":"textbox","id":"sh/hof6xsji","slide":16,"text":"飞书/钉钉/DDIO 消息进入 ChannelRouter，支持附件与富文本摘要。","textPreview":"飞书/钉钉/DDIO 消息进入 ChannelRouter，支持附件与富文本摘要。","textChars":41,"textLines":1,"bbox":[854,204,286,78]}
+{"kind":"shape","id":"sh/ipo76x03","slide":16,"name":"计划型复杂任务","bbox":[70,346,330,150]}
+{"kind":"shape","id":"sh/3axozi18","slide":16,"bbox":[70,346,8,150]}
+{"kind":"textbox","id":"sh/fehon2hg","slide":16,"text":"计划型复杂任务","textPreview":"计划型复杂任务","textChars":7,"textLines":1,"bbox":[94,366,286,30]}
+{"kind":"textbox","id":"sh/ed8nexgv","slide":16,"text":"先生成计划，用户确认后执行，阻塞后可修订继续。","textPreview":"先生成计划，用户确认后执行，阻塞后可修订继续。","textChars":23,"textLines":1,"bbox":[94,406,286,78]}
+{"kind":"shape","id":"sh/1gz6psfm","slide":16,"name":"定时巡检与自动化","bbox":[450,346,330,150]}
+{"kind":"shape","id":"sh/0fq5gny1","slide":16,"bbox":[450,346,8,150]}
+{"kind":"textbox","id":"sh/rqxojihk","slide":16,"text":"定时巡检与自动化","textPreview":"定时巡检与自动化","textChars":8,"textLines":1,"bbox":[474,366,286,30]}
+{"kind":"textbox","id":"sh/qponadgz","slide":16,"text":"Cron/间隔/单次任务，失败重试和运行历史保留。","textPreview":"Cron/间隔/单次任务，失败重试和运行历史保留。","textChars":25,"textLines":1,"bbox":[474,406,286,78]}
+{"kind":"shape","id":"sh/dcf6lsza","slide":16,"name":"知识问答与文件审查","bbox":[830,346,330,150]}
+{"kind":"shape","id":"sh/sb65cny5","slide":16,"bbox":[830,346,8,150]}
+{"kind":"textbox","id":"sh/3mx4fih8","slide":16,"text":"知识问答与文件审查","textPreview":"知识问答与文件审查","textChars":9,"textLines":1,"bbox":[854,366,286,30]}
+{"kind":"textbox","id":"sh/il4n6dgn","slide":16,"text":"附件入库、知识检索、文件审查、diff 和回滚进入同一任务链路。","textPreview":"附件入库、知识检索、文件审查、diff 和回滚进入同一任务链路。","textChars":32,"textLines":1,"bbox":[854,406,286,78]}
+{"kind":"notes","id":"nt/iazgr3","slide":16,"text":""}
+{"kind":"slide","id":"sl/ef4w99","slide":17,"title":"与 OpenClaw 对比","textShapes":10}
+{"kind":"shape","id":"sh/mlg72hsv","slide":17,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/9orqdcrm","slide":17,"text":"与 OpenClaw 对比","textPreview":"与 OpenClaw 对比","textChars":13,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/8ni947a1","slide":17,"text":"OpenClaw 偏个人多通道助手；ClawAgent 偏 Java 企业 Runtime","textPreview":"OpenClaw 偏个人多通道助手；ClawAgent 偏 Java 企业 Runtime","textChars":45,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/zyp8729k","slide":17,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/yxg7yxsz","slide":17,"text":"17","textPreview":"17","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/lk7q9cra","slide":17,"name":"ClawAgent","bbox":[74,144,340,360]}
+{"kind":"shape","id":"sh/0jyp07ap","slide":17,"bbox":[74,144,8,360]}
+{"kind":"textbox","id":"sh/jut8j69o","slide":17,"text":"ClawAgent","textPreview":"ClawAgent","textChars":9,"textLines":1,"bbox":[98,164,296,30]}
+{"kind":"textbox","id":"sh/itkra1s3","slide":17,"text":"Java 17 / Spring Boot / Maven 多模块\n可嵌入业务系统\nToolGuard、审计、审批、脱敏\nPlan/Automation/Worker/SubAgent\n适合企业内应用集成","textPreview":"Java 17 / Spring Boot / Maven 多模块 | 可嵌入业务系统 | ToolGuard、审计、审批、脱敏 | Plan/Automation/Worker/SubAgent | 适合企业内应用集成","textChars":102,"textLines":5,"bbox":[102,206,292,288]}
+{"kind":"shape","id":"sh/wzqh87qh","slide":17,"name":"OpenClaw","bbox":[470,144,340,360]}
+{"kind":"shape","id":"sh/x0zyhcr2","slide":17,"bbox":[470,144,8,360]}
+{"kind":"textbox","id":"sh/axoz6x8b","slide":17,"text":"OpenClaw","textPreview":"OpenClaw","textChars":8,"textLines":1,"bbox":[494,164,296,30]}
+{"kind":"textbox","id":"sh/byhgf29w","slide":17,"text":"个人 AI Assistant / Local-first Gateway\n多通道覆盖更突出\n移动/语音/Canvas 体验更强\n生态偏个人助手\n企业 Java 内嵌不是重点","textPreview":"个人 AI Assistant / Local-first Gateway | 多通道覆盖更突出 | 移动/语音/Canvas 体验更强 | 生态偏个人助手 | 企业 Java 内嵌不是重点","textChars":87,"textLines":5,"bbox":[498,206,292,288]}
+{"kind":"shape","id":"sh/ov6x4nq5","slide":17,"name":"选型判断","bbox":[866,144,340,360]}
+{"kind":"shape","id":"sh/9wfydsrq","slide":17,"bbox":[866,144,8,360]}
+{"kind":"textbox","id":"sh/mtof2x8f","slide":17,"text":"选型判断","textPreview":"选型判断","textChars":4,"textLines":1,"bbox":[890,164,296,30]}
+{"kind":"textbox","id":"sh/nuxgbi90","slide":17,"text":"做 Java 企业系统集成：ClawAgent 更顺手\n做个人助手和多通道常驻体验：OpenClaw 更完整\n两者都重视安全，但治理粒度不同","textPreview":"做 Java 企业系统集成：ClawAgent 更顺手 | 做个人助手和多通道常驻体验：OpenClaw 更完整 | 两者都重视安全，但治理粒度不同","textChars":70,"textLines":3,"bbox":[894,206,292,288]}
+{"kind":"textbox","id":"sh/0r6x0nq9","slide":17,"text":"核心判断：OpenClaw 的强项是个人多通道常驻体验；ClawAgent 的强项是 Java 企业系统里的可嵌入、可审计、可治理。","textPreview":"核心判断：OpenClaw 的强项是个人多通道常驻体验；ClawAgent 的强项是 Java 企业系统里的可嵌入、可审计、可治理。","textChars":66,"textLines":1,"bbox":[96,568,1040,30]}
+{"kind":"notes","id":"nt/ef4w99","slide":17,"text":""}
+{"kind":"slide","id":"sl/dk6n14","slide":18,"title":"与 Hermes Agent / AgentScope 对比","textShapes":10}
+{"kind":"shape","id":"sh/2x4zidcn","slide":18,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/pkvyd8ve","slide":18,"text":"与 Hermes Agent / AgentScope 对比","textPreview":"与 Hermes Agent / AgentScope 对比","textChars":30,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/ojmhknut","slide":18,"text":"一个偏产品化自改进，一个偏通用生态栈，ClawAgent 偏企业应用内核","textPreview":"一个偏产品化自改进，一个偏通用生态栈，ClawAgent 偏企业应用内核","textChars":36,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/bmdgfid4","slide":18,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/al4zmdcj","slide":18,"text":"18","textPreview":"18","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/xofyhsva","slide":18,"name":"Hermes Agent","bbox":[72,142,330,382]}
+{"kind":"shape","id":"sh/cnmhonup","slide":18,"bbox":[72,142,8,382]}
+{"kind":"textbox","id":"sh/zqxgj2dg","slide":18,"text":"Hermes Agent","textPreview":"Hermes Agent","textChars":12,"textLines":1,"bbox":[96,162,286,30]}
+{"kind":"textbox","id":"sh/ypozqxcv","slide":18,"text":"Nous Research 自改进 Agent\n学习循环、技能自创建/自改进\n跨平台工具生态更成熟\n适合产品化 Agent 能力\nClawAgent 更偏 Java 业务底座","textPreview":"Nous Research 自改进 Agent | 学习循环、技能自创建/自改进 | 跨平台工具生态更成熟 | 适合产品化 Agent 能力 | ClawAgent 更偏 Java 业务底座","textChars":87,"textLines":5,"bbox":[100,204,282,310]}
+{"kind":"shape","id":"sh/kf2xwf25","slide":18,"name":"AgentScope","bbox":[474,142,330,382]}
+{"kind":"shape","id":"sh/l0bepkjq","slide":18,"bbox":[474,142,8,382]}
+{"kind":"textbox","id":"sh/ydkfu5kz","slide":18,"text":"AgentScope","textPreview":"AgentScope","textChars":10,"textLines":1,"bbox":[498,162,286,30]}
+{"kind":"textbox","id":"sh/jetwna1k","slide":18,"text":"通用 Agent 全生命周期栈\n开发、运行、记忆、评测、训练\n多 Agent 抽象更成熟\n生态广度更完整\nClawAgent 更贴 Spring Boot 落地","textPreview":"通用 Agent 全生命周期栈 | 开发、运行、记忆、评测、训练 | 多 Agent 抽象更成熟 | 生态广度更完整 | ClawAgent 更贴 Spring Boot 落地","textChars":80,"textLines":5,"bbox":[502,204,282,310]}
+{"kind":"shape","id":"sh/83mx0f21","slide":18,"name":"ClawAgent","bbox":[876,142,330,382]}
+{"kind":"shape","id":"sh/t4vytkjm","slide":18,"bbox":[876,142,8,382]}
+{"kind":"textbox","id":"sh/614fy5kv","slide":18,"text":"ClawAgent","textPreview":"ClawAgent","textChars":9,"textLines":1,"bbox":[900,162,286,30]}
+{"kind":"textbox","id":"sh/72dwra1g","slide":18,"text":"Java Harness Agent Runtime\n管理台 + Starter + Server\n权限、审计、本地执行更深\nMCP/Skill/业务工具统一治理\n适合现有 Java 系统接入","textPreview":"Java Harness Agent Runtime | 管理台 + Starter + Server | 权限、审计、本地执行更深 | MCP/Skill/业务工具统一治理 | 适合现有 Java 系统接入","textChars":96,"textLines":5,"bbox":[904,204,282,310]}
+{"kind":"textbox","id":"sh/g7mx4z2d","slide":18,"text":"一句话：AgentScope 像平台型框架生态，Hermes 像产品化 Agent，ClawAgent 像企业应用内核 + Spring Boot starter。","textPreview":"一句话：AgentScope 像平台型框架生态，Hermes 像产品化 Agent，ClawAgent 像企业应用内核 + Spring Boot starter。","textChars":82,"textLines":1,"bbox":[94,580,1050,28]}
+{"kind":"notes","id":"nt/dk6n14","slide":18,"text":""}
+{"kind":"slide","id":"sl/17c57t","slide":19,"title":"项目优缺点","textShapes":8}
+{"kind":"shape","id":"sh/7ux8rqx8","slide":19,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/sv690byd","slide":19,"text":"项目优缺点","textPreview":"项目优缺点","textChars":5,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/twfqtgfy","slide":19,"text":"结合当前仓库成熟度和竞品差异看选型边界","textPreview":"结合当前仓库成熟度和竞品差异看选型边界","textChars":19,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/yp4ru1gb","slide":19,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/jqx8n6xw","slide":19,"text":"19","textPreview":"19","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/kr69wbyh","slide":19,"name":"主要优点","bbox":[72,142,540,376]}
+{"kind":"shape","id":"sh/5sfqpgf2","slide":19,"bbox":[72,142,8,376]}
+{"kind":"textbox","id":"sh/2l8r65gv","slide":19,"text":"主要优点","textPreview":"主要优点","textChars":4,"textLines":1,"bbox":[96,162,496,30]}
+{"kind":"textbox","id":"sh/3mhszaxg","slide":19,"text":"Java / Spring Boot 原生，适合已有企业后端集成\nRuntime、Planner、工具、MCP、Skill、Channel 分层清晰\n计划模式、审批、审计、Worker 隔离已经进入主链路\nSQLite + 本地记忆 + JVector，单机可直接跑通\nAdmin/App/Web 三端能支撑配置、运维和调试","textPreview":"Java / Spring Boot 原生，适合已有企业后端集成 | Runtime、Planner、工具、MCP、Skill、Channel 分层清晰 | 计划模式、审批、审计、Worker 隔离已经进入主链路 | SQLite + 本地记忆 + JVector，单机可直...","textChars":162,"textLines":5,"bbox":[100,204,492,304]}
+{"kind":"shape","id":"sh/36lc3yl0","slide":19,"name":"主要不足","bbox":[670,142,540,376]}
+{"kind":"shape","id":"sh/25cbut4f","slide":19,"bbox":[670,142,8,376]}
+{"kind":"textbox","id":"sh/p8nu583q","slide":19,"text":"主要不足","textPreview":"主要不足","textChars":4,"textLines":1,"bbox":[694,162,496,30]}
+{"kind":"textbox","id":"sh/47etw3ml","slide":19,"text":"外部向量库、Redis、分布式部署仍不是主能力\n评测/训练/多 Agent 生态不如 AgentScope 完整\n代码沙箱和 OS 级隔离还需继续增强\n企业级组织/用户组权限矩阵还在后续方向\n当前仓库迭代较快，管理台页面需持续跟随后端能力","textPreview":"外部向量库、Redis、分布式部署仍不是主能力 | 评测/训练/多 Agent 生态不如 AgentScope 完整 | 代码沙箱和 OS 级隔离还需继续增强 | 企业级组织/用户组权限矩阵还在后续方向 | 当前仓库迭代较快，管理台页面需持续跟随后端能力","textChars":119,"textLines":5,"bbox":[698,204,492,304]}
+{"kind":"textbox","id":"sh/ra5c7ylw","slide":19,"text":"适合优先选择 ClawAgent 的场景：Java 企业应用内嵌、本地行动 Agent、需要审批/审计/脱敏/文件回滚的受控自动化。","textPreview":"适合优先选择 ClawAgent 的场景：Java 企业应用内嵌、本地行动 Agent、需要审批/审计/脱敏/文件回滚的受控自动化。","textChars":66,"textLines":1,"bbox":[96,584,1020,28]}
+{"kind":"notes","id":"nt/17c57t","slide":19,"text":""}
+{"kind":"slide","id":"sl/w8ikmt","slide":20,"title":"后续演进建议","textShapes":10}
+{"kind":"shape","id":"sh/ory94ze5","slide":20,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/3qpsbudk","slide":20,"text":"后续演进建议","textPreview":"后续演进建议","textChars":6,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/2pgr29wz","slide":20,"text":"保持 Java 企业落地主线，补齐生态广度和生产化能力","textPreview":"保持 Java 企业落地主线，补齐生态广度和生产化能力","textChars":27,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/1ona94ve","slide":20,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/gne90ze9","slide":20,"text":"20","textPreview":"20","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/f2587udo","slide":20,"name":"短期","bbox":[94,158,316,316]}
+{"kind":"shape","id":"sh/e1wrypw3","slide":20,"bbox":[94,158,8,316]}
+{"kind":"textbox","id":"sh/t0nq5kvi","slide":20,"text":"短期","textPreview":"短期","textChars":2,"textLines":1,"bbox":[118,178,272,30]}
+{"kind":"textbox","id":"sh/sze9wfex","slide":20,"text":"优化 Planner 动态路由\n增强 Plan 自动重规划\n补管理台缺失页面\n完善通道审批策略","textPreview":"优化 Planner 动态路由 | 增强 Plan 自动重规划 | 补管理台缺失页面 | 完善通道审批策略","textChars":47,"textLines":4,"bbox":[122,220,268,244]}
+{"kind":"shape","id":"sh/i187y10n","slide":20,"name":"中期","bbox":[482,158,316,316]}
+{"kind":"shape","id":"sh/j2ho76h8","slide":20,"bbox":[482,158,8,316]}
+{"kind":"textbox","id":"sh/k3qp0bid","slide":20,"text":"中期","textPreview":"中期","textChars":2,"textLines":1,"bbox":[506,178,272,30]}
+{"kind":"textbox","id":"sh/54z69gzy","slide":20,"text":"接入 Redis / 分布式任务\n外部 VectorStore 适配\n企业权限矩阵编辑器\n更强观测和评测报表","textPreview":"接入 Redis / 分布式任务 | 外部 VectorStore 适配 | 企业权限矩阵编辑器 | 更强观测和评测报表","textChars":54,"textLines":4,"bbox":[510,220,268,244]}
+{"kind":"shape","id":"sh/adona10b","slide":20,"name":"长期","bbox":[870,158,316,316]}
+{"kind":"shape","id":"sh/vyxo3mhw","slide":20,"bbox":[870,158,8,316]}
+{"kind":"textbox","id":"sh/wz65crih","slide":20,"text":"长期","textPreview":"长期","textChars":2,"textLines":1,"bbox":[894,178,272,30]}
+{"kind":"textbox","id":"sh/x0f65wz2","slide":20,"text":"OS 级沙箱和资源隔离\n多 Agent 编排策略成熟化\n组织级审计解释\n插件/Skill 市场化管理","textPreview":"OS 级沙箱和资源隔离 | 多 Agent 编排策略成熟化 | 组织级审计解释 | 插件/Skill 市场化管理","textChars":50,"textLines":4,"bbox":[898,220,268,244]}
+{"kind":"textbox","id":"sh/m9on6h0f","slide":20,"text":"建议不要偏离主定位：优先做企业应用内核，把权限、审计、工具治理、Runtime 稳定性打磨扎实。","textPreview":"建议不要偏离主定位：优先做企业应用内核，把权限、审计、工具治理、Runtime 稳定性打磨扎实。","textChars":48,"textLines":1,"bbox":[112,562,1030,28]}
+{"kind":"notes","id":"nt/w8ikmt","slide":20,"text":""}
+{"kind":"slide","id":"sl/affcye","slide":21,"title":"资料来源与说明","textShapes":8}
+{"kind":"shape","id":"sh/k3qtwvq9","slide":21,"bbox":[0,0,1280,8]}
+{"kind":"textbox","id":"sh/j2hsnqpo","slide":21,"text":"资料来源与说明","textPreview":"资料来源与说明","textChars":7,"textLines":1,"bbox":[58,44,900,56]}
+{"kind":"textbox","id":"sh/i18rul83","slide":21,"text":"内容以当前仓库文档与源码结构为主，并结合竞品公开定位做判断","textPreview":"内容以当前仓库文档与源码结构为主，并结合竞品公开定位做判断","textChars":29,"textLines":1,"bbox":[60,99,980,32]}
+{"kind":"shape","id":"sh/x0zalg7i","slide":21,"bbox":[1172,653,44,28]}
+{"kind":"textbox","id":"sh/wzq9sbqx","slide":21,"text":"21","textPreview":"21","textChars":2,"textLines":1,"bbox":[1172,659,44,16]}
+{"kind":"shape","id":"sh/vyhsj6pc","slide":21,"name":"项目来源","bbox":[88,148,500,320]}
+{"kind":"shape","id":"sh/axorq187","slide":21,"bbox":[88,148,8,320]}
+{"kind":"textbox","id":"sh/1wjaxk72","slide":21,"text":"项目来源","textPreview":"项目来源","textChars":4,"textLines":1,"bbox":[112,168,456,30]}
+{"kind":"textbox","id":"sh/gvatofqh","slide":21,"text":"README.md\nCONFIGURATION.md\npom.xml Maven modules\nclaw-agent-worker/PLAN.md\n当前仓库新增模块与接口命名","textPreview":"README.md | CONFIGURATION.md | pom.xml Maven modules | claw-agent-worker/PLAN.md | 当前仓库新增模块与接口命名","textChars":88,"textLines":5,"bbox":[116,210,452,248]}
+{"kind":"shape","id":"sh/25czytk7","slide":21,"name":"外部比较说明","bbox":[680,148,500,320]}
+{"kind":"shape","id":"sh/36l07yls","slide":21,"bbox":[680,148,8,320]}
+{"kind":"textbox","id":"sh/o7uh032d","slide":21,"text":"外部比较说明","textPreview":"外部比较说明","textChars":6,"textLines":1,"bbox":[704,168,456,30]}
+{"kind":"textbox","id":"sh/p83i983y","slide":21,"text":"OpenClaw：按个人多通道助手定位比较\nHermes Agent：按自改进 Agent 产品定位比较\nAgentScope：按通用 Agent 生态/框架栈比较\n竞品判断用于选型，不作为功能完全等价声明","textPreview":"OpenClaw：按个人多通道助手定位比较 | Hermes Agent：按自改进 Agent 产品定位比较 | AgentScope：按通用 Agent 生态/框架栈比较 | 竞品判断用于选型，不作为功能完全等价声明","textChars":103,"textLines":4,"bbox":[708,210,452,248]}
+{"kind":"textbox","id":"sh/e1szu9kb","slide":21,"text":"版本口径：根据当前仓库 README 的已完成能力和本次需求整理，适合作为项目介绍、内部评审和软著/架构沟通材料。","textPreview":"版本口径：根据当前仓库 README 的已完成能力和本次需求整理，适合作为项目介绍、内部评审和软著/架构沟通材料。","textChars":57,"textLines":1,"bbox":[108,560,1040,52]}
+{"kind":"notes","id":"nt/affcye","slide":21,"text":""}

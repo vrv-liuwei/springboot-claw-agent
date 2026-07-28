@@ -2,15 +2,21 @@ package com.github.clawagent.channel.feishu;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.clawagent.channel.ChannelEventMetadataSupport;
 import com.github.clawagent.channel.ChannelInboundPayloadResult;
+import com.github.clawagent.channel.ChannelMediaSupport;
+import com.github.clawagent.channel.ChannelRichRenderSupport;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.core.ChannelInboundMessage;
+import com.github.clawagent.core.http.AgentHttpClient;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,6 +28,9 @@ import java.util.Map;
 public final class FeishuInboundAdapter {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final String FEISHU_TENANT_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
+    private static final String FEISHU_IMAGE_URL = "https://open.feishu.cn/open-apis/im/v1/images/%s?type=message";
+    private static final String FEISHU_FILE_URL = "https://open.feishu.cn/open-apis/im/v1/messages/%s/resources/%s?type=file";
     private static final String RAW_HEADERS = "_headers";
     private static final String RAW_QUERY = "_query";
 
@@ -38,9 +47,17 @@ public final class FeishuInboundAdapter {
 
         Map<String, Object> event = mapValue(normalizedPayload.get("event"));
         Map<String, Object> message = mapValue(event.get("message"));
+        Map<String, Object> header = mapValue(normalizedPayload.get("header"));
         Map<String, Object> sender = mapValue(event.get("sender"));
         Map<String, Object> senderId = mapValue(sender.get("sender_id"));
-        String messageType = firstNonBlank(stringValue(message.get("message_type")), stringValue(message.get("msg_type")), "text");
+        String eventType = stringValue(header.get("event_type"));
+        boolean hasMessagePayload = !message.isEmpty();
+        String messageType = firstNonBlank(new String[] {
+                stringValue(message.get("message_type")),
+                stringValue(message.get("msg_type")),
+                stringValue(event.get("message_type")),
+                eventType
+        }, "event");
         String content = stringValue(message.get("content"));
         Map<String, Object> contentMap = parseJsonContent(content);
         String text = firstNonBlank(extractTextFromJsonContent(contentMap), stringValue(normalizedPayload.get("text")), "");
@@ -52,20 +69,56 @@ public final class FeishuInboundAdapter {
         }
 
         Map<String, String> metadata = stringMap(normalizedPayload.get("metadata"));
+        String messageId = firstNonBlank(new String[] {
+                stringValue(message.get("message_id")),
+                stringValue(event.get("message_id")),
+                stringValue(event.get("event_id")),
+                stringValue(header.get("event_id"))
+        }, "");
+        String conversationId = firstNonBlank(
+                stringValue(message.get("chat_id")),
+                stringValue(event.get("chat_id")),
+                stringValue(mapValue(event.get("chat")).get("chat_id")),
+                "default");
+        String externalUserId = firstNonBlank(new String[] {
+                stringValue(senderId.get("user_id")),
+                stringValue(senderId.get("open_id")),
+                stringValue(event.get("open_id")),
+                stringValue(event.get("operator_id"))
+        }, "external");
+        ChannelEventMetadataSupport.putStandardEvent(metadata, Map.ofEntries(
+                Map.entry(ChannelEventMetadataSupport.ADAPTER, "feishu"),
+                Map.entry(ChannelEventMetadataSupport.EVENT_SOURCE, "http"),
+                Map.entry(ChannelEventMetadataSupport.EVENT_TYPE, eventType),
+                Map.entry(ChannelEventMetadataSupport.EVENT_ID, firstNonBlank(stringValue(header.get("event_id")), stringValue(event.get("event_id")), "")),
+                Map.entry(ChannelEventMetadataSupport.EVENT_CREATE_TIME, firstNonBlank(stringValue(header.get("create_time")), stringValue(event.get("create_time")), "")),
+                Map.entry(ChannelEventMetadataSupport.MESSAGE_ID, messageId),
+                Map.entry(ChannelEventMetadataSupport.MESSAGE_CREATE_TIME, stringValue(message.get("create_time"))),
+                Map.entry(ChannelEventMetadataSupport.PLATFORM_MESSAGE_TYPE, hasMessagePayload ? messageType : ""),
+                Map.entry(ChannelEventMetadataSupport.CONVERSATION_ID, conversationId),
+                Map.entry(ChannelEventMetadataSupport.CONVERSATION_TYPE, firstNonBlank(stringValue(message.get("chat_type")), stringValue(event.get("chat_type")), "")),
+                Map.entry(ChannelEventMetadataSupport.EXTERNAL_USER_ID, externalUserId),
+                Map.entry(ChannelEventMetadataSupport.TENANT_KEY, firstNonBlank(stringValue(senderId.get("tenant_key")), stringValue(event.get("tenant_key")), ""))
+        ));
         metadata.put("channel.adapter", "feishu");
         metadata.put("channel.platformMessageType", messageType);
-        putIfPresent(metadata, "channel.messageId", stringValue(message.get("message_id")));
-        putIfPresent(metadata, "channel.eventType", stringValue(mapValue(normalizedPayload.get("header")).get("event_type")));
+        putIfPresent(metadata, "channel.messageId", messageId);
+        putIfPresent(metadata, "channel.eventType", eventType);
+        putIfPresent(metadata, "channel.eventId", firstNonBlank(stringValue(header.get("event_id")), stringValue(event.get("event_id")), ""));
+        putIfPresent(metadata, "channel.eventCreateTime", firstNonBlank(stringValue(header.get("create_time")), stringValue(event.get("create_time")), ""));
+        putIfPresent(metadata, "channel.messageCreateTime", stringValue(message.get("create_time")));
+        putIfPresent(metadata, "channel.conversationType", firstNonBlank(stringValue(message.get("chat_type")), stringValue(event.get("chat_type")), ""));
+        putIfPresent(metadata, "channel.senderTenantKey", firstNonBlank(stringValue(senderId.get("tenant_key")), stringValue(event.get("tenant_key")), ""));
         putIfPresent(metadata, "channel.feishu.imageKey", stringValue(contentMap.get("image_key")));
         putIfPresent(metadata, "channel.feishu.fileKey", firstNonBlank(stringValue(contentMap.get("file_key")), stringValue(contentMap.get("fileKey")), ""));
         putIfPresent(metadata, "channel.feishu.fileName", firstNonBlank(stringValue(contentMap.get("file_name")), stringValue(contentMap.get("fileName")), ""));
         putIfPresent(metadata, "channel.feishu.cardTitle", firstNonBlank(stringValue(contentMap.get("title")), stringValue(contentMap.get("header")), ""));
-        putAttachmentMetadata(metadata, messageType, contentMap);
+        putAttachmentMetadata(metadata, channel, channelId, messageId, messageType, contentMap);
 
         return ChannelInboundPayloadResult.message(new ChannelInboundMessage(
                 channelId,
-                firstNonBlank(stringValue(message.get("chat_id")), stringValue(event.get("chat_id")), "default"),
-                firstNonBlank(stringValue(senderId.get("user_id")), stringValue(senderId.get("open_id")), stringValue(event.get("open_id")), "external"),
+                conversationId,
+                externalUserId,
                 messageType,
                 text,
                 metadata,
@@ -83,8 +136,13 @@ public final class FeishuInboundAdapter {
         }
         Map<String, Object> event = mapValue(payload.get("event"));
         Map<String, Object> message = mapValue(event.get("message"));
-        // 自动识别只看飞书事件骨架，真正的 token/encrypt 校验放在 adapt 阶段执行。
-        return !message.isEmpty() && (!mapValue(payload.get("header")).isEmpty() || !mapValue(event.get("sender")).isEmpty());
+        Map<String, Object> header = mapValue(payload.get("header"));
+        // 自动识别看平台事件骨架；消息、已读、成员、表情等非消息事件都应进入飞书 adapter。
+        return (!message.isEmpty() || !event.isEmpty())
+                && (!header.isEmpty() || !mapValue(event.get("sender")).isEmpty())
+                && (!stringValue(header.get("event_type")).isBlank()
+                || !stringValue(event.get("type")).isBlank()
+                || !stringValue(event.get("event_type")).isBlank());
     }
 
     private static Map<String, Object> normalizeEncryptedPayload(ChannelDefinition channel, Map<String, Object> payload) {
@@ -183,9 +241,8 @@ public final class FeishuInboundAdapter {
                     "未提供文件名");
             case "audio", "media" -> "[飞书音视频] " + firstNonBlank(stringValue(content.get("file_key")), stringValue(content.get("fileKey")), "未提供 file_key");
             case "interactive", "card", "post", "rich_text" -> "[飞书卡片/富文本] " + firstNonBlank(
-                    stringValue(content.get("title")),
-                    stringValue(content.get("header")),
-                    stringValue(content.get("summary")),
+                    richTitle(content),
+                    truncate(extractRichPlainText(content), 200),
                     "请在平台查看完整内容");
             default -> "[飞书非文本消息] type=" + firstNonBlank(messageType, "", "unknown");
         };
@@ -233,16 +290,19 @@ public final class FeishuInboundAdapter {
         }
     }
 
-    private static void putAttachmentMetadata(Map<String, String> metadata, String messageType, Map<String, Object> contentMap) {
+    static void putAttachmentMetadata(Map<String, String> metadata, ChannelDefinition channel, String channelId,
+                                      String messageId, String messageType, Map<String, Object> contentMap) {
         String normalized = messageType == null ? "" : messageType.trim().toLowerCase();
+        List<Map<String, String>> attachments = new ArrayList<>();
         if ("image".equals(normalized)) {
             String imageKey = stringValue(contentMap.get("image_key"));
             if (!imageKey.isBlank()) {
-                metadata.put("attachments", attachmentJson("image", Map.of("imageKey", imageKey)));
+                attachments.add(downloadImage(channel, channelId, messageId, imageKey));
+                ChannelMediaSupport.putAttachmentsMetadata(metadata, attachments);
             }
             return;
         }
-        if ("file".equals(normalized)) {
+        if ("file".equals(normalized) || "audio".equals(normalized) || "media".equals(normalized)) {
             String fileKey = firstNonBlank(stringValue(contentMap.get("file_key")), stringValue(contentMap.get("fileKey")), "");
             if (!fileKey.isBlank()) {
                 Map<String, String> attachment = new LinkedHashMap<>();
@@ -251,21 +311,150 @@ public final class FeishuInboundAdapter {
                 if (!fileName.isBlank()) {
                     attachment.put("fileName", fileName);
                 }
-                metadata.put("attachments", attachmentJson("file", attachment));
+                // 飞书音频和视频同样走 message resource 下载接口，保留原始类型便于后续审计过滤。
+                attachments.add(downloadFile(channel, channelId, messageId, normalized, fileKey, fileName, attachment));
+                ChannelMediaSupport.putAttachmentsMetadata(metadata, attachments);
             }
+        } else if (isRichMessage(normalized)) {
+            attachments.add(richAttachment(normalized, contentMap));
+            ChannelMediaSupport.putAttachmentsMetadata(metadata, attachments);
         }
     }
 
-    private static String attachmentJson(String type, Map<String, String> values) {
-        Map<String, String> attachment = new LinkedHashMap<>();
-        attachment.put("type", type);
-        attachment.put("source", "feishu");
-        attachment.putAll(values);
-        try {
-            return OBJECT_MAPPER.writeValueAsString(List.of(attachment));
-        } catch (Exception ignored) {
-            return "[]";
+    private static boolean isRichMessage(String normalizedMessageType) {
+        return "interactive".equals(normalizedMessageType)
+                || "card".equals(normalizedMessageType)
+                || "post".equals(normalizedMessageType)
+                || "rich_text".equals(normalizedMessageType);
+    }
+
+    private static Map<String, String> richAttachment(String messageType, Map<String, Object> contentMap) {
+        return ChannelRichRenderSupport.richAttachment("feishu", "rich", messageType, richTitle(contentMap), contentMap);
+    }
+
+    private static String richTitle(Map<String, Object> contentMap) {
+        Map<String, Object> header = mapValue(contentMap.get("header"));
+        Map<String, Object> title = mapValue(contentMap.get("title"));
+        Map<String, Object> headerTitle = mapValue(header.get("title"));
+        return firstNonBlank(new String[] {
+                stringValue(title.get("content")),
+                stringValue(contentMap.get("title")),
+                stringValue(headerTitle.get("content")),
+                stringValue(header.get("title"))
+        }, "");
+    }
+
+    private static String extractRichPlainText(Object value) {
+        StringBuilder builder = new StringBuilder();
+        appendRichPlainText(value, builder, 0);
+        return builder.toString().replaceAll("\\s+", " ").trim();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void appendRichPlainText(Object value, StringBuilder builder, int depth) {
+        if (value == null || builder.length() >= 1000 || depth > 8) {
+            return;
         }
+        if (value instanceof Map<?, ?> map) {
+            // 优先抽取富文本常见字段，避免把平台内部 id、样式等噪声塞进模型上下文。
+            for (String key : List.of("text", "title", "content", "value", "elements")) {
+                if (map.containsKey(key)) {
+                    appendRichPlainText(map.get(key), builder, depth + 1);
+                }
+            }
+            return;
+        }
+        if (value instanceof Iterable<?> items) {
+            for (Object item : items) {
+                appendRichPlainText(item, builder, depth + 1);
+            }
+            return;
+        }
+        String text = stringValue(value);
+        if (!text.isBlank()) {
+            if (!builder.isEmpty()) {
+                builder.append(' ');
+            }
+            builder.append(text);
+        }
+    }
+
+    private static String compactJson(Object value) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (Exception ignored) {
+            return stringValue(value);
+        }
+    }
+
+    private static String truncate(String value, int maxChars) {
+        if (value == null || value.length() <= maxChars) {
+            return value == null ? "" : value;
+        }
+        return value.substring(0, maxChars) + "...";
+    }
+
+    private static Map<String, String> downloadImage(ChannelDefinition channel, String channelId, String messageId, String imageKey) {
+        String token = tenantAccessToken(channel);
+        if (token.isBlank()) {
+            return ChannelMediaSupport.attachment("feishu", "image", Map.of(
+                    "imageKey", imageKey,
+                    "downloadStatus", "skipped",
+                    "downloadReason", "missing-token"));
+        }
+        String url = String.format(FEISHU_IMAGE_URL, urlEncode(imageKey));
+        Map<String, String> result = ChannelMediaSupport.download(channel, "feishu", "image", url,
+                Map.of("Authorization", "Bearer " + token), channelId, messageId, imageKey, imageKey, 30000);
+        result.put("imageKey", imageKey);
+        return result;
+    }
+
+    private static Map<String, String> downloadFile(ChannelDefinition channel, String channelId, String messageId,
+                                                   String attachmentType, String fileKey, String fileName,
+                                                   Map<String, String> fallback) {
+        String type = firstNonBlank(attachmentType, "file", "file");
+        if (messageId == null || messageId.isBlank()) {
+            Map<String, String> attachment = ChannelMediaSupport.attachment("feishu", type, fallback);
+            attachment.put("downloadStatus", "skipped");
+            attachment.put("downloadReason", "missing-message-id");
+            return attachment;
+        }
+        String token = tenantAccessToken(channel);
+        if (token.isBlank()) {
+            Map<String, String> attachment = ChannelMediaSupport.attachment("feishu", type, fallback);
+            attachment.put("downloadStatus", "skipped");
+            attachment.put("downloadReason", "missing-token");
+            return attachment;
+        }
+        String url = String.format(FEISHU_FILE_URL, urlEncode(messageId), urlEncode(fileKey));
+        Map<String, String> result = ChannelMediaSupport.download(channel, "feishu", type, url,
+                Map.of("Authorization", "Bearer " + token), channelId, messageId, fileKey, fileName, 30000);
+        result.putAll(fallback);
+        return result;
+    }
+
+    private static String tenantAccessToken(ChannelDefinition channel) {
+        String token = metadataValue(channel, "tenantAccessToken", "tenantAccessTokenEnv");
+        if (!token.isBlank()) {
+            return token;
+        }
+        String appId = metadataValue(channel, "appId", "appIdEnv");
+        String appSecret = metadataValue(channel, "appSecret", "appSecretEnv");
+        if (appId.isBlank() || appSecret.isBlank()) {
+            return "";
+        }
+        try {
+            String body = OBJECT_MAPPER.writeValueAsString(Map.of("app_id", appId, "app_secret", appSecret));
+            AgentHttpClient.AgentHttpResponse response = AgentHttpClient.postJson(FEISHU_TENANT_TOKEN_URL, body, Map.of(), 30000);
+            Map<String, Object> result = OBJECT_MAPPER.readValue(response.body(), MAP_TYPE);
+            return stringValue(result.get("tenant_access_token"));
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String urlEncode(String value) {
+        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
     }
 
     private static String firstNonBlank(String first, String second, String fallback) {

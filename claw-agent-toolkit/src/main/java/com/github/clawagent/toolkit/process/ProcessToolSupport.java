@@ -52,6 +52,16 @@ public abstract class ProcessToolSupport {
         return cwdResolver.resolve(rawCwd, invocation.command(), invocation.args(), context);
     }
 
+    protected Path ensureAllowedPath(Path path, String label) {
+        Path resolved = path.toAbsolutePath().normalize();
+        boolean allowed = properties.allowedRootPaths().stream().anyMatch(resolved::startsWith);
+        if (!allowed) {
+            // 后台进程除了 cwd，本地日志等副产物也必须落在 allowed roots 内。
+            throw new IllegalArgumentException(label + " 不在 execute allowed roots 内：" + resolved);
+        }
+        return resolved;
+    }
+
     protected CommandInvocation commandInvocation(ToolCall call) {
         String rawCommand = required(call, "command");
         List<String> explicitArgs = args(call);

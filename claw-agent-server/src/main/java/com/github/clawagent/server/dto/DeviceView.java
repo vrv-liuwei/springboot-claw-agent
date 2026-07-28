@@ -1,6 +1,7 @@
 package com.github.clawagent.server.dto;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,6 +16,13 @@ public record DeviceView(
         Instant firstSeenAt,
         Instant lastSeenAt,
         Instant revokedAt,
+        Instant pairedAt,
+        Instant pairingCodeExpiresAt,
+        String deviceSecretPrefix,
+        String permissionMode,
+        List<String> approvedToolIds,
+        String boundUserId,
+        String boundUsername,
         Map<String, String> metadata
 ) {
 }

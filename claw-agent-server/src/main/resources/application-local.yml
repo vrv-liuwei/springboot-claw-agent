@@ -1,0 +1,224 @@
+clawagent:
+  enabled: true
+  auth:
+    api-token-required: false
+    protected-path-patterns:
+      - /api/v1/**
+    excluded-path-patterns:
+      - /api/v1/health
+  path:
+    base: .clawagent
+  attachments:
+    storage: local
+    local:
+      path: ${clawagent.path.base}/attachments
+  persistence:
+    type: sqlite
+    sqlite:
+      path: ${clawagent.path.base}/clawagent.db
+  memory:
+    markdown:
+      enabled: true
+      path: ${clawagent.path.base}/memory
+    vector:
+      enabled: true
+      provider: jvector
+      embedding:
+        provider: siliconflow
+        model: BAAI/bge-m3
+        base-url: https://api.siliconflow.cn/v1
+        api-key: ${SILICONFLOW_API_KEY:}
+        dimensions: 0
+        timeout-seconds: 60
+  mcp:
+    enabled: true
+    auto-connect: true
+    path:
+      - ${clawagent.path.base}/mcp/mcp.json
+  skills:
+    enabled: true
+    path:
+      - ${clawagent.path.base}/skills
+  channels:
+    adapter-path:
+      - ${clawagent.path.base}/channels/adapters
+    configs:
+      feishu:
+        defaultAccount: main
+        dmPolicy: open
+        accounts:
+          main:
+            name: 主助手 - 飞书机器人
+            enabled: true
+            approvalMode: auto
+            appId: cli_a928375bc07a5ccd
+            appSecret: IZOioPhTQKwvBsfmAJNsbfXkr4CDoZQh
+            outboundMessageType: auto
+      ddio:
+        accounts:
+          main:
+            name: DDIO Bot
+            enabled: true
+            approvalMode: auto
+            appId: "4611686027040362507"
+            appSecret: "bB6rUZTZUrl6HPcttaJ1ElDw0QfLHCnFIlroKqaD0tPIfL1BgGpfEG3nq0ovSAALt8RSGmDVmusSk3Q4fjbmKA=="
+            baseUrl: "https://192.168.0.180:10443"
+      dingtalk:
+        defaultAccount: main
+        accounts:
+          main:
+            name: 钉钉机器人
+            enabled: false
+            approvalMode: auto
+            connectionMode: stream
+            agentId: "39955002"
+            appKey: "dingo2tas8unfdssrjy8"
+            appSecret: "O5-6-nKDxKKnkZgpsmZGmicTCNUsKoFYT5vUeKdrHnq0ci3Mo7--KhXNFI7fxjW6"
+            outboundMessageType: markdown
+  runtime:
+    max-react-rounds: 15
+    sanitization:
+      enabled: true
+  automation:
+    enabled: true
+    poll-interval-seconds: 5
+    due-batch-size: 10
+    default-channel-id: automation
+    default-user-id: automation
+  local:
+    workspace-root: "${clawagent.path.base}/workspace"
+    default-shell: powershell
+    permission-mode: ask
+    approved-tool-ids: []
+    allowed-roots:
+      - "${clawagent.path.base}/workspace"
+    recent-projects: []
+    test-commands: []
+    project-test-commands: {}
+    ignore-patterns:
+      - "**/.git/**"
+      - ".git/**"
+      - "**/.clawagent/**"
+      - ".clawagent/**"
+      - "**/node_modules/**"
+      - "node_modules/**"
+      - "**/target/**"
+      - "target/**"
+      - "**/build/**"
+      - "build/**"
+      - "**/dist/**"
+      - "dist/**"
+      - "**/.idea/**"
+      - ".idea/**"
+      - "**/.vscode/**"
+      - ".vscode/**"
+    sensitive-path-patterns:
+      - "**/.env"
+      - ".env"
+      - "**/.env.*"
+      - ".env.*"
+      - "**/*.key"
+      - "**/*.pem"
+      - "**/*.p12"
+      - "**/*.pfx"
+      - "**/.ssh/**"
+      - ".ssh/**"
+      - "**/.git/**"
+      - ".git/**"
+  toolkit:
+    enabled: true
+    tools:
+      time:
+        enabled: true
+        env: {}
+      weather:
+        enabled: true
+        env: {}
+      content:
+        enabled: true
+        env:
+          PATH: "${clawagent.path.base}/artifacts"
+          CHUNK_CHARS: "6000"
+          SUMMARY_CHARS: "2400"
+          READ_MAX_CHARS: "12000"
+      web-fetch:
+        enabled: true
+        env:
+          ALLOW_PRIVATE_ADDRESSES: "true"
+          ALLOWED_HOSTS: "192.168.6.160"
+          MAX_OUTPUT_CHARS: "12000"
+      web-search:
+        enabled: true
+        env:
+          PROVIDER: bocha
+          BOCHA_ENDPOINT: https://api.bochaai.com/v1/web-search
+          BOCHA_API_KEY: ${BOCHA_API_KEY:}
+          BOCHA_COUNT: "5"
+          BOCHA_FRESHNESS: noLimit
+          BOCHA_SUMMARY: "true"
+          BOCHA_TIMEOUT_MS: "60000"
+          BOCHA_MAX_OUTPUT_CHARS: "12000"
+      execute:
+        enabled: true
+        env:
+          ALLOWED_ROOTS: "${clawagent.path.base},."
+          DEFAULT_CWD: "${clawagent.path.base}/workspace"
+          TIMEOUT_MS: "30000"
+          MAX_TIMEOUT_MS: "120000"
+          PROCESS_WAIT_MS: "5000"
+          MAX_OUTPUT_CHARS: "20000"
+          WORKER_ENABLED: "true"
+          WORKER_JAR: "claw-agent-worker/target/claw-agent-worker-1.0.0-SNAPSHOT.jar"
+          WORKER_JAVA: ""
+          WORKER_JVM_MAX_HEAP: "256m"
+          WORKER_MAX_OUTPUT_BYTES: "1048576"
+          WORKER_MAX_CPU_TIME_MS: "0"
+          WORKER_MAX_MEMORY_BYTES: "0"
+          WORKER_MAX_CONCURRENT: "2"
+          WORKER_ACQUIRE_TIMEOUT_MS: "5000"
+          WORKER_TERMINATION_GRACE_MS: "1500"
+          WORKER_BLOCKED_ENV_NAME_FRAGMENTS: "TOKEN,SECRET,PASSWORD,PASSWD,API_KEY,ACCESS_KEY,PRIVATE_KEY,CREDENTIAL,AUTHORIZATION,COOKIE"
+          SENSITIVE_PATH_PATTERNS: "**/.env,.env,**/.env.*,.env.*,**/*.key,**/*.pem,**/*.p12,**/*.pfx,**/.ssh/**,.ssh/**,**/.git/**,.git/**"
+      todo:
+        enabled: true
+        env: {}
+      filesystem:
+        enabled: true
+        env:
+          READONLY: "false"
+          ALLOWED_ROOTS: "${clawagent.path.base}"
+          DEFAULT_CWD: "${clawagent.path.base}/workspace"
+          BLOCKED_PATTERNS: "**/.env,.env,**/.env.*,.env.*,**/*.key,**/*.pem,**/*.p12,**/*.pfx,**/.ssh/**,.ssh/**,**/.git/**,.git/**"
+          MAX_READ_BYTES: "1048576"
+          MAX_SEARCH_RESULTS: "100"
+  model:
+    mode: llm
+    planner: react
+    default: deepseek-v4-flash
+    memory-model: siliconflow-qwen3-8b
+    vision-model: qwen3-vl
+  models:
+    deepseek-v4-flash:
+      provider: deepseek
+      base-url: https://api.deepseek.com
+      model: deepseek-v4-flash
+      api-key: ${DEEPSEEK_API_KEY:}
+      temperature: 0.2
+      timeout-seconds: 60
+      vision: false
+    siliconflow-qwen3-8b:
+      provider: siliconflow
+      base-url: https://api.siliconflow.cn/v1
+      model: Qwen/Qwen3-8B
+      api-key: ${SILICONFLOW_API_KEY:}
+      temperature: 0.2
+      timeout-seconds: 60
+      vision: false
+    qwen3-vl:
+      provider: dashscope
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: qwen3-vl-flash
+      api-key: ${DASHSCOPE_API_KEY:}
+      temperature: 0.2
+      timeout-seconds: 60
+      vision: true

@@ -1,6 +1,6 @@
 package com.github.clawagent.server.controller;
 
-import com.github.clawagent.channel.ChannelRouter;
+import com.github.clawagent.channel.ChannelAdapterRegistry;
 import com.github.clawagent.core.ChannelDefinition;
 import com.github.clawagent.spi.ChannelRegistry;
 import org.junit.jupiter.api.Test;
@@ -18,7 +18,7 @@ class DdioWebhookControllerTest {
     void resolveDdioChannelPrefersEnabledYamlAccountOverBuiltinPlaceholder() {
         ChannelDefinition builtin = channel("ddio", "ddio", false, Map.of("builtin", "true"));
         ChannelDefinition yamlAccount = channel("ddio-main", "ddio", true, Map.of("channel.isDefaultAccount", "true"));
-        DdioWebhookController controller = new DdioWebhookController(new FixedChannelRegistry(List.of(builtin, yamlAccount)), null);
+        DdioWebhookController controller = new DdioWebhookController(new FixedChannelRegistry(List.of(builtin, yamlAccount)), null, new ChannelAdapterRegistry(List.of()));
 
         ChannelDefinition resolved = controller.resolveDdioChannel();
 
@@ -29,7 +29,7 @@ class DdioWebhookControllerTest {
     void resolveDdioChannelFallsBackToExactDdioWhenItIsEnabled() {
         ChannelDefinition exact = channel("ddio", "ddio", true, Map.of("builtin", "true"));
         ChannelDefinition yamlAccount = channel("ddio-main", "ddio", true, Map.of("channel.isDefaultAccount", "true"));
-        DdioWebhookController controller = new DdioWebhookController(new FixedChannelRegistry(List.of(exact, yamlAccount)), null);
+        DdioWebhookController controller = new DdioWebhookController(new FixedChannelRegistry(List.of(exact, yamlAccount)), null, new ChannelAdapterRegistry(List.of()));
 
         ChannelDefinition resolved = controller.resolveDdioChannel();
 

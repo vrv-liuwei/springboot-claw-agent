@@ -1,0 +1,188 @@
+intents:
+  session.clear:
+    name: 清除当前会话上下文
+    risk: medium
+    route: handler
+    handler: sessionCommand.clearContext
+    examples:
+      - /clear
+      - 清除上下文
+      - 清理当前会话
+      - 帮我清除当前会话上下文
+      - 忘掉刚才的聊天
+      - 后面重新开始聊
+    negativeExamples:
+      - 怎么清除上下文
+      - /clear 是什么意思
+      - 命令列表发给我
+
+  session.compact:
+    name: 压缩当前上下文
+    risk: medium
+    route: handler
+    handler: sessionCommand.compactContext
+    examples:
+      - /compact
+      - 压缩上下文
+      - 总结并压缩当前会话
+      - 把当前上下文压缩一下
+
+  session.context:
+    name: 查看上下文占用
+    risk: low
+    route: handler
+    handler: sessionCommand.context
+    examples:
+      - /context
+      - 查看上下文
+      - 当前上下文占用多少
+      - 看一下上下文状态
+
+  session.status:
+    name: 查看运行状态
+    risk: low
+    route: handler
+    handler: sessionCommand.status
+    examples:
+      - /status
+      - 查看状态
+      - 当前运行状态
+      - 系统状态怎么样
+
+  commands.help:
+    name: 查看命令列表
+    risk: low
+    route: handler
+    handler: commands.help
+    examples:
+      - /help
+      - 命令列表
+      - 有哪些命令
+      - 你支持哪些系统操作
+
+  plan.create:
+    name: 生成计划
+    risk: low
+    route: handler
+    handler: plan.create
+    examples:
+      - /plan
+      - 生成计划
+      - 帮我制定执行计划
+      - 先出一个计划
+      - 进入计划模式
+
+  plan.approve:
+    name: 确认计划
+    risk: medium
+    route: handler
+    handler: plan.approve
+    examples:
+      - 确认计划
+      - 执行这个计划
+      - 按计划执行
+
+  plan.cancel:
+    name: 取消计划
+    risk: medium
+    route: handler
+    handler: plan.cancel
+    examples:
+      - 取消计划
+      - 不执行这个计划
+      - 放弃当前计划
+
+  task.resume:
+    name: 恢复任务
+    risk: medium
+    route: handler
+    handler: task.resume
+    examples:
+      - /resume
+      - 恢复任务
+      - 继续上次任务
+      - 从断点继续执行
+
+  workspace.current:
+    name: 查看当前工作区
+    risk: low
+    route: handler
+    handler: workspace.current
+    examples:
+      - /workspace
+      - 当前工作区
+      - 当前项目目录
+      - 现在在哪个工作区
+
+  workspace.list:
+    name: 查看最近工作区
+    risk: low
+    route: handler
+    handler: workspace.list
+    examples:
+      - 最近工作区
+      - 查看最近项目
+      - 有哪些可用工作区
+
+  document.summary:
+    name: 总结文档
+    risk: low
+    route: model
+    metadata:
+      knowledge.intent: document_summary
+      knowledge.scope: attachments
+    examples:
+      - 总结这个文档
+      - 概括附件内容
+      - 读一下这个文件
+      - 这个文档讲了什么
+      - 提炼文档重点
+
+  document.qa:
+    name: 文档问答
+    risk: low
+    route: model
+    metadata:
+      knowledge.intent: document_qa
+      knowledge.scope: attachments
+    examples:
+      - 这个文档里有没有
+      - 根据附件回答
+      - 从文档里找一下
+      - 文件中提到了什么
+      - 这份资料怎么说
+
+  document.search:
+    name: 检索知识库
+    risk: low
+    route: model
+    metadata:
+      knowledge.enabled: "true"
+      knowledge.intent: knowledge_search
+      knowledge.scope: user_library
+    examples:
+      - 搜索知识库
+      - 查一下资料库
+      - 从我的文档库里找
+      - 检索已有文档
+
+  document.list:
+    name: 查看文档列表
+    risk: low
+    route: handler
+    handler: document.list
+    examples:
+      - 文档列表
+      - 查看知识库文档
+      - 我上传了哪些文档
+      - 附件列表
+
+  document.download:
+    name: 下载文档
+    risk: medium
+    route: handler
+    handler: document.download
+    examples:
+      - 下载文档
+      - 把附件发给我
+      - 下载原文件

@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.nio.file.Files;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -46,7 +47,27 @@ class ChannelAdapterRegistryTest {
                 .findFirst()
                 .orElseThrow();
         assertTrue(descriptor.active());
-        assertEquals("custom", descriptor.source());
+        assertEquals("spring-bean", descriptor.source());
+    }
+
+    @Test
+    void restartRunningStreamsStopsOldHandleAndStartsAgain() {
+        CountingStreamAdapter adapter = new CountingStreamAdapter();
+        ChannelAdapterRegistry registry = new ChannelAdapterRegistry(List.of(adapter));
+        ChannelStreamClientManager streamManager = new ChannelStreamClientManager(registry, true);
+        ChannelDefinition channel = new ChannelDefinition("corp-workchat", "企业 IM", "workchat",
+                true, "ask", List.of(), "/workchat/inbound", Map.of(), null, null);
+
+        assertEquals("running", streamManager.start(channel).status());
+
+        ChannelStreamReloadResult result = streamManager.restartRunningStreams(List.of(channel));
+
+        assertEquals(1, result.runningCount());
+        assertEquals(1, result.stoppedCount());
+        assertEquals(1, result.restartedCount());
+        assertEquals(2, adapter.starts.get());
+        assertEquals(1, adapter.stops.get());
+        assertEquals("running", streamManager.status(channel).status());
     }
 
     @Test
@@ -110,6 +131,17 @@ class ChannelAdapterRegistryTest {
         public ChannelStreamHandle startStream(ChannelDefinition channel) {
             return new ChannelStreamHandle("workchat-stream", this, () -> {
             });
+        }
+    }
+
+    private static class CountingStreamAdapter extends WorkchatAdapter {
+        private final AtomicInteger starts = new AtomicInteger();
+        private final AtomicInteger stops = new AtomicInteger();
+
+        @Override
+        public ChannelStreamHandle startStream(ChannelDefinition channel) {
+            starts.incrementAndGet();
+            return new ChannelStreamHandle("workchat-stream", this, stops::incrementAndGet);
         }
     }
 }

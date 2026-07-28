@@ -114,6 +114,10 @@ public class AppWorkspaceService {
         if (!id.isBlank()) {
             findWorkspace(id).ifPresent(workspace -> applyWorkspace(result, workspace));
         }
+        if (id.isBlank() && !hasWorkspacePath(result)) {
+            // 普通对话和计划模式可能没有显式传 workspaceId，这时使用 App 当前工作区作为默认项目目录。
+            currentWorkspace().ifPresent(workspace -> applyWorkspace(result, workspace));
+        }
         aliasWorkspace(result);
         return result;
     }
@@ -153,6 +157,15 @@ public class AppWorkspaceService {
         putIfPresent(metadata, "workspace.projectPath", metadata.get("workspaceRoot"));
         putIfPresent(metadata, "projectPath", metadata.get("workspaceRoot"));
         putIfPresent(metadata, "activeProjectPath", metadata.get("workspaceRoot"));
+    }
+
+    private boolean hasWorkspacePath(Map<String, String> metadata) {
+        return !firstNonBlank(
+                metadata.get("activeProjectPath"),
+                metadata.get("projectPath"),
+                metadata.get("workspace.projectPath"),
+                metadata.get("workspaceRoot"),
+                metadata.get("workspace.root")).isBlank();
     }
 
     private WorkspaceState readState() {
